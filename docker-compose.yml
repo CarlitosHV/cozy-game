@@ -5,6 +5,8 @@ services:
       context: .
       target: development
     container_name: aether_leap_dev
+    ports:
+      - "5001:5001"
     volumes:
       - .:/app
       - /app/node_modules
@@ -22,6 +24,8 @@ services:
       context: .
       target: production
     container_name: aether_leap_prod
+    ports:
+      - "5001:5001"
     profiles:
       - prod
     restart: unless-stopped
