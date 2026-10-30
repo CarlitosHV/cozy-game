@@ -3,24 +3,24 @@
 # ==========================================
 FROM node:22-alpine AS base
 WORKDIR /app
-COPY package.json package-lock.json* bun.lock* ./
+COPY package.json package-lock.json* bun.lock* .npmrc* ./
 
 # ==========================================
 # Stage 2: Development
 # ==========================================
 FROM base AS development
 ENV NODE_ENV=development
-RUN npm install
+RUN npm install --legacy-peer-deps
 COPY . .
-EXPOSE 3000
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+EXPOSE 5001 3000
+CMD ["sh", "-c", "npm run dev -- --host 0.0.0.0 --port ${PORT:-5001}"]
 
 # ==========================================
 # Stage 3: Builder
 # ==========================================
 FROM base AS builder
 ENV NODE_ENV=production
-RUN npm install
+RUN npm install --legacy-peer-deps
 COPY . .
 RUN npm run build
 
@@ -30,5 +30,5 @@ RUN npm run build
 FROM nginx:alpine AS production
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 3000
+EXPOSE 5001 3000 80
 CMD ["nginx", "-g", "daemon off;"]
