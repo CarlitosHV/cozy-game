@@ -1,9 +1,9 @@
 services:
-  production:
+  app:
     build:
       context: .
       target: production
-    container_name: aether_leap_prod
+    container_name: aether_leap_app
     ports:
       - "5001:5001"
     environment:
