@@ -1,0 +1,29 @@
+services:
+  # Development Service (Hot reload, volume mounts)
+  app:
+    build:
+      context: .
+      target: development
+    container_name: aether_leap_dev
+    ports:
+      - "5001:5001"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - PORT=5001
+      - CHOKIDAR_USEPOLLING=true
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  # Production Service (Optimized static build served via Nginx)
+  production:
+    build:
+      context: .
+      target: production
+    container_name: aether_leap_prod
+    profiles:
+      - prod
+    restart: unless-stopped
