@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
 
-export type ItemType = 'baya' | 'nuez';
+export type ItemType = 'baya' | 'nuez' | 'llave';
 
 export interface ItemInfo {
   type: ItemType;
@@ -33,6 +33,13 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
     emoji: '🌰',
     desc: 'Súper salto: saltas mucho más alto durante 10 segundos.',
     color: '#fcd34d',
+  },
+  llave: {
+    type: 'llave',
+    name: 'Llave',
+    emoji: '🔑',
+    desc: 'Abre una puerta cerrada de este nivel. Se usa sola al llegar a la puerta.',
+    color: '#facc15',
   },
 };
 
@@ -68,6 +75,8 @@ interface Pickup {
   respawnTimer: number;
   phase: number;
   fullWarnCooldown: number;
+  /** One-shot drops (e.g. stolen from an enemy) disappear for good once picked up */
+  oneShot?: boolean;
 }
 
 // ---------- 3D models ----------
@@ -160,8 +169,37 @@ function createHalo(color: number): THREE.Mesh {
   return halo;
 }
 
+function createKeyModel(): { group: THREE.Group; halo: THREE.Mesh } {
+  const group = new THREE.Group();
+  const gold = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.2, metalness: 0.9, emissive: 0x8a5a00, emissiveIntensity: 0.35 });
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.05, 8, 20), gold);
+  ring.position.y = 0.2;
+  const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.42, 0.07), gold);
+  shaft.position.y = -0.1;
+  const tooth1 = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.06, 0.07), gold);
+  tooth1.position.set(0.08, -0.24, 0);
+  const tooth2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.07), gold);
+  tooth2.position.set(0.06, -0.12, 0);
+  for (const m of [ring, shaft, tooth1, tooth2]) {
+    m.castShadow = true;
+    group.add(m);
+  }
+  const halo = createHalo(0xfde047);
+  halo.position.y = -0.35;
+  group.add(halo);
+  return { group, halo };
+}
+
 function createItemModel(type: ItemType) {
+  if (type === 'llave') return createKeyModel();
   return type === 'nuez' ? createWalnutModel() : createBerryModel();
+}
+
+/** The 3D key model (also used on enemies that carry it). */
+export function createKeyMesh(): THREE.Group {
+  const k = createKeyModel();
+  k.group.remove(k.halo);
+  return k.group;
 }
 
 // ---------- System ----------
@@ -224,6 +262,11 @@ export class ItemSystem {
 
   /** Every pickup back in its place (new run). */
   public resetPickups() {
+    // One-time drops (keys taken from enemies) disappear on a new run
+    for (const p of this.pickups) {
+      if (p.oneShot) this.root.remove(p.group);
+    }
+    this.pickups = this.pickups.filter((p) => !p.oneShot);
     for (const p of this.pickups) {
       p.available = true;
       p.respawnTimer = 0;
@@ -251,6 +294,9 @@ export class ItemSystem {
       case 'baya':
         used = ctx.feedCompanion();
         break;
+      case 'llave':
+        this.emit('La llave se usa sola: acércate a una puerta cerrada 🚪');
+        return false;
       case 'nuez':
         this.superJumpLeft = SUPER_JUMP_SECONDS;
         ctx.setJumpMultiplier(1.4);
@@ -261,6 +307,41 @@ export class ItemSystem {
     }
     if (used) this.slots[slot] = null;
     return used;
+  }
+
+  /** Shows a message in the HUD toast (used by puzzles). */
+  public notify(text: string) {
+    this.emit(text);
+  }
+
+  public has(type: ItemType): boolean {
+    return this.slots.includes(type);
+  }
+
+  /** Removes one item of a type from the backpack. Returns false if there wasn't any. */
+  public consume(type: ItemType): boolean {
+    const i = this.slots.indexOf(type);
+    if (i === -1) return false;
+    this.slots[i] = null;
+    return true;
+  }
+
+  /** Removes every item of a type (e.g. keys when changing level). */
+  public removeAllOfType(type: ItemType) {
+    for (let i = 0; i < this.slots.length; i++) if (this.slots[i] === type) this.slots[i] = null;
+  }
+
+  /** True if a pickup of this type is currently lying in the world. */
+  public isLyingAround(type: ItemType): boolean {
+    return this.pickups.some((p) => p.type === type && p.available);
+  }
+
+  /** Spawns a one-time pickup (e.g. a key dropped by an enemy). */
+  public spawnDrop(type: ItemType, pos: THREE.Vector3) {
+    const { group, halo } = createItemModel(type);
+    group.position.copy(pos);
+    this.root.add(group);
+    this.pickups.push({ type, group, halo, baseY: pos.y, available: true, respawnTimer: 0, phase: 0, fullWarnCooldown: 0, oneShot: true });
   }
 
   /** Drops (discards) the item in a slot. */
@@ -284,7 +365,8 @@ export class ItemSystem {
 
     for (const p of this.pickups) {
       if (!p.available) {
-        p.respawnTimer -= dt;
+        // A key only comes back if you don't already carry one
+        if (!(p.type === 'llave' && !p.oneShot && this.has('llave'))) p.respawnTimer -= dt;
         if (p.respawnTimer <= 0) {
           p.available = true;
           p.group.visible = true;
@@ -312,7 +394,7 @@ export class ItemSystem {
         }
         this.slots[free] = p.type;
         p.available = false;
-        p.respawnTimer = RESPAWN_SECONDS;
+        p.respawnTimer = p.oneShot ? 1e9 : p.type === 'llave' ? 6 : RESPAWN_SECONDS;
         soundManager.playCollectible();
         const info = ITEM_INFO[p.type];
         this.emit(`Guardaste: ${info.emoji} ${info.name} (tecla ${free + 1})`);

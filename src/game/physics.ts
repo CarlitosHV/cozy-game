@@ -33,6 +33,8 @@ export class ParkourPhysics {
   public speedMultiplier: number = 1;
   /** Walnut item: multiplies jump strength */
   public jumpMultiplier: number = 1;
+  /** Direction the player is trying to walk this frame (XZ, zero when idle) — used to push blocks */
+  public moveDir: THREE.Vector3 = new THREE.Vector3();
   /** Nubi: slow, floaty falling; holding jump rises up to floatCeiling */
   public floatPower: boolean = false;
   public floatCeiling: number = 0;
@@ -169,8 +171,10 @@ export class ParkourPhysics {
         fwdZ * input.forward + rightZ * input.right
       );
       this._moveDir.normalize();
+      this.moveDir.copy(this._moveDir);
     } else {
       this._moveDir.set(0, 0, 0);
+      this.moveDir.set(0, 0, 0);
     }
 
     // Snappy acceleration and friction (with knockback freedom)
@@ -585,6 +589,39 @@ export class ParkourPhysics {
           else if (minOver === dz2) this.position.z = plat.position.z + halfD + this.playerRadius;
         }
       }
+    }
+
+    // Solid pieces (doors, walls, push rocks) block you even while you stand on another floor
+    const feetNow = this.position.y;
+    for (const plat of this.world.platforms) {
+      if (!plat.solid || plat === this.currentPlatform) continue;
+      const halfW = plat.size.x * 0.5;
+      const halfD = plat.size.z * 0.5;
+      const topY = plat.position.y;
+      const bottomY = plat.position.y - plat.size.y;
+      if (
+        this.position.x + this.playerRadius <= plat.position.x - halfW ||
+        this.position.x - this.playerRadius >= plat.position.x + halfW ||
+        this.position.z + this.playerRadius <= plat.position.z - halfD ||
+        this.position.z - this.playerRadius >= plat.position.z + halfD
+      ) continue;
+      if (feetNow >= topY - 0.1 || feetNow + this.playerHeight <= bottomY) continue;
+      if (topY - feetNow <= this.stepClimbHeight && this.velocity.y <= 0.1) {
+        this.position.y = topY;
+        this.velocity.y = 0;
+        wasOnGround = true;
+        this.currentPlatform = plat;
+        continue;
+      }
+      const dx1 = this.position.x - (plat.position.x - halfW);
+      const dx2 = plat.position.x + halfW - this.position.x;
+      const dz1 = this.position.z - (plat.position.z - halfD);
+      const dz2 = plat.position.z + halfD - this.position.z;
+      const minOver = Math.min(dx1, dx2, dz1, dz2);
+      if (minOver === dx1) this.position.x = plat.position.x - halfW - this.playerRadius;
+      else if (minOver === dx2) this.position.x = plat.position.x + halfW + this.playerRadius;
+      else if (minOver === dz1) this.position.z = plat.position.z - halfD - this.playerRadius;
+      else this.position.z = plat.position.z + halfD + this.playerRadius;
     }
 
     this.isGrounded = wasOnGround;

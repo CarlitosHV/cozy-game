@@ -19,6 +19,8 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Award,
   HelpCircle,
   X,
@@ -50,8 +52,24 @@ import {
   Trash2,
   ArrowRight,
 } from 'lucide-react';
-import { GameEngine, GameState, GameMode, LEVELS } from '../game/GameEngine';
-import { isLevelCompleted } from '../game/progress';
+import { GameEngine, GameState, GameMode } from '../game/GameEngine';
+import {
+  isLevelCompleted,
+  isLevelUnlocked,
+  levelInfo,
+  maxPlayableLevel,
+  highestCompleted,
+  nextCompanionUnlock,
+  ThemeId,
+} from '../game/progress';
+import { CompanionStyle } from '../game/character';
+
+const THEME_COMPANION: Record<ThemeId, CompanionStyle> = {
+  cozy: 'nube',
+  cosmic: 'estrella',
+  swamp: 'luciernaga',
+  aero: 'catarina',
+};
 import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus } from '../game/items';
 import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
 import { COMPANION_POWERS, CompanionPowerStatus } from '../game/companionPowers';
@@ -502,11 +520,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   }, [gameState]);
 
   // Level selection on the title screen (the world behind the menu switches too)
-  const [selectedLevel, setSelectedLevel] = useState<number>(() => engine?.currentLevel ?? 1);
+  // Default to the furthest level reached ("continue")
+  const [selectedLevel, setSelectedLevel] = useState<number>(() => maxPlayableLevel());
   const pickLevel = (id: number) => {
     setSelectedLevel(id);
     engine?.loadLevel(id);
   };
+  // Show the selected level behind the title menu once the engine exists
+  useEffect(() => {
+    if (engine && gameState === 'title' && engine.currentLevel !== selectedLevel && isLevelUnlocked(selectedLevel)) {
+      engine.loadLevel(selectedLevel);
+    }
+  }, [engine, gameState]);
 
   // Photo Mode Studio State
   const [photoFilter, setPhotoFilter] = useState<PhotoFilter>('natural');
@@ -726,45 +751,89 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               Salta por plataformas flotantes, rebota en hongos elásticos y supera obstáculos hacia el Mirador Celestial.
             </p>
 
-            {/* Level Selector — each level unlocks its companion */}
-            <div className="w-full max-w-xl flex flex-col gap-2 mb-4 px-2">
-              <span className="text-[11px] text-sky-300 font-bold uppercase tracking-wider text-center">Elige tu Nivel:</span>
-              <div className="grid grid-cols-2 gap-2">
-                {LEVELS.map((lvl) => {
-                  const selected = selectedLevel === lvl.id;
-                  const done = isLevelCompleted(lvl.id);
-                  const comp = COMPANION_POWERS[lvl.companion];
-                  return (
+            {/* Endless Level Selector */}
+            {(() => {
+              const info = levelInfo(selectedLevel);
+              const maxLvl = maxPlayableLevel();
+              const done = isLevelCompleted(selectedLevel);
+              const themeComp = THEME_COMPANION[info.theme];
+              const nextC = nextCompanionUnlock();
+              const nextInfo = nextC ? COMPANION_POWERS[nextC.companion] : undefined;
+              const prevMilestone = nextC ? nextC.level - 10 : 0;
+              const pct = nextC ? Math.min(100, ((highestCompleted() - prevMilestone) / 10) * 100) : 100;
+              return (
+                <div className="w-full max-w-xl flex flex-col gap-2 mb-4 px-2">
+                  <span className="text-[11px] text-sky-300 font-bold uppercase tracking-wider text-center">Elige tu Nivel:</span>
+                  <div
+                    className="flex items-center gap-2 p-2 rounded-2xl border bg-stone-900/85 shadow-lg"
+                    style={{ borderColor: info.accent, boxShadow: `0 0 0 1px ${info.accent}55` }}
+                  >
                     <button
-                      key={lvl.id}
                       type="button"
-                      onClick={() => pickLevel(lvl.id)}
-                      className={`flex items-center gap-2 text-left p-2.5 rounded-2xl border transition-all cursor-pointer ${
-                        selected ? 'bg-stone-900/90 shadow-lg' : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
-                      }`}
-                      style={selected ? { borderColor: lvl.accent, boxShadow: `0 0 0 1px ${lvl.accent}66` } : undefined}
+                      onClick={() => pickLevel(Math.max(1, selectedLevel - 1))}
+                      disabled={selectedLevel <= 1}
+                      aria-label="Nivel anterior"
+                      className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
                     >
-                      <span
-                        className={`w-8 h-8 shrink-0 rounded-xl flex items-center justify-center text-stone-900 ${done ? '' : 'grayscale opacity-60'}`}
-                        style={{ backgroundColor: comp?.color ?? '#999' }}
-                        title={comp ? comp.companionName : ''}
-                      >
-                        {COMPANION_ICONS[lvl.companion]}
-                      </span>
-                      <span className="flex flex-col min-w-0">
-                        <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: lvl.accent }}>
-                          Nivel {lvl.id}
-                        </span>
-                        <span className="text-xs sm:text-sm font-bold text-stone-100 truncate">{lvl.name}</span>
-                        <span className={`text-[9px] sm:text-[10px] leading-snug ${done ? 'text-emerald-300' : 'text-stone-400'}`}>
-                          {done ? `✓ ${comp?.companionName} desbloqueado` : `🔒 Termínalo para ganar a ${comp?.companionName}`}
-                        </span>
-                      </span>
+                      <ChevronLeft className="w-5 h-5" />
                     </button>
-                  );
-                })}
-              </div>
-            </div>
+                    <span
+                      className="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center text-stone-900"
+                      style={{ backgroundColor: info.accent }}
+                    >
+                      {COMPANION_ICONS[themeComp]}
+                    </span>
+                    <div className="flex-1 min-w-0 flex flex-col text-left">
+                      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: info.accent }}>
+                        Nivel {selectedLevel} {info.generated ? '· Generado' : '· Clásico'}
+                      </span>
+                      <span className="text-sm sm:text-base font-bold text-stone-100 truncate">{info.name}</span>
+                      <span className={`text-[10px] ${done ? 'text-emerald-300' : 'text-amber-300'}`}>
+                        {done ? '✓ Completado' : selectedLevel === maxLvl ? '★ Tu siguiente nivel' : ''}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => pickLevel(Math.min(maxLvl, selectedLevel + 1))}
+                      disabled={selectedLevel >= maxLvl}
+                      aria-label="Nivel siguiente"
+                      title={selectedLevel >= maxLvl ? `Completa el nivel ${maxLvl} para seguir` : ''}
+                      className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {selectedLevel !== maxLvl && (
+                      <button
+                        type="button"
+                        onClick={() => pickLevel(maxLvl)}
+                        className="shrink-0 px-3 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[11px] font-bold text-amber-300 cursor-pointer"
+                      >
+                        Continuar: Nivel {maxLvl} ⏩
+                      </button>
+                    )}
+                    <div className="flex-1 min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-900/70 border border-stone-800">
+                      {nextC && nextInfo ? (
+                        <>
+                          <span className="shrink-0 text-stone-300">{COMPANION_ICONS[nextC.companion]}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[10px] text-stone-300 truncate">
+                              Próximo compañero: <strong>{nextInfo.companionName}</strong> al completar el nivel {nextC.level}
+                            </div>
+                            <div className="h-1.5 rounded-full bg-stone-800 overflow-hidden mt-0.5">
+                              <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: nextInfo.color }} />
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-emerald-300">✓ ¡Todos los compañeros desbloqueados!</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Game Mode Selector */}
             <div className="w-full max-w-xl flex flex-col gap-2 mb-6 px-2">
@@ -1168,7 +1237,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     })}
                   </div>
                   <p className="mt-2 text-[10px] text-stone-400 leading-snug">
-                    Recoge bayas 🍇 y nueces 🌰 en las islas. Úsalas con las teclas 1–5 o tocando el espacio.
+                    Recoge bayas 🍇 y nueces 🌰 en las islas. Úsalas con las teclas 1–5 o tocando el espacio. Las llaves 🔑 se usan solas al llegar a una puerta.
                   </p>
                 </div>
               )}
@@ -1849,7 +1918,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             <p className="text-sm text-stone-300 font-light max-w-xs mb-6">
-              {VICTORY_TEXT[engine?.currentLevel ?? 1] ?? VICTORY_TEXT[1]}
+              {VICTORY_TEXT[engine?.currentLevel ?? 1] ??
+                `¡Superaste el nivel ${engine?.currentLevel} (${levelInfo(engine?.currentLevel ?? 5).name})! Cada nivel nuevo es un poco más difícil.`}
+              {(() => {
+                const n = nextCompanionUnlock();
+                const info = n ? COMPANION_POWERS[n.companion] : undefined;
+                return n && info ? (
+                  <span className="block mt-1 text-xs text-stone-400">
+                    Próximo compañero: {info.companionName} en el nivel {n.level} (faltan {n.level - highestCompleted()}).
+                  </span>
+                ) : null;
+              })()}
             </p>
 
             {/* Run Statistics */}
@@ -1898,7 +1977,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             )}
 
             <div className="w-full flex flex-col gap-2.5">
-              {engine && LEVELS.some((l) => l.id === engine.currentLevel + 1) && (
+              {engine && isLevelUnlocked(engine.currentLevel + 1) && (
                 <button
                   onClick={() => {
                     setElapsedTime(0);
@@ -1907,7 +1986,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   }}
                   className="w-full py-3 rounded-xl bg-gradient-to-r from-sky-400 to-emerald-400 hover:from-sky-300 hover:to-emerald-300 text-stone-950 font-bold text-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
                 >
-                  Siguiente: Nivel {engine.currentLevel + 1} · {LEVELS.find((l) => l.id === engine.currentLevel + 1)?.name}
+                  Siguiente: Nivel {engine.currentLevel + 1} · {levelInfo(engine.currentLevel + 1).name}
                   <ArrowRight className="w-4 h-4" />
                 </button>
               )}
@@ -2018,6 +2097,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <p className="mt-1.5">
                 Después de usarlo, tu compañero queda con hambre. Recoge una <strong>baya mágica 🍇</strong>, se guarda en tu mochila, y úsala (teclas 1–5) para recargar el poder.
               </p>
+            </div>
+
+            {/* Puzzles guide (generated levels) */}
+            <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-400/30 text-[11px] text-sky-100/90 leading-relaxed mb-3">
+              <strong className="text-sky-300">🧩 Puzzles (desde el nivel 5):</strong>
+              <ul className="list-disc list-inside mt-1 space-y-1">
+                <li><strong>Roca 🪨:</strong> camina contra ella para empujarla hasta el muro alto y súbete encima para trepar. Si cae al vacío, vuelve a su sitio.</li>
+                <li><strong>Puerta con candado 🚪:</strong> necesitas una llave 🔑. A veces está en una isla más abajo: baja por ella y regresa con el trampolín.</li>
+                <li><strong>Ladrón de llaves:</strong> si un enemigo lleva una llave sobre la cabeza, salta encima de él para quitársela.</li>
+                <li><strong>Vigía 👁️:</strong> si su luz te ve, vuelves a la entrada de la zona. Escóndete tras los muros y avanza cuando mire a otro lado.</li>
+              </ul>
             </div>
 
             {/* Game Modes Guide */}

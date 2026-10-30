@@ -9,11 +9,11 @@ import { EnemyManager } from './enemies';
 import { BouncyMushroomModel } from './models';
 import { ProceduralTextures } from './textures';
 import { WorldBuildResult } from './levels';
-import { createLevelKit, makeGlowTexture } from './levelKit';
+import { createLevelKit, makeGlowTexture, LevelKit } from './levelKit';
 
-export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextures): WorldBuildResult {
-  const kit = createLevelKit(root, textures);
-  const { addPlatform, animators } = kit;
+/** Cosmic visual style: materials, platform builders and the star trampoline (shared with the level generator). */
+export function createCosmicStyle(kit: LevelKit) {
+  const { animators } = kit;
 
   // ---------------- Materials ----------------
   const hullMat = new THREE.MeshStandardMaterial({ color: 0x2b2550, roughness: 0.45, metalness: 0.7 });
@@ -102,7 +102,8 @@ export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextu
       const a = (i / n) * Math.PI * 2;
       const r = Math.min(w, d) * (0.28 + (i % 3) * 0.06);
       const chunk = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), i % 2 ? rockMat : rockDark);
-      chunk.position.set(Math.cos(a) * w * 0.42, -h * 0.55 - (i % 2) * 0.3, Math.sin(a) * d * 0.42);
+      // Keep every chunk fully below the walkable top so it never pokes above the floor
+      chunk.position.set(Math.cos(a) * w * 0.42, -Math.max(h * 0.55, r * 1.05) - (i % 2) * 0.3, Math.sin(a) * d * 0.42);
       chunk.rotation.set(i, i * 2, i * 3);
       g.add(chunk);
     }
@@ -198,108 +199,13 @@ export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextu
     };
   }
 
-  // =====================================================
-  // ZONE 1: PUERTO ESTELAR (space station & asteroids)
-  // =====================================================
-  addPlatform('station', 0, 0, 0, 24, 22, 2, station);
-  kit.addCheckpoint(1, 'Puerto Estelar', new THREE.Vector3(0, 0, -3.5), new THREE.Vector3(0, 0.2, 0), true);
+  return { hullMat, deckMat, glowCyan, glowPink, rockMat, rockDark, crystalMat, goldMat, station, asteroid, crystal, starBridge, createStarTrampoline };
+}
 
-  // Antenna & satellite dish decor on the station (with colliders)
-  const antenna = new THREE.Group();
-  antenna.position.set(-8, 0, -6);
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 6, 8), hullMat);
-  mast.position.y = 3;
-  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 10), glowPink);
-  beacon.position.y = 6.1;
-  antenna.add(mast, beacon);
-  kit.addDecor(antenna);
-  kit.registerCylinder('antenna', -8, 0, -6, 0.3, 6);
-  animators.push((_dt, time) => (beacon.visible = Math.floor(time * 2) % 2 === 0));
-
-  const dish = new THREE.Group();
-  dish.position.set(8, 0, -5);
-  const dishPost = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 2, 10), hullMat);
-  dishPost.position.y = 1;
-  const dishBowl = new THREE.Mesh(
-    new THREE.SphereGeometry(1.6, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2.4),
-    new THREE.MeshStandardMaterial({ color: 0xd4d4f7, roughness: 0.3, metalness: 0.6, side: THREE.DoubleSide })
-  );
-  dishBowl.rotation.x = Math.PI + 0.8;
-  dishBowl.position.y = 2.4;
-  dish.add(dishPost, dishBowl);
-  kit.addDecor(dish);
-  kit.registerCylinder('dish', 8, 0, -5, 0.6, 3);
-  animators.push((dt) => (dish.rotation.y += dt * 0.3));
-
-  addPlatform('asteroid_1', 3, 0.5, 15, 3.2, 3.2, 1.2, asteroid);
-  const ast2 = addPlatform('asteroid_moving', 3, 1.0, 20.5, 3.5, 3.5, 1.2, asteroid);
-  kit.makeMoving(ast2, 'x', 2.5, 0.8);
-  addPlatform('asteroid_3', -1, 1.6, 26, 3.2, 3.2, 1.2, asteroid);
-  const meteor = addPlatform('meteor_crumble', -4, 2.2, 30.5, 3, 3, 1.0, asteroid);
-  kit.makeCrumbling(meteor);
-
-  addPlatform('tramp_rock', -4, 2.8, 36.5, 5, 5, 1.5, asteroid);
-  kit.addBouncy('star_trampoline', createStarTrampoline(), -4, 2.8, 36.5);
-  addPlatform('high_crystal', -4, 5.6, 42.5, 6, 6, 0.6, crystal);
-
-  // =====================================================
-  // ZONE 2: ANILLOS DE SATURNO
-  // =====================================================
-  addPlatform('ring_station', -2, 6.4, 52, 10, 9, 2, station);
-  kit.addCheckpoint(2, 'Anillos de Saturno', new THREE.Vector3(-5.5, 6.4, 49.5), new THREE.Vector3(-2, 6.6, 53));
-
-  addPlatform('ring_chunk_1', 4, 7.0, 59, 3, 3, 0.8, asteroid);
-  addPlatform('ring_chunk_2', 8.5, 7.6, 62.5, 3, 3, 0.8, asteroid);
-  addPlatform('ring_chunk_3', 12.5, 8.2, 66.5, 3, 3, 0.8, asteroid);
-  const chunk4 = addPlatform('ring_chunk_moving', 12.5, 8.8, 72, 3.2, 3.2, 0.8, asteroid);
-  kit.makeMoving(chunk4, 'z', 1.5, 0.9);
-
-  addPlatform('beam_pad', 9, 9.4, 78, 5, 5, 1.5, station);
-  kit.addUpdraft('tractor_beam', 9, 9.4, 78, 15, 4.6, 0xc084fc);
-
-  addPlatform('glide_crystal', 9, 15.0, 83.5, 4.8, 4.8, 0.5, crystal);
-
-  // =====================================================
-  // ZONE 3: NEBULOSA
-  // =====================================================
-  addPlatform('nebula_dock', 9, 16.8, 89.5, 8, 6, 2.5, station);
-  kit.addCheckpoint(3, 'Nebulosa Violeta', new THREE.Vector3(12, 16.8, 88.2), new THREE.Vector3(8, 17.0, 90));
-  addPlatform('star_bridge', 9, 16.8, 97, 2.6, 9, 0.4, starBridge);
-  addPlatform('nebula_crystal_1', 5, 17.6, 104.5, 4, 4, 0.6, crystal);
-  const lift = addPlatform('crystal_lift', 0, 18.6, 109, 3.5, 3.5, 0.5, crystal);
-  kit.makeMoving(lift, 'y', 1.0, 0.8);
-  addPlatform('nebula_crystal_2', -4, 20.2, 114.5, 4.5, 4.5, 0.6, crystal);
-  const shard = addPlatform('crumble_crystal', -1, 21.4, 119.5, 3.5, 3.5, 0.5, crystal);
-  kit.makeCrumbling(shard);
-  addPlatform('gravity_pad', 2.5, 22.6, 124.5, 5, 5, 1.5, station);
-  kit.addUpdraft('gravity_beam', 2.5, 22.6, 124.5, 13, 4.2, 0xf0abfc);
-
-  // =====================================================
-  // SUMMIT: OBSERVATORIO ESTELAR
-  // =====================================================
-  const summitY = 31.1;
-  addPlatform('observatory', 2.5, summitY, 134.5, 16, 14, 3, station);
-  const summitPos = new THREE.Vector3(2.5, summitY + 0.2, 134.5);
-  const domeGroup = new THREE.Group();
-  domeGroup.position.set(-2.5, summitY, 139);
-  const domeBase = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 1.2, 28), hullMat);
-  domeBase.position.y = 0.6;
-  const dome = new THREE.Mesh(
-    new THREE.SphereGeometry(3, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2),
-    new THREE.MeshStandardMaterial({ color: 0xe0e7ff, roughness: 0.25, metalness: 0.6 })
-  );
-  dome.position.y = 1.2;
-  const slit = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3.2, 6.2), new THREE.MeshBasicMaterial({ color: 0x0a0720 }));
-  slit.position.y = 2.4;
-  slit.rotation.z = 0.5;
-  const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 4.2, 14), goldMat);
-  scope.position.set(0.9, 3.4, 0);
-  scope.rotation.z = -0.9;
-  domeGroup.add(domeBase, dome, slit, scope);
-  kit.addDecor(domeGroup);
-  kit.registerCylinder('observatory_dome', -2.5, summitY, 139, 3.2, 4.5);
-  animators.push((dt) => (domeGroup.rotation.y += dt * 0.08));
-  addPlatform('obs_step', 7, summitY + 1.1, 137.5, 2.2, 2.2, 1.1, crystal);
+/** Space backdrop: stars, nebulae, planets, comets and debris along the route (z from -10 to zMax). */
+export function addCosmicBackdrop(kit: LevelKit, style: CosmicStyle, zMax: number = 150) {
+  const { animators } = kit;
+  const { rockMat, rockDark } = style;
 
   // =====================================================
   // SPACE DECOR: stars, nebulae, planets, comets, debris
@@ -407,7 +313,7 @@ export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextu
   for (let i = 0; i < 26; i++) {
     const d = new THREE.Mesh(new THREE.DodecahedronGeometry(0.3 + Math.random() * 0.9, 0), i % 2 ? rockMat : rockDark);
     const side = i % 2 ? 1 : -1;
-    d.position.set(side * (14 + Math.random() * 18), -8 + Math.random() * 40, -10 + Math.random() * 150);
+    d.position.set(side * (14 + Math.random() * 18), -8 + Math.random() * 40, -10 + Math.random() * zMax);
     kit.addDecor(d);
     debris.push(d);
   }
@@ -418,6 +324,122 @@ export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextu
       d.position.y += Math.sin(time * 0.6 + i) * 0.003;
     });
   });
+
+}
+
+export type CosmicStyle = ReturnType<typeof createCosmicStyle>;
+
+export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextures): WorldBuildResult {
+  const kit = createLevelKit(root, textures);
+  const { addPlatform, animators } = kit;
+  const style = createCosmicStyle(kit);
+  const { hullMat, glowPink, goldMat, station, asteroid, crystal, starBridge, createStarTrampoline } = style;
+
+
+  // =====================================================
+  // ZONE 1: PUERTO ESTELAR (space station & asteroids)
+  // =====================================================
+  addPlatform('station', 0, 0, 0, 24, 22, 2, station);
+  kit.addCheckpoint(1, 'Puerto Estelar', new THREE.Vector3(0, 0, -3.5), new THREE.Vector3(0, 0.2, 0), true);
+
+  // Antenna & satellite dish decor on the station (with colliders)
+  const antenna = new THREE.Group();
+  antenna.position.set(-8, 0, -6);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 6, 8), hullMat);
+  mast.position.y = 3;
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 10), glowPink);
+  beacon.position.y = 6.1;
+  antenna.add(mast, beacon);
+  kit.addDecor(antenna);
+  kit.registerCylinder('antenna', -8, 0, -6, 0.3, 6);
+  animators.push((_dt, time) => (beacon.visible = Math.floor(time * 2) % 2 === 0));
+
+  const dish = new THREE.Group();
+  dish.position.set(8, 0, -5);
+  const dishPost = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 2, 10), hullMat);
+  dishPost.position.y = 1;
+  const dishBowl = new THREE.Mesh(
+    new THREE.SphereGeometry(1.6, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2.4),
+    new THREE.MeshStandardMaterial({ color: 0xd4d4f7, roughness: 0.3, metalness: 0.6, side: THREE.DoubleSide })
+  );
+  dishBowl.rotation.x = Math.PI + 0.8;
+  dishBowl.position.y = 2.4;
+  dish.add(dishPost, dishBowl);
+  kit.addDecor(dish);
+  kit.registerCylinder('dish', 8, 0, -5, 0.6, 3);
+  animators.push((dt) => (dish.rotation.y += dt * 0.3));
+
+  addPlatform('asteroid_1', 3, 0.5, 15, 3.2, 3.2, 1.2, asteroid);
+  const ast2 = addPlatform('asteroid_moving', 3, 1.0, 20.5, 3.5, 3.5, 1.2, asteroid);
+  kit.makeMoving(ast2, 'x', 2.5, 0.8);
+  addPlatform('asteroid_3', -1, 1.6, 26, 3.2, 3.2, 1.2, asteroid);
+  const meteor = addPlatform('meteor_crumble', -4, 2.2, 30.5, 3, 3, 1.0, asteroid);
+  kit.makeCrumbling(meteor);
+
+  addPlatform('tramp_rock', -4, 2.8, 36.5, 5, 5, 1.5, asteroid);
+  kit.addBouncy('star_trampoline', createStarTrampoline(), -4, 2.8, 36.5);
+  addPlatform('high_crystal', -4, 5.6, 42.5, 6, 6, 0.6, crystal);
+
+  // =====================================================
+  // ZONE 2: ANILLOS DE SATURNO
+  // =====================================================
+  addPlatform('ring_station', -2, 6.4, 52, 10, 9, 2, station);
+  kit.addCheckpoint(2, 'Anillos de Saturno', new THREE.Vector3(-5.5, 6.4, 49.5), new THREE.Vector3(-2, 6.6, 53));
+
+  addPlatform('ring_chunk_1', 4, 7.0, 59, 3, 3, 0.8, asteroid);
+  addPlatform('ring_chunk_2', 8.5, 7.6, 62.5, 3, 3, 0.8, asteroid);
+  addPlatform('ring_chunk_3', 12.5, 8.2, 66.5, 3, 3, 0.8, asteroid);
+  const chunk4 = addPlatform('ring_chunk_moving', 12.5, 8.8, 72, 3.2, 3.2, 0.8, asteroid);
+  kit.makeMoving(chunk4, 'z', 1.5, 0.9);
+
+  addPlatform('beam_pad', 9, 9.4, 78, 5, 5, 1.5, station);
+  kit.addUpdraft('tractor_beam', 9, 9.4, 78, 15, 4.6, 0xc084fc);
+
+  addPlatform('glide_crystal', 9, 15.0, 83.5, 4.8, 4.8, 0.5, crystal);
+
+  // =====================================================
+  // ZONE 3: NEBULOSA
+  // =====================================================
+  addPlatform('nebula_dock', 9, 16.8, 89.5, 8, 6, 2.5, station);
+  kit.addCheckpoint(3, 'Nebulosa Violeta', new THREE.Vector3(12, 16.8, 88.2), new THREE.Vector3(8, 17.0, 90));
+  addPlatform('star_bridge', 9, 16.8, 97, 2.6, 9, 0.4, starBridge);
+  addPlatform('nebula_crystal_1', 5, 17.6, 104.5, 4, 4, 0.6, crystal);
+  const lift = addPlatform('crystal_lift', 0, 18.6, 109, 3.5, 3.5, 0.5, crystal);
+  kit.makeMoving(lift, 'y', 1.0, 0.8);
+  addPlatform('nebula_crystal_2', -4, 20.2, 114.5, 4.5, 4.5, 0.6, crystal);
+  const shard = addPlatform('crumble_crystal', -1, 21.4, 119.5, 3.5, 3.5, 0.5, crystal);
+  kit.makeCrumbling(shard);
+  addPlatform('gravity_pad', 2.5, 22.6, 124.5, 5, 5, 1.5, station);
+  kit.addUpdraft('gravity_beam', 2.5, 22.6, 124.5, 13, 4.2, 0xf0abfc);
+
+  // =====================================================
+  // SUMMIT: OBSERVATORIO ESTELAR
+  // =====================================================
+  const summitY = 31.1;
+  addPlatform('observatory', 2.5, summitY, 134.5, 16, 14, 3, station);
+  const summitPos = new THREE.Vector3(2.5, summitY + 0.2, 134.5);
+  const domeGroup = new THREE.Group();
+  domeGroup.position.set(-2.5, summitY, 139);
+  const domeBase = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 1.2, 28), hullMat);
+  domeBase.position.y = 0.6;
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(3, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0xe0e7ff, roughness: 0.25, metalness: 0.6 })
+  );
+  dome.position.y = 1.2;
+  const slit = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3.2, 6.2), new THREE.MeshBasicMaterial({ color: 0x0a0720 }));
+  slit.position.y = 2.4;
+  slit.rotation.z = 0.5;
+  const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 4.2, 14), goldMat);
+  scope.position.set(0.9, 3.4, 0);
+  scope.rotation.z = -0.9;
+  domeGroup.add(domeBase, dome, slit, scope);
+  kit.addDecor(domeGroup);
+  kit.registerCylinder('observatory_dome', -2.5, summitY, 139, 3.2, 4.5);
+  animators.push((dt) => (domeGroup.rotation.y += dt * 0.08));
+  addPlatform('obs_step', 7, summitY + 1.1, 137.5, 2.2, 2.2, 1.1, crystal);
+
+  addCosmicBackdrop(kit, style);
 
   // =====================================================
   // COLLECTIBLES

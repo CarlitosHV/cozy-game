@@ -29,6 +29,7 @@ import {
 } from './models';
 import { ProceduralTextures } from './textures';
 import { ItemSpot } from './items';
+import type { PuzzleData } from './puzzles';
 
 export interface PlatformItem {
   id: string;
@@ -36,6 +37,8 @@ export interface PlatformItem {
   position: THREE.Vector3;
   size: THREE.Vector3;
   mesh: THREE.Object3D;
+  /** Tall walls, doors and push rocks: always block the player sideways, even while standing on another floor */
+  solid?: boolean;
   movement?: {
     axis: 'x' | 'y' | 'z';
     amplitude: number;
@@ -83,10 +86,15 @@ export interface WorldBuildResult {
   enemyManager: EnemyManager;
   /** Where backpack items (berries, walnuts…) can be picked up */
   itemSpots: ItemSpot[];
+  /** Display names for generated levels */
+  levelName?: string;
+  summitName?: string;
   /** Where the level's companion waits at the summit (defaults near the summit) */
   companionShowcasePos?: THREE.Vector3;
   /** Optional per-frame animation for level decorations (waterfalls, bubbles…) */
   levelUpdate?: (dt: number, time: number) => void;
+  /** Push blocks, locked doors, key carriers, sentinels (generated levels) */
+  puzzles?: PuzzleData;
 }
 
 export function buildCozyParkourWorld(
