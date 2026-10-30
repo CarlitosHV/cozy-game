@@ -1,48 +1,93 @@
 /**
- * Player progress: which levels are finished and which companions are unlocked.
- * Every level belongs to one companion — finish the level to unlock it.
- *   Nivel 1 Archipiélago Acogedor → Nubi
- *   Nivel 2 Ruta Cósmica          → Estelita
- *   Nivel 3 Pantano Sombrío       → Chispa
- *   Nivel 4 Valle Aero            → Catarina
- * Tip for testing: open the game with ?desbloquear=todo in the URL to unlock everything.
+ * Player progress for the endless level ladder.
+ *  - Levels 1-4 are the handmade worlds; from level 5 on they are generated dynamically
+ *    (themes rotate: Acogedor → Cósmico → Pantano → Aero).
+ *  - Levels unlock in order: finish level N to play level N+1.
+ *  - Companions unlock every 10 levels: 10 Nubi, 20 Estelita, 30 Chispa, 40 Catarina.
+ * Tip for testing: add ?desbloquear=todo to the URL to unlock everything (up to level 41).
  */
 import type { CompanionStyle } from './character';
+
+export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero';
 
 export interface LevelInfo {
   id: number;
   name: string;
   desc: string;
-  companion: CompanionStyle;
+  theme: ThemeId;
   accent: string;
+  generated: boolean;
 }
 
-export const LEVELS: LevelInfo[] = [
-  { id: 1, name: 'Archipiélago Acogedor', desc: 'Islas flotantes, hongos y nubes al atardecer.', companion: 'nube', accent: '#f59e0b' },
-  { id: 2, name: 'Ruta Cósmica', desc: 'Asteroides, anillos planetarios y nebulosas.', companion: 'estrella', accent: '#a78bfa' },
-  { id: 3, name: 'Pantano Sombrío', desc: 'Niebla, ruinas embrujadas y la torre de la bruja.', companion: 'luciernaga', accent: '#84cc16' },
-  { id: 4, name: 'Valle Aero', desc: 'Pradera brillante, cascadas y ciudad de cristal.', companion: 'catarina', accent: '#38bdf8' },
+const THEME_ORDER: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero'];
+
+export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: string }> = {
+  cozy: { name: 'Archipiélago Acogedor', desc: 'Islas flotantes, hongos y nubes al atardecer.', accent: '#f59e0b' },
+  cosmic: { name: 'Ruta Cósmica', desc: 'Asteroides, anillos planetarios y nebulosas.', accent: '#a78bfa' },
+  swamp: { name: 'Pantano Sombrío', desc: 'Niebla, ruinas embrujadas y la torre de la bruja.', accent: '#84cc16' },
+  aero: { name: 'Valle Aero', desc: 'Pradera brillante, cascadas y ciudad de cristal.', accent: '#38bdf8' },
+};
+
+/** Theme of any level: 1-4 handmade, then rotating forever. */
+export function themeForLevel(level: number): ThemeId {
+  if (level <= 4) return THEME_ORDER[Math.max(0, level - 1)];
+  return THEME_ORDER[(level - 5) % 4];
+}
+
+export function levelInfo(level: number): LevelInfo {
+  const theme = themeForLevel(level);
+  const t = THEME_INFO[theme];
+  return {
+    id: level,
+    name: t.name,
+    desc: level <= 4 ? t.desc : `Nivel generado · ${t.desc}`,
+    theme,
+    accent: t.accent,
+    generated: level > 4,
+  };
+}
+
+/** The 4 handmade worlds (kept for reference/UI). */
+export const LEVELS: LevelInfo[] = [1, 2, 3, 4].map(levelInfo);
+
+/** Companions earned every 10 levels. */
+export const COMPANION_UNLOCKS: { companion: CompanionStyle; level: number }[] = [
+  { companion: 'nube', level: 10 },
+  { companion: 'estrella', level: 20 },
+  { companion: 'luciernaga', level: 30 },
+  { companion: 'catarina', level: 40 },
 ];
 
-export function levelForCompanion(c: CompanionStyle): LevelInfo | undefined {
-  return LEVELS.find((l) => l.companion === c);
+export function unlockLevelFor(c: CompanionStyle): number | undefined {
+  return COMPANION_UNLOCKS.find((u) => u.companion === c)?.level;
 }
 
 interface ProgressData {
-  completed: number[];
+  highestCompleted: number;
 }
 
-const STORAGE_KEY = 'aether-leap-progress-v1';
+const STORAGE_KEY = 'aether-leap-progress-v2';
+const LEGACY_KEY = 'aether-leap-progress-v1';
 let cache: ProgressData | null = null;
 
 function read(): ProgressData {
-  const data: ProgressData = { completed: [] };
+  const data: ProgressData = { highestCompleted: 0 };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed?.completed)) {
-        data.completed = parsed.completed.filter((n: unknown) => typeof n === 'number');
+      if (typeof parsed?.highestCompleted === 'number') data.highestCompleted = Math.max(0, Math.floor(parsed.highestCompleted));
+    } else {
+      // Migrate the first progress format ({ completed: [1, 2, …] })
+      const legacy = window.localStorage.getItem(LEGACY_KEY);
+      if (legacy) {
+        const parsed = JSON.parse(legacy);
+        if (Array.isArray(parsed?.completed)) {
+          const done = new Set(parsed.completed.filter((n: unknown) => typeof n === 'number'));
+          let h = 0;
+          while (done.has(h + 1)) h++;
+          data.highestCompleted = h;
+        }
       }
     }
   } catch {
@@ -50,7 +95,7 @@ function read(): ProgressData {
   }
   try {
     if (/[?&]desbloquear=todo\b/.test(window.location.search)) {
-      data.completed = LEVELS.map((l) => l.id);
+      data.highestCompleted = Math.max(data.highestCompleted, 40);
     }
   } catch {
     // ignore
@@ -71,21 +116,41 @@ function persist() {
   }
 }
 
+export function highestCompleted(): number {
+  return data().highestCompleted;
+}
+
+/** The furthest level you can play right now. */
+export function maxPlayableLevel(): number {
+  return data().highestCompleted + 1;
+}
+
+export function isLevelUnlocked(level: number): boolean {
+  return level >= 1 && level <= maxPlayableLevel();
+}
+
 export function isLevelCompleted(level: number): boolean {
-  return data().completed.includes(level);
+  return level <= data().highestCompleted;
 }
 
 export function isCompanionUnlocked(c: CompanionStyle): boolean {
   if (c === 'ninguno') return true;
-  const lvl = levelForCompanion(c);
-  return lvl ? isLevelCompleted(lvl.id) : true;
+  const lvl = unlockLevelFor(c);
+  return lvl === undefined ? true : data().highestCompleted >= lvl;
 }
 
-/** Marks a level as finished. Returns the companion unlocked for the first time, if any. */
+/** Next companion still to earn (or null when all are unlocked). */
+export function nextCompanionUnlock(): { companion: CompanionStyle; level: number } | null {
+  return COMPANION_UNLOCKS.find((u) => data().highestCompleted < u.level) ?? null;
+}
+
+/** Marks a level as finished. Returns the companion unlocked by it for the first time, if any. */
 export function markLevelComplete(level: number): CompanionStyle | null {
   const d = data();
-  if (d.completed.includes(level)) return null;
-  d.completed.push(level);
+  if (level <= d.highestCompleted) return null;
+  const before = d.highestCompleted;
+  d.highestCompleted = Math.max(d.highestCompleted, level);
   persist();
-  return LEVELS.find((l) => l.id === level)?.companion ?? null;
+  const reward = COMPANION_UNLOCKS.find((u) => u.level > before && u.level <= d.highestCompleted);
+  return reward ? reward.companion : null;
 }

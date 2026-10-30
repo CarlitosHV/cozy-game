@@ -19,18 +19,21 @@ import { buildAeroWorld } from './levelAero';
 import { buildCosmicWorld } from './levelCosmic';
 import { buildSwampWorld } from './levelSwamp';
 import { makeGlowTexture } from './levelKit';
-import { LEVELS, markLevelComplete, isCompanionUnlocked } from './progress';
+import { LEVELS, markLevelComplete, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo } from './progress';
+import { generateLevel } from './levelGen';
+import { PuzzleSystem } from './puzzles';
 import { CompanionStyle } from './character';
 
 export { LEVELS };
 
-/** Per-level atmosphere: base weather and the sky shown on victory. */
-const LEVEL_THEMES: Record<number, { weather: WeatherType; title: string; victoryWeather: WeatherType; victoryTitle: string; victoryDesc: string }> = {
-  1: { weather: 'golden_hour', title: 'Hora Dorada', victoryWeather: 'starlit_night', victoryTitle: 'Noche Estrellada', victoryDesc: '¡Cima alcanzada en el Mirador Celestial!' },
-  2: { weather: 'cosmic', title: 'Ruta Cósmica', victoryWeather: 'starlit_night', victoryTitle: 'Lluvia de Estrellas', victoryDesc: '¡Llegaste al Observatorio Estelar!' },
-  3: { weather: 'swamp_mist', title: 'Pantano Sombrío', victoryWeather: 'starlit_night', victoryTitle: 'Noche de Luciérnagas', victoryDesc: '¡Llegaste al Santuario de las Luciérnagas!' },
-  4: { weather: 'aero_day', title: 'Valle Aero', victoryWeather: 'golden_hour', victoryTitle: 'Atardecer Aero', victoryDesc: '¡Llegaste a la Plaza del Globo!' },
+/** Per-theme atmosphere: base weather and the sky shown on victory. */
+const THEME_ATMOS: Record<ThemeId, { weather: WeatherType; title: string; victoryWeather: WeatherType; victoryTitle: string; victoryDesc: string }> = {
+  cozy: { weather: 'golden_hour', title: 'Hora Dorada', victoryWeather: 'starlit_night', victoryTitle: 'Noche Estrellada', victoryDesc: '¡Cima alcanzada!' },
+  cosmic: { weather: 'cosmic', title: 'Ruta Cósmica', victoryWeather: 'starlit_night', victoryTitle: 'Lluvia de Estrellas', victoryDesc: '¡Llegaste al Observatorio Estelar!' },
+  swamp: { weather: 'swamp_mist', title: 'Pantano Sombrío', victoryWeather: 'starlit_night', victoryTitle: 'Noche de Luciérnagas', victoryDesc: '¡Llegaste al Santuario de las Luciérnagas!' },
+  aero: { weather: 'aero_day', title: 'Valle Aero', victoryWeather: 'golden_hour', victoryTitle: 'Atardecer Aero', victoryDesc: '¡Llegaste a la Plaza del Globo!' },
 };
+const atmos = (level: number) => THEME_ATMOS[themeForLevel(level)];
 
 export type GameMode = 'free' | 'time_trial' | 'chase';
 export type GameState = 'title' | 'playing' | 'paused' | 'victory' | 'photo_mode' | 'game_over';
@@ -75,6 +78,8 @@ export class GameEngine {
   public companionPowers!: CompanionPowerSystem;
   public itemSystem!: ItemSystem;
   private itemCtx!: ItemUseContext;
+  /** Push blocks, doors, key carriers and sentinels */
+  public puzzleSystem: PuzzleSystem = new PuzzleSystem();
 
   // Levels
   public currentLevel: number = 1;
@@ -243,6 +248,7 @@ export class GameEngine {
     // 7c. Backpack items (berries, walnuts…) — 5 slots, keys 1-5
     this.itemSystem = new ItemSystem(this.scene);
     this.itemSystem.loadSpots(this.world.itemSpots);
+    this.puzzleSystem.load(this.world.puzzles);
     this.itemCtx = {
       feedCompanion: () => this.companionPowers.feed(),
       setJumpMultiplier: (m: number) => {
@@ -357,21 +363,38 @@ export class GameEngine {
         return buildSwampWorld(this.levelRoot, this.textures);
       case 4:
         return buildAeroWorld(this.levelRoot, this.textures);
-      default:
+      case 1:
         return buildCozyParkourWorld(this.levelRoot, this.textures);
+      default:
+        // Level 5 and beyond: dynamically generated from the 4 themes
+        return generateLevel(level, this.levelRoot, this.textures);
     }
   }
 
-  private levelWeather(): WeatherType {
-    return (LEVEL_THEMES[this.currentLevel] ?? LEVEL_THEMES[1]).weather;
+  /** Enemies get more hostile as you advance: 0 on level 1 → 1 on level 41+. */
+  public get hostility(): number {
+    return Math.min(1, Math.max(0, (this.currentLevel - 1) / 40));
   }
 
-  /** Places a big floating copy of the level's companion at the summit — your reward for finishing. */
+  private applyHostility() {
+    if (this.world.enemyManager) this.world.enemyManager.hostility = this.hostility;
+  }
+
+  /** Display name of the current level. */
+  public get levelName(): string {
+    return this.world.levelName ?? levelInfo(this.currentLevel).name;
+  }
+
+  private levelWeather(): WeatherType {
+    return atmos(this.currentLevel).weather;
+  }
+
+  /** On the levels that award a companion (10, 20, 30, 40) it waits for you at the summit. */
   private addCompanionShowcase() {
     this.showcase = null;
-    const lvl = LEVELS.find((l) => l.id === this.currentLevel);
-    if (!lvl) return;
-    const temp = createPlayerCharacter(this.textures, { ...this.playerAppearance, companion: lvl.companion });
+    const reward = COMPANION_UNLOCKS.find((u) => u.level === this.currentLevel);
+    if (!reward) return;
+    const temp = createPlayerCharacter(this.textures, { ...this.playerAppearance, companion: reward.companion });
     const sprite = temp.companionSprite;
     temp.group.remove(sprite);
     disposePlayerCharacter(temp);
@@ -398,7 +421,8 @@ export class GameEngine {
 
   /** Unloads the current level and builds another one (keeps player, companion & backpack). */
   public loadLevel(level: number) {
-    if (level === this.currentLevel || !LEVELS.some((l) => l.id === level)) return;
+    level = Math.max(1, Math.floor(level));
+    if (level === this.currentLevel || !isLevelUnlocked(level)) return;
 
     // Tear down the old world
     if (this.stalker) {
@@ -425,11 +449,15 @@ export class GameEngine {
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(level);
+    this.applyHostility();
     this.addCompanionShowcase();
     this.physics = new ParkourPhysics(this.world, this.playerModel);
     this.physics.jumpMultiplier = this.itemSystem.superJumpLeft > 0 ? 1.4 : 1;
     this.companionPowers.reset(this.physics);
     this.itemSystem.loadSpots(this.world.itemSpots);
+    // Keys only open doors of their own level
+    this.itemSystem.removeAllOfType('llave');
+    this.puzzleSystem.load(this.world.puzzles);
 
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
     const cp0 = this.world.checkpoints[0];
@@ -446,7 +474,7 @@ export class GameEngine {
   /** From the victory screen: travel to the next level keeping your backpack. */
   public goToNextLevel() {
     const next = this.currentLevel + 1;
-    if (!LEVELS.some((l) => l.id === next)) return;
+    if (!isLevelUnlocked(next)) return;
     this.loadLevel(next);
     this.beginRun(this.gameMode, false);
   }
@@ -472,6 +500,8 @@ export class GameEngine {
     this.resetCompanionPowers();
     this.itemSystem.resetPickups();
     if (freshBackpack) this.itemSystem.clearInventory(this.itemCtx);
+    this.itemSystem.removeAllOfType('llave');
+    this.puzzleSystem.reset();
     soundManager.init();
     soundManager.resume();
     if (mode) {
@@ -494,7 +524,7 @@ export class GameEngine {
       if (this.currentLevel === 1) {
         this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Prado del Amanecer');
       } else {
-        const theme = LEVEL_THEMES[this.currentLevel];
+        const theme = atmos(this.currentLevel);
         this.transitionWeather(theme.weather, 2.5, 'milestone', theme.title, this.world.checkpoints[0]?.name ?? '');
       }
     }
@@ -593,6 +623,8 @@ export class GameEngine {
     this.resetCompanionPowers();
     this.itemSystem.resetPickups();
     this.itemSystem.clearInventory(this.itemCtx);
+    this.itemSystem.removeAllOfType('llave');
+    this.puzzleSystem.reset();
     this.gameState = 'playing';
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
@@ -609,7 +641,7 @@ export class GameEngine {
     if (this.currentLevel === 1) {
       this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Comienzo en el Prado del Amanecer');
     } else {
-      const theme = LEVEL_THEMES[this.currentLevel];
+      const theme = atmos(this.currentLevel);
       this.transitionWeather(theme.weather, 2.5, 'milestone', theme.title, `De vuelta a ${this.world.checkpoints[0]?.name ?? 'el inicio'}`);
     }
   }
@@ -625,7 +657,7 @@ export class GameEngine {
     }
     // Smoothly transition weather to match target zone milestone
     if (this.currentLevel !== 1) {
-      const theme = LEVEL_THEMES[this.currentLevel];
+      const theme = atmos(this.currentLevel);
       this.transitionWeather(theme.weather, 2.0, 'milestone', theme.title, this.world.checkpoints[index]?.name ?? '');
     } else if (index === 0) {
       this.transitionWeather('golden_hour', 2.8, 'milestone', 'Hora Dorada', 'Retorno al Prado del Amanecer');
@@ -1172,6 +1204,8 @@ export class GameEngine {
       if (!this.stalker) {
         this.stalker = new AetherStalker(this.scene, this.physics.position);
       }
+      // The Stalker also speeds up on later levels
+      this.stalker.speedScale = 1 + 0.35 * this.hostility;
       // While Chispa's lure glows, the Stalker chases the lure instead of the player
       const lure = this.companionPowers.lureTarget;
       this.stalker.update(dt, time, lure ?? this.physics.position, () => {
@@ -1255,10 +1289,27 @@ export class GameEngine {
           this.stalker.isStunned = true;
           this.stalker.stunTimer = 999;
         }
-        const theme = LEVEL_THEMES[this.currentLevel] ?? LEVEL_THEMES[1];
+        const theme = atmos(this.currentLevel);
         this.transitionWeather(theme.victoryWeather, 4.5, 'milestone', theme.victoryTitle, theme.victoryDesc);
       }
     );
+
+    // 6b. Puzzles (push blocks, doors, key carriers, sentinels)
+    if (this.world.puzzles && this.gameState === 'playing') {
+      this.puzzleSystem.update(dt, time, {
+        position: this.physics.position,
+        velocity: this.physics.velocity,
+        moveDir: this.physics.moveDir,
+        platforms: this.world.platforms,
+        items: this.itemSystem,
+        hostility: this.hostility,
+        teleport: (to) => {
+          this.physics.position.copy(to);
+          this.physics.velocity.set(0, 0, 0);
+          this.physics.lastSafePos.copy(to);
+        },
+      });
+    }
 
     if (this.physics.collectedCount !== prevCollectibles) {
       this.callbacks.onCollectiblesChange(

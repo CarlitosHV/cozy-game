@@ -9,7 +9,18 @@ import * as THREE from 'three';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
 import { ProceduralTextures } from './textures';
 
-export type EnemyType = 'sproutling' | 'zephyr_puff';
+export type EnemyType = 'sproutling' | 'zephyr_puff' | 'chaser' | 'hopper' | 'shooter' | 'diver';
+
+/** Pushes the player: direction (XZ), horizontal force and upward speed. */
+export type KnockFn = (dir: THREE.Vector3, force: number, up: number) => void;
+
+interface Projectile {
+  mesh: THREE.Object3D;
+  velocity: THREE.Vector3;
+  life: number;
+  radius: number;
+  force: number;
+}
 
 export interface CozyEnemy {
   id: string;
@@ -41,6 +52,12 @@ export interface CozyEnemy {
   };
   update: (dt: number, time: number, playerPos: THREE.Vector3) => void;
   bop: () => void;
+  /** Extra hit logic for special enemies (shockwaves, dives…). Return true if the player was hit. */
+  onCheck?: (playerPos: THREE.Vector3, playerVel: THREE.Vector3, playerRadius: number, knock: KnockFn) => boolean;
+  /** When false the standard body-contact push is skipped (e.g. turrets only hurt with projectiles) */
+  bodyContact?: boolean;
+  /** Called when the player stomps on it (used by enemies that carry items) */
+  onBopped?: () => void;
 }
 
 export class EnemyManager {
@@ -54,6 +71,30 @@ export class EnemyManager {
   /** Chispa's lure: while set, enemies stop to stare at it and don't push the player */
   public distractTarget: THREE.Vector3 | null = null;
 
+  /**
+   * 0 → 1: how aggressive enemies are. Grows with the level number: faster walkers,
+   * wider detection, more frequent gusts/shots/dives and stronger knockbacks.
+   */
+  public hostility: number = 0;
+
+  private projectiles: Projectile[] = [];
+
+  /** Helpers for enemy factories living in other modules */
+  public addObject(o: THREE.Object3D) {
+    this.scene.add(o);
+  }
+  public removeObject(o: THREE.Object3D) {
+    this.scene.remove(o);
+  }
+  public registerEnemy(e: CozyEnemy) {
+    this.enemies.push(e);
+  }
+  public spawnProjectile(mesh: THREE.Object3D, from: THREE.Vector3, velocity: THREE.Vector3, force: number, radius = 0.3, life = 4) {
+    mesh.position.copy(from);
+    this.scene.add(mesh);
+    this.projectiles.push({ mesh, velocity: velocity.clone(), life, radius, force });
+  }
+
   constructor(scene: THREE.Object3D, textures: ProceduralTextures) {
     this.scene = scene;
     this.textures = textures;
@@ -66,6 +107,7 @@ export class EnemyManager {
     patrolAxis: 'x' | 'z',
     range: number = 4.0
   ): CozyEnemy {
+    const mgr = this;
     const group = new THREE.Group();
     group.position.copy(spawnPos);
 
@@ -237,9 +279,9 @@ export class EnemyManager {
 
         // Distance to player for cute telegraph excitement
         const distToPlayer = this.position.distanceTo(playerPos);
-        const seesPlayer = distToPlayer < 4.5;
+        const seesPlayer = distToPlayer < 4.5 + 3 * mgr.hostility;
 
-        const currentSpeed = seesPlayer ? this.speed * 1.5 : this.speed;
+        const currentSpeed = (seesPlayer ? this.speed * 1.5 : this.speed) * (1 + 0.9 * mgr.hostility);
 
         // Patrol along assigned axis
         this.position[this.patrolAxis] += this.direction * currentSpeed * dt;
@@ -293,6 +335,7 @@ export class EnemyManager {
     patrolAxis: 'x' | 'z',
     range: number = 3.5
   ): CozyEnemy {
+    const mgr = this;
     const group = new THREE.Group();
     group.position.copy(spawnPos);
 
@@ -461,7 +504,7 @@ export class EnemyManager {
         }
 
         // Cycle through: Hovering Patrol (3.5s) -> Inhale Telegraph (1.2s) -> Blow Breeze (1.6s)
-        this.telegraphTimer += dt;
+        this.telegraphTimer += dt * (1 + 0.9 * mgr.hostility);
         const cycle = this.telegraphTimer % 6.5;
 
         if (cycle < 3.5) {
@@ -912,6 +955,30 @@ export class EnemyManager {
     onPlayerKnockback: (forceDir: THREE.Vector3) => void
   ) {
     const distracted = this.distractTarget !== null;
+    const knock: KnockFn = (dir, force, up) => {
+      playerVelocity.x = dir.x * force;
+      playerVelocity.y = up;
+      playerVelocity.z = dir.z * force;
+      onPlayerKnockback(dir);
+      soundManager.playEnemyBonk();
+    };
+
+    // Projectiles (spores, lasers, acid, spam…)
+    if (!distracted) {
+      for (let i = this.projectiles.length - 1; i >= 0; i--) {
+        const pr = this.projectiles[i];
+        const dx = playerPosition.x - pr.mesh.position.x;
+        const dy = playerPosition.y + 0.7 - pr.mesh.position.y;
+        const dz = playerPosition.z - pr.mesh.position.z;
+        if (dx * dx + dy * dy + dz * dz < (pr.radius + playerRadius + 0.25) ** 2) {
+          const dir = new THREE.Vector3(pr.velocity.x, 0, pr.velocity.z).normalize();
+          knock(dir, pr.force, 5.5);
+          this.scene.remove(pr.mesh);
+          this.projectiles.splice(i, 1);
+        }
+      }
+    }
+
     for (const enemy of this.enemies) {
       if (enemy.isSquashed) continue;
 
@@ -923,18 +990,27 @@ export class EnemyManager {
         const dirToPlayer = toPlayer.clone().normalize();
         const dot = dirToPlayer.dot(forward);
 
-        if (dot > 0.45 && dist < 4.5 && Math.abs(playerPosition.y - enemy.position.y) < 2.8) {
+        const gustRange = 4.5 + 1.5 * this.hostility;
+        if (dot > 0.45 && dist < gustRange && Math.abs(playerPosition.y - enemy.position.y) < 2.8) {
           // Gale force wind knocks player off bridge!
-          playerVelocity.x = forward.x * 15.5;
+          const gust = 15.5 * (1 + 0.35 * this.hostility);
+          playerVelocity.x = forward.x * gust;
           playerVelocity.y = 4.8;
-          playerVelocity.z = forward.z * 15.5;
+          playerVelocity.z = forward.z * gust;
           onPlayerKnockback(forward);
           soundManager.playSteamPuff();
           continue;
         }
       }
 
-      // 2. Physical Body Contact Check
+      // 1b. Special enemies (shockwaves, dives…)
+      if (!distracted && enemy.onCheck && enemy.onCheck(playerPosition, playerVelocity, playerRadius, knock)) {
+        continue;
+      }
+      if (enemy.bodyContact === false) continue;
+
+      // 2. Physical Body Contact Check (only when the player is roughly at the enemy's height)
+      if (playerPosition.y > enemy.position.y + enemy.height + 0.9 || playerPosition.y + 1.35 < enemy.position.y - 0.2) continue;
       const dx = playerPosition.x - enemy.position.x;
       const dz = playerPosition.z - enemy.position.z;
       const distXZ = Math.hypot(dx, dz);
@@ -947,6 +1023,7 @@ export class EnemyManager {
         // Player jumped on top of enemy's head! -> Bop & Super Trampoline Bounce!
         if (playerFeetY >= enemyTopY - 0.25 && playerVelocity.y <= 0.2) {
           enemy.bop();
+          enemy.onBopped?.();
           playerVelocity.y = 13.5; // High joyful bop jump!
           onPlayerBounce();
           soundManager.playMushroomBounce();
@@ -977,6 +1054,17 @@ export class EnemyManager {
   }
 
   public update(dt: number, time: number, playerPos: THREE.Vector3) {
+    // Move projectiles
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const pr = this.projectiles[i];
+      pr.life -= dt;
+      pr.mesh.position.addScaledVector(pr.velocity, dt);
+      pr.mesh.rotation.y += dt * 6;
+      if (pr.life <= 0) {
+        this.scene.remove(pr.mesh);
+        this.projectiles.splice(i, 1);
+      }
+    }
     const lure = this.distractTarget;
     for (const enemy of this.enemies) {
       if (lure && !enemy.isSquashed) {
@@ -1004,6 +1092,8 @@ export class EnemyManager {
       this.scene.remove(enemy.group);
     }
     this.enemies = [];
+    for (const p of this.projectiles) this.scene.remove(p.mesh);
+    this.projectiles = [];
   }
 }
 
@@ -1019,6 +1109,8 @@ export class AetherStalker {
   public isStunned: boolean = false;
   public stunTimer: number = 0;
   public currentSpeed: number = 4.6;
+  /** Extra speed on later levels (set from the level's hostility) */
+  public speedScale: number = 1;
 
   private scene: THREE.Scene;
   private coreMesh: THREE.Mesh;
@@ -1189,7 +1281,7 @@ export class AetherStalker {
     }
 
     // Dynamic speed: accelerate if falling too far behind
-    let desiredSpeed = this.currentSpeed;
+    let desiredSpeed = this.currentSpeed * this.speedScale;
     if (dist > 35) {
       desiredSpeed = this.currentSpeed * 1.6;
     } else if (dist > 20) {

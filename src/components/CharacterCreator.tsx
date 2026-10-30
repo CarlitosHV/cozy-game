@@ -43,7 +43,7 @@ import {
   generateRandomName,
 } from '../game/character';
 import { COMPANION_POWERS } from '../game/companionPowers';
-import { isCompanionUnlocked, levelForCompanion } from '../game/progress';
+import { isCompanionUnlocked, unlockLevelFor } from '../game/progress';
 
 type Tab = 'cuerpo' | 'pelo' | 'ropa' | 'companero';
 
@@ -484,7 +484,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
                 {COMPANIONS.map((c) => {
                   const selected = appearance.companion === c.id;
                   const unlocked = isCompanionUnlocked(c.id);
-                  const lvl = levelForCompanion(c.id);
+                  const lvl = unlockLevelFor(c.id);
                   if (!unlocked) {
                     return (
                       <div
@@ -498,7 +498,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
                         </span>
                         <span className="text-xs font-bold text-stone-300">{c.name}</span>
                         <span className="text-[10px] text-amber-300/90 leading-snug">
-                          🔒 Termina el Nivel {lvl?.id} · {lvl?.name} para desbloquearlo
+                          🔒 Completa el nivel {lvl} para desbloquearlo
                         </span>
                         {COMPANION_POWERS[c.id] && (
                           <span className="text-[10px] leading-snug text-stone-500">

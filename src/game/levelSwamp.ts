@@ -10,11 +10,11 @@ import { EnemyManager } from './enemies';
 import { createBouncyMushroom } from './models';
 import { ProceduralTextures } from './textures';
 import { WorldBuildResult } from './levels';
-import { createLevelKit, makeGlowTexture } from './levelKit';
+import { createLevelKit, makeGlowTexture, LevelKit } from './levelKit';
 
-export function buildSwampWorld(root: THREE.Object3D, textures: ProceduralTextures): WorldBuildResult {
-  const kit = createLevelKit(root, textures);
-  const { addPlatform, animators } = kit;
+/** Swamp visual style: materials, platform builders and decor props (shared with the level generator). */
+export function createSwampStyle(kit: LevelKit) {
+  const { animators } = kit;
 
   // ---------------- Materials ----------------
   const mossMat = new THREE.MeshStandardMaterial({ color: 0x34452b, roughness: 0.95 });
@@ -57,8 +57,9 @@ export function buildSwampWorld(root: THREE.Object3D, textures: ProceduralTextur
     g.add(body);
     // Cracked chunks under the block
     for (let i = 0; i < 3; i++) {
-      const c = new THREE.Mesh(new THREE.DodecahedronGeometry(Math.min(w, d) * 0.25, 0), stoneDark);
-      c.position.set((i - 1) * w * 0.3, -h - 0.3 - (i % 2) * 0.3, (i % 2 ? 1 : -1) * d * 0.2);
+      const r = Math.min(w, d) * 0.25;
+      const c = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), stoneDark);
+      c.position.set((i - 1) * w * 0.3, -h - r * 0.75 - (i % 2) * 0.3, (i % 2 ? 1 : -1) * d * 0.2);
       g.add(c);
     }
   };
@@ -227,6 +228,70 @@ export function buildSwampWorld(root: THREE.Object3D, textures: ProceduralTextur
     top.position.set(0, 0.45, 0);
     g.add(top);
   }
+
+  return { mossMat, mudMat, stoneMat, stoneDark, woodMat, barkMat, lilyMat, waterMat, runeMat, lanternGlow, glowCyan, glowPurple, stemMat,
+    mossIsland, stoneBlock, lilyPad, logBridge, planks, raft, ledge, runeCircle, deadTree, glowShrooms, lanternPost, gravestone };
+}
+
+/** Swamp atmosphere: moon, drifting wisps and distant dead trees (z from -10 to zMax). */
+export function addSwampBackdrop(kit: LevelKit, style: SwampStyle, zMax: number = 130) {
+  const { animators } = kit;
+  const { barkMat } = style;
+
+  // =====================================================
+  // ATMOSPHERE: moon, drifting wisps, distant dead forest
+  // =====================================================
+  const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeGlowTexture('rgba(220,252,231,0.95)', 'rgba(220,252,231,0)'), transparent: true, depthWrite: false, fog: false }));
+  moon.position.set(-60, 70, 160);
+  moon.scale.setScalar(55);
+  kit.addDecor(moon);
+  const moonDisc = new THREE.Mesh(new THREE.CircleGeometry(9, 32), new THREE.MeshBasicMaterial({ color: 0xecfccb, fog: false }));
+  moonDisc.position.set(-60, 70, 161);
+  moonDisc.lookAt(0, 10, 60);
+  kit.addDecor(moonDisc);
+
+  const wispTex = makeGlowTexture('rgba(190,242,100,0.9)');
+  const wisps: { s: THREE.Sprite; base: THREE.Vector3; ph: number }[] = [];
+  for (let i = 0; i < 55; i++) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: wispTex, color: i % 3 === 0 ? 0x67e8f9 : 0xd9f99d, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    const base = new THREE.Vector3((Math.random() - 0.5) * 40, Math.random() * 30, -10 + Math.random() * zMax);
+    s.position.copy(base);
+    s.scale.setScalar(0.35 + Math.random() * 0.3);
+    kit.addDecor(s);
+    wisps.push({ s, base, ph: Math.random() * 10 });
+  }
+  animators.push((_dt, time) => {
+    for (const w of wisps) {
+      w.s.position.set(
+        w.base.x + Math.sin(time * 0.5 + w.ph) * 1.5,
+        w.base.y + Math.sin(time * 0.8 + w.ph * 2) * 0.8,
+        w.base.z + Math.cos(time * 0.4 + w.ph) * 1.5
+      );
+      (w.s.material as THREE.SpriteMaterial).opacity = 0.5 + Math.sin(time * 3 + w.ph) * 0.4;
+    }
+  });
+
+  // Distant silhouettes of dead trees standing in the water
+  for (let i = 0; i < 18; i++) {
+    const side = i % 2 ? 1 : -1;
+    const x = side * (18 + Math.random() * 30);
+    const z = -10 + Math.random() * zMax;
+    const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.9, 14 + Math.random() * 8, 6), barkMat);
+    tr.position.set(x, 5, z);
+    tr.rotation.z = (Math.random() - 0.5) * 0.3;
+    kit.addDecor(tr);
+  }
+
+}
+
+export type SwampStyle = ReturnType<typeof createSwampStyle>;
+
+export function buildSwampWorld(root: THREE.Object3D, textures: ProceduralTextures): WorldBuildResult {
+  const kit = createLevelKit(root, textures);
+  const { addPlatform, animators } = kit;
+  const style = createSwampStyle(kit);
+  const { stoneMat, stoneDark, barkMat, waterMat, lanternGlow, mossIsland, stoneBlock, lilyPad, logBridge, planks, raft, ledge, runeCircle, deadTree, glowShrooms, lanternPost, gravestone } = style;
+
 
   // =====================================================
   // ZONE 1: ORILLA BRUMOSA (misty shore)
@@ -397,49 +462,7 @@ export function buildSwampWorld(root: THREE.Object3D, textures: ProceduralTextur
   glowShrooms(-7, summitY, 95, 4);
   addPlatform('sanctuary_step', 3.5, summitY + 1.1, 100.5, 2.2, 2.2, 1.1, stoneBlock);
 
-  // =====================================================
-  // ATMOSPHERE: moon, drifting wisps, distant dead forest
-  // =====================================================
-  const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeGlowTexture('rgba(220,252,231,0.95)', 'rgba(220,252,231,0)'), transparent: true, depthWrite: false, fog: false }));
-  moon.position.set(-60, 70, 160);
-  moon.scale.setScalar(55);
-  kit.addDecor(moon);
-  const moonDisc = new THREE.Mesh(new THREE.CircleGeometry(9, 32), new THREE.MeshBasicMaterial({ color: 0xecfccb, fog: false }));
-  moonDisc.position.set(-60, 70, 161);
-  moonDisc.lookAt(0, 10, 60);
-  kit.addDecor(moonDisc);
-
-  const wispTex = makeGlowTexture('rgba(190,242,100,0.9)');
-  const wisps: { s: THREE.Sprite; base: THREE.Vector3; ph: number }[] = [];
-  for (let i = 0; i < 55; i++) {
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: wispTex, color: i % 3 === 0 ? 0x67e8f9 : 0xd9f99d, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-    const base = new THREE.Vector3((Math.random() - 0.5) * 40, Math.random() * 30, -10 + Math.random() * 120);
-    s.position.copy(base);
-    s.scale.setScalar(0.35 + Math.random() * 0.3);
-    kit.addDecor(s);
-    wisps.push({ s, base, ph: Math.random() * 10 });
-  }
-  animators.push((_dt, time) => {
-    for (const w of wisps) {
-      w.s.position.set(
-        w.base.x + Math.sin(time * 0.5 + w.ph) * 1.5,
-        w.base.y + Math.sin(time * 0.8 + w.ph * 2) * 0.8,
-        w.base.z + Math.cos(time * 0.4 + w.ph) * 1.5
-      );
-      (w.s.material as THREE.SpriteMaterial).opacity = 0.5 + Math.sin(time * 3 + w.ph) * 0.4;
-    }
-  });
-
-  // Distant silhouettes of dead trees standing in the water
-  for (let i = 0; i < 18; i++) {
-    const side = i % 2 ? 1 : -1;
-    const x = side * (18 + Math.random() * 30);
-    const z = -10 + Math.random() * 130;
-    const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.9, 14 + Math.random() * 8, 6), barkMat);
-    tr.position.set(x, 5, z);
-    tr.rotation.z = (Math.random() - 0.5) * 0.3;
-    kit.addDecor(tr);
-  }
+  addSwampBackdrop(kit, style);
 
   // =====================================================
   // COLLECTIBLES
