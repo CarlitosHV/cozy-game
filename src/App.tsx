@@ -25,6 +25,151 @@ export default function App() {
     reason: 'milestone' | 'manual';
   } | null>(null);
 
+  // Fullscreen and Orientation States
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isSimulatedLandscape, setIsSimulatedLandscape] = useState<boolean>(false);
+  const [isPortrait, setIsPortrait] = useState<boolean>(() => {
+    return typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false;
+  });
+
+  // Track Fullscreen state changes across vendor implementations
+  useEffect(() => {
+    const handleFsChange = () => {
+      const doc = document as any;
+      const fsActive = Boolean(
+        doc.fullscreenElement ||
+        doc.webkitFullscreenElement ||
+        doc.mozFullScreenElement ||
+        doc.msFullscreenElement
+      );
+      setIsFullscreen(fsActive);
+      setTimeout(() => {
+        engineRef.current?.handleResize();
+        window.dispatchEvent(new Event('resize'));
+      }, 120);
+    };
+
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    document.addEventListener('mozfullscreenchange', handleFsChange);
+    document.addEventListener('MSFullscreenChange', handleFsChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+      document.removeEventListener('mozfullscreenchange', handleFsChange);
+      document.removeEventListener('MSFullscreenChange', handleFsChange);
+    };
+  }, []);
+
+  // Track physical window orientation / viewport resize
+  useEffect(() => {
+    const handleResize = () => {
+      const portrait = window.innerHeight > window.innerWidth;
+      setIsPortrait(portrait);
+      // If user physically rotated their device to landscape, turn off simulated landscape
+      if (!portrait) {
+        setIsSimulatedLandscape(false);
+      }
+      engineRef.current?.handleResize();
+    };
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, []);
+
+  // Sync engine simulated landscape state
+  useEffect(() => {
+    if (engineRef.current) {
+      (engineRef.current as any).isSimulatedLandscape = isSimulatedLandscape;
+      engineRef.current.handleResize();
+    }
+  }, [isSimulatedLandscape]);
+
+  // Fullscreen toggle handler
+  const toggleFullscreen = async () => {
+    try {
+      const doc = document as any;
+      const docEl = document.documentElement as any;
+      const isFs = Boolean(
+        doc.fullscreenElement ||
+        doc.webkitFullscreenElement ||
+        doc.mozFullScreenElement ||
+        doc.msFullscreenElement
+      );
+
+      if (!isFs) {
+        if (docEl.requestFullscreen) {
+          await docEl.requestFullscreen();
+        } else if (docEl.webkitRequestFullscreen) {
+          await docEl.webkitRequestFullscreen();
+        } else if (docEl.mozRequestFullScreen) {
+          await docEl.mozRequestFullScreen();
+        } else if (docEl.msRequestFullscreen) {
+          await docEl.msRequestFullscreen();
+        }
+      } else {
+        if (doc.exitFullscreen) {
+          await doc.exitFullscreen();
+        } else if (doc.webkitExitFullscreen) {
+          await doc.webkitExitFullscreen();
+        } else if (doc.mozCancelFullScreen) {
+          await doc.mozCancelFullScreen();
+        } else if (doc.msExitFullscreen) {
+          await doc.msExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn('Fullscreen toggle failed:', err);
+    }
+  };
+
+  // Screen Orientation toggle handler: Attempts native lock first, with seamless CSS simulated rotation fallback
+  const toggleOrientation = async () => {
+    const screenAny = window.screen as any;
+    const currentIsPortrait = window.innerHeight > window.innerWidth;
+    const targetOrientation = (isSimulatedLandscape || !currentIsPortrait) ? 'portrait' : 'landscape';
+
+    let nativeLockSucceeded = false;
+
+    // Try native Screen Orientation API lock
+    if (screenAny?.orientation?.lock) {
+      try {
+        const doc = document as any;
+        const isFs = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+        // On Android Chrome, orientation lock often requires fullscreen
+        if (!isFs && document.documentElement.requestFullscreen) {
+          try {
+            await document.documentElement.requestFullscreen();
+          } catch {
+            // continue
+          }
+        }
+        await screenAny.orientation.lock(targetOrientation);
+        nativeLockSucceeded = true;
+        setIsSimulatedLandscape(false);
+      } catch (err) {
+        nativeLockSucceeded = false;
+      }
+    }
+
+    // Fallback: If native lock was rejected or unsupported (e.g. iOS Safari), toggle CSS simulated rotation
+    if (!nativeLockSucceeded) {
+      setIsSimulatedLandscape((prev) => !prev);
+    }
+
+    // Trigger engine resize smoothly
+    setTimeout(() => {
+      engineRef.current?.handleResize();
+      window.dispatchEvent(new Event('resize'));
+    }, 150);
+  };
+
   useEffect(() => {
     if (!mountRef.current) return;
 
@@ -57,11 +202,30 @@ export default function App() {
   }, []);
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-stone-950 select-none">
+    <div
+      className={`relative overflow-hidden bg-stone-950 select-none transition-all duration-300 ${
+        isSimulatedLandscape
+          ? 'fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rotate-90 origin-center z-50'
+          : 'w-screen h-screen'
+      }`}
+      style={
+        isSimulatedLandscape
+          ? {
+              width: '100vh',
+              height: '100vw',
+              maxWidth: '100vh',
+              maxHeight: '100vw',
+            }
+          : {
+              width: '100vw',
+              height: '100dvh',
+            }
+      }
+    >
       {/* 3D WebGL Canvas Container - isolated from React state updates */}
       <div
         ref={mountRef}
-        className="w-full h-full cursor-grab active:cursor-grabbing"
+        className="w-full h-full cursor-grab active:cursor-grabbing touch-none select-none"
       />
 
       {/* World-Matched Minimal HUD & UI Modals Overlay */}
@@ -75,7 +239,13 @@ export default function App() {
         currentWeather={currentWeather}
         isWeatherTransitioning={isWeatherTransitioning}
         weatherNotice={weatherNotice}
+        isFullscreen={isFullscreen}
+        toggleFullscreen={toggleFullscreen}
+        isSimulatedLandscape={isSimulatedLandscape}
+        toggleOrientation={toggleOrientation}
+        isPortrait={isPortrait}
       />
     </div>
   );
 }
+

@@ -422,14 +422,24 @@ export class GameEngine {
     this.rawKeys = {};
   };
 
-  private handleResize = () => {
+  public handleResize = () => {
     if (!this.container || this.isDisposed) return;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     this.camera.aspect = w / h;
+    // In portrait orientation (w < h), widen FOV so mobile players have wide visibility of platforms
+    if (w < h) {
+      this.camera.fov = 74;
+    } else {
+      this.camera.fov = 60;
+    }
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
   };
+
+  public rotateCamera(deltaYaw: number) {
+    this.cameraYaw += deltaYaw;
+  }
 
   private handleMouseDown = (e: MouseEvent) => {
     if (e.button === 0 || e.button === 2) {

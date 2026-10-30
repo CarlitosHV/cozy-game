@@ -34,6 +34,11 @@ import {
   Layers,
   Image as ImageIcon,
   Check,
+  Maximize,
+  Minimize,
+  RotateCw,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 import { GameEngine, GameState } from '../game/GameEngine';
 import { WeatherType, soundManager } from '../audio/SoundtrackSynthesizer';
@@ -116,13 +121,18 @@ interface GameHUDProps {
     desc: string;
     reason: 'milestone' | 'manual';
   } | null;
+  isFullscreen?: boolean;
+  toggleFullscreen?: () => void;
+  isSimulatedLandscape?: boolean;
+  toggleOrientation?: () => void;
+  isPortrait?: boolean;
 }
-
 
 // --- 360° Analog Virtual Joystick for Mobile Devices ---
 const VirtualJoystick: React.FC<{
   onMove: (forward: number, right: number) => void;
-}> = ({ onMove }) => {
+  isSimulatedLandscape?: boolean;
+}> = ({ onMove, isSimulatedLandscape = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [knobPos, setKnobPos] = useState({ x: 0, y: 0 });
   const [isActive, setIsActive] = useState(false);
@@ -136,8 +146,17 @@ const VirtualJoystick: React.FC<{
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
 
-    const dx = clientX - centerX;
-    const dy = clientY - centerY;
+    const rawDx = clientX - centerX;
+    const rawDy = clientY - centerY;
+
+    // Adapt coordinates if simulated CSS 90deg landscape rotation is active
+    let dx = rawDx;
+    let dy = rawDy;
+    if (isSimulatedLandscape) {
+      dx = rawDy;
+      dy = -rawDx;
+    }
+
     const dist = Math.hypot(dx, dy);
 
     let clampedX = dx;
@@ -158,6 +177,7 @@ const VirtualJoystick: React.FC<{
   const handleTouchStart = (e: React.TouchEvent) => {
     e.stopPropagation();
     if (touchIdRef.current !== null) return;
+
     const touch = e.changedTouches[0];
     touchIdRef.current = touch.identifier;
     setIsActive(true);
@@ -326,12 +346,29 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   currentWeather,
   isWeatherTransitioning = false,
   weatherNotice = null,
+  isFullscreen = false,
+  toggleFullscreen,
+  isSimulatedLandscape = false,
+  toggleOrientation,
+  isPortrait = false,
 }) => {
   const [isMuted, setIsMuted] = useState(false);
-  const [isDockCollapsed, setIsDockCollapsed] = useState(false);
+  // Default to collapsed dock on mobile screens to maximize touch canvas space
+  const [isDockCollapsed, setIsDockCollapsed] = useState(() => {
+    return typeof window !== 'undefined' && window.innerWidth < 768;
+  });
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isSprintActive, setIsSprintActive] = useState(false);
+  const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage((curr) => (curr === msg ? null : curr));
+    }, 2400);
+  };
 
   // Photo Mode Studio State
   const [photoFilter, setPhotoFilter] = useState<PhotoFilter>('natural');
@@ -399,7 +436,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     }
   }, [gameState, photoFilter]);
 
-  // Keyboard shortcut 'H' for dock collapse or photo mode UI toggle, and Space for snap
+  // Global Keyboard shortcuts: H (dock/UI), Space (snap), F (fullscreen), O (orientation)
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.code === 'KeyH') {
@@ -409,13 +446,26 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           setIsDockCollapsed((prev) => !prev);
         }
       }
+      if (e.code === 'KeyF') {
+        if (toggleFullscreen) {
+          toggleFullscreen();
+          showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
+        }
+      }
+      if (e.code === 'KeyO') {
+        if (toggleOrientation) {
+          toggleOrientation();
+          showToast(isSimulatedLandscape ? 'Orientación Vertical' : 'Orientación Horizontal');
+        }
+      }
       if (gameState === 'photo_mode' && (e.code === 'Space' || e.code === 'Enter') && !capturedPhotoUrl) {
         handleSnapPhoto();
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [gameState, photoFilter, photoFrame, capturedPhotoUrl]);
+  }, [gameState, photoFilter, photoFrame, capturedPhotoUrl, isFullscreen, isSimulatedLandscape, toggleFullscreen, toggleOrientation]);
+
 
   const handleSnapPhoto = async () => {
     if (!engine) return;
@@ -890,17 +940,47 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {!hidePhotoUI && (
             <>
               {/* Top Viewfinder Bar */}
-              <div className="absolute top-4 inset-x-4 flex items-center justify-between pointer-events-auto z-20">
-                <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-2xl bg-stone-900/90 border border-amber-500/40 text-stone-200 text-xs shadow-xl backdrop-blur-md">
+              <div className="absolute top-4 inset-x-4 pt-safe flex items-center justify-between pointer-events-auto z-20 gap-2">
+                <div className="flex items-center gap-2 px-3 sm:px-3.5 py-1.5 rounded-2xl bg-stone-900/90 border border-amber-500/40 text-stone-200 text-xs shadow-xl backdrop-blur-md">
                   <Camera className="w-4 h-4 text-amber-400" />
                   <span className="font-bold text-amber-300 tracking-wider">MODO FOTO</span>
-                  <span className="text-stone-500">|</span>
-                  <span className="text-stone-300 font-mono text-[11px]">
+                  <span className="text-stone-500 hidden xs:inline">|</span>
+                  <span className="text-stone-300 font-mono text-[11px] hidden xs:inline">
                     {photoFov}° Lente · {photoDistance.toFixed(1)}m
                   </span>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  {/* Fullscreen Button in Photo Mode */}
+                  {toggleFullscreen && (
+                    <button
+                      onClick={() => {
+                        toggleFullscreen();
+                        showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
+                      }}
+                      title={isFullscreen ? 'Salir de Pantalla Completa (Tecla F)' : 'Pantalla Completa (Tecla F)'}
+                      className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-stone-900/90 border border-stone-800 hover:bg-stone-800 text-stone-200 text-xs font-semibold shadow-md cursor-pointer backdrop-blur-md flex items-center gap-1"
+                    >
+                      {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-amber-300" /> : <Maximize className="w-3.5 h-3.5 text-amber-400" />}
+                      <span className="hidden md:inline">{isFullscreen ? 'Salir' : 'Fullscreen'}</span>
+                    </button>
+                  )}
+
+                  {/* Rotate Button in Photo Mode */}
+                  {toggleOrientation && (
+                    <button
+                      onClick={() => {
+                        toggleOrientation();
+                        showToast(isSimulatedLandscape ? 'Orientación Vertical' : 'Orientación Horizontal');
+                      }}
+                      title="Rotar Orientación (Tecla O)"
+                      className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-stone-900/90 border border-stone-800 hover:bg-stone-800 text-amber-300 text-xs font-semibold shadow-md cursor-pointer backdrop-blur-md flex items-center gap-1"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                      <span className="hidden md:inline">Rotar</span>
+                    </button>
+                  )}
+
                   {/* Pause / Play Action Toggle */}
                   <button
                     onClick={() => {
@@ -909,31 +989,31 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       engine?.setPhotoModePaused(next);
                     }}
                     title={isPhotoPaused ? 'Reanudar Movimiento' : 'Pausar Mundo para Foto'}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-md cursor-pointer backdrop-blur-md transition-colors ${
+                    className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-md cursor-pointer backdrop-blur-md transition-colors ${
                       isPhotoPaused
                         ? 'bg-amber-500/20 text-amber-300 border-amber-400/50'
                         : 'bg-stone-900/90 text-stone-300 border-stone-800 hover:bg-stone-800'
                     }`}
                   >
                     {isPhotoPaused ? <Play className="w-3.5 h-3.5 fill-amber-300" /> : <Pause className="w-3.5 h-3.5" />}
-                    <span className="hidden sm:inline">{isPhotoPaused ? 'Mundo Pausado' : 'Pausar Mundo'}</span>
+                    <span className="hidden sm:inline">{isPhotoPaused ? 'Mundo Pausado' : 'Pausar'}</span>
                   </button>
 
                   {/* Hide UI Toggle */}
                   <button
                     onClick={() => setHidePhotoUI(true)}
                     title="Ocultar Interfaz (H)"
-                    className="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-stone-900/90 border border-stone-800 hover:bg-stone-800 text-stone-300 text-xs font-medium transition-colors shadow-md cursor-pointer backdrop-blur-md flex items-center gap-1.5"
+                    className="p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-stone-900/90 border border-stone-800 hover:bg-stone-800 text-stone-300 text-xs font-medium transition-colors shadow-md cursor-pointer backdrop-blur-md flex items-center gap-1.5"
                   >
                     <EyeOff className="w-4 h-4" />
-                    <span className="hidden sm:inline">Ocultar UI (H)</span>
+                    <span className="hidden sm:inline">Ocultar (H)</span>
                   </button>
 
                   {/* Exit Photo Mode */}
                   <button
                     onClick={() => engine?.exitPhotoMode()}
                     title="Salir del Modo Foto (Esc / P)"
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-stone-900/90 border border-stone-800 hover:bg-stone-800 text-stone-200 text-xs font-semibold shadow-md cursor-pointer backdrop-blur-md"
+                    className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-stone-900/90 border border-stone-800 hover:bg-stone-800 text-stone-200 text-xs font-semibold shadow-md cursor-pointer backdrop-blur-md"
                   >
                     <X className="w-4 h-4" />
                     <span className="hidden sm:inline">Salir</span>
@@ -942,9 +1022,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
 
               {/* Bottom Photo Studio Drawer */}
-              <div className="absolute bottom-4 inset-x-4 max-w-2xl mx-auto flex flex-col items-center gap-3 pointer-events-auto z-20">
+              <div className="absolute bottom-3 sm:bottom-4 inset-x-3 sm:inset-x-4 max-w-2xl mx-auto flex flex-col items-center gap-2 sm:gap-3 pointer-events-auto z-20 pb-safe">
                 {/* Control Box */}
-                <div className="w-full rounded-3xl bg-stone-950/90 border border-stone-800/90 p-4 shadow-2xl backdrop-blur-xl flex flex-col gap-3">
+                <div className="w-full rounded-3xl bg-stone-950/90 border border-stone-800/90 p-3 sm:p-4 shadow-2xl backdrop-blur-xl flex flex-col gap-2.5 sm:gap-3 max-h-[46vh] overflow-y-auto">
                   {/* Category Tabs & Shutter Action */}
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-800/80 pb-2.5">
                     <div className="flex items-center gap-1 sm:gap-2">
@@ -968,7 +1048,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                         }`}
                       >
                         <Palette className="w-3.5 h-3.5" />
-                        <span>Filtros ({PHOTO_FILTERS.find((f) => f.id === photoFilter)?.name})</span>
+                        <span>Filtros</span>
                       </button>
                       <button
                         onClick={() => setPhotoActiveTab('frames')}
@@ -986,12 +1066,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     {/* Snap Shutter Button */}
                     <button
                       onClick={handleSnapPhoto}
-                      className="flex items-center gap-2 px-5 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-extrabold text-xs shadow-lg shadow-amber-950/50 active:scale-95 transition-all cursor-pointer"
+                      className="flex items-center gap-2 px-4 sm:px-5 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-extrabold text-xs shadow-lg shadow-amber-950/50 active:scale-95 transition-all cursor-pointer"
                     >
                       <Camera className="w-4 h-4 fill-stone-950" />
-                      <span>CAPTURAR (Espacio)</span>
+                      <span>CAPTURAR</span>
                     </button>
                   </div>
+
 
                   {/* Tab Panels */}
                   {photoActiveTab === 'camera' && (
@@ -1223,11 +1304,29 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </button>
             </div>
 
-            <div className="flex items-center gap-3 text-xs text-stone-400">
+            <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-stone-400">
               <button onClick={toggleMute} className="flex items-center gap-1.5 hover:text-stone-200 cursor-pointer">
                 {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-amber-400" />}
-                <span>{isMuted ? 'Silenciado' : 'Sonido Activo'}</span>
+                <span>{isMuted ? 'Silenciado' : 'Sonido'}</span>
               </button>
+              {toggleFullscreen && (
+                <>
+                  <span>·</span>
+                  <button onClick={toggleFullscreen} className="flex items-center gap-1.5 hover:text-stone-200 cursor-pointer">
+                    {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-amber-400" /> : <Maximize className="w-3.5 h-3.5 text-amber-400" />}
+                    <span>{isFullscreen ? 'Ventana' : 'Fullscreen'}</span>
+                  </button>
+                </>
+              )}
+              {toggleOrientation && (
+                <>
+                  <span>·</span>
+                  <button onClick={toggleOrientation} className="flex items-center gap-1.5 hover:text-stone-200 cursor-pointer">
+                    <RotateCw className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Rotar</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -1325,8 +1424,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">Arrastrar Ratón / Q, E</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Zoom Cámara</span>
-                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">Rueda del Ratón</span>
+                  <span className="text-stone-400">Pantalla Completa</span>
+                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">F</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Rotar Pantalla / Orientación</span>
+                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">O</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Modo Foto / Menú Zen</span>
+                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">P / H</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Reiniciar en Punto de Control</span>
@@ -1341,6 +1448,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 📱 Controles Móviles (Pantalla Táctil)
               </span>
               <div className="space-y-2 text-xs text-stone-300">
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Botón Rotar Pantalla</span>
+                  <span className="text-stone-200">Gira entre horizontal y vertical al instante</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Botón Pantalla Completa</span>
+                  <span className="text-stone-200">Oculta barras del navegador para vista inmersiva</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Botones Giro Rápido (↺ / ↻)</span>
+                  <span className="text-stone-200">Gira la cámara 45° con un solo toque</span>
+                </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Joystick 360° (Abajo a la Izquierda)</span>
                   <span className="text-stone-200">Mueve en cualquier dirección</span>
