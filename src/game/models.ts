@@ -5,6 +5,7 @@
  */
 import * as THREE from 'three';
 import { ProceduralTextures } from './textures';
+import { CharacterAppearance, DEFAULT_APPEARANCE } from './character';
 
 export interface PlayerCharacterModel {
   group: THREE.Group;
@@ -21,45 +22,64 @@ export interface PlayerCharacterModel {
   lanternCore: THREE.Mesh;
   companionSprite: THREE.Group;
   shadow: THREE.Mesh;
+  appearance: CharacterAppearance;
   updateAnimation: (speed: number, isGrounded: boolean, dt: number, windTime: number) => void;
 }
 
-export function createPlayerCharacter(textures: ProceduralTextures): PlayerCharacterModel {
+/** Darkens/lightens a hex color by a factor (e.g. 0.8 = 20% darker). */
+function shade(hex: string, factor: number): THREE.Color {
+  const c = new THREE.Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  c.getHSL(hsl);
+  c.setHSL(hsl.h, hsl.s, Math.min(1, Math.max(0, hsl.l * factor)));
+  return c;
+}
+
+export function createPlayerCharacter(
+  textures: ProceduralTextures,
+  appearance: CharacterAppearance = DEFAULT_APPEARANCE
+): PlayerCharacterModel {
+  const look = appearance;
+  const isChica = look.bodyType === 'chica';
   const group = new THREE.Group();
+
+  // Head-level elements live in their own group so they bob together with the head
+  const headGroup = new THREE.Group();
+  group.add(headGroup);
 
   // Materials with varied roughness & PBR richness
   const sweaterMat = new THREE.MeshStandardMaterial({
-    color: 0xdb6b50, // warm terracotta knit sweater
+    color: look.sweaterColor, // knit sweater
     roughness: 0.85,
     metalness: 0.05,
   });
 
   const skinMat = new THREE.MeshStandardMaterial({
-    color: 0xfed0bb,
+    color: look.skinColor,
     roughness: 0.55,
     metalness: 0.0,
   });
 
   const hairMat = new THREE.MeshStandardMaterial({
-    color: 0x543825, // warm dark caramel hair
+    color: look.hairColor,
     roughness: 0.8,
     metalness: 0.05,
   });
 
   const hatMat = new THREE.MeshStandardMaterial({
-    color: 0x3d5a80, // deep slate-blue beanie
+    color: look.hatColor,
     roughness: 0.9,
     metalness: 0.0,
   });
 
   const pompomMat = new THREE.MeshStandardMaterial({
-    color: 0xf4f1de, // cozy cream pompom
+    color: 0xf4f1de, // cozy cream pompom / mittens
     roughness: 0.95,
     metalness: 0.0,
   });
 
   const scarfMat = new THREE.MeshStandardMaterial({
-    color: 0xf2cc8f, // warm honey mustard scarf
+    color: look.scarfColor,
     roughness: 0.8,
     metalness: 0.05,
     side: THREE.DoubleSide,
@@ -96,7 +116,7 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
   });
 
   const bootMat = new THREE.MeshStandardMaterial({
-    color: 0x3d312a, // dark brown hiking boots
+    color: look.bootColor,
     roughness: 0.75,
     metalness: 0.1,
   });
@@ -123,56 +143,340 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
     metalness: 0.2,
   });
 
-  // 1. Primary: Torso (Terracotta sweater body)
+  // 1. Primary: Torso (sweater body)
   const bodyGeom = new THREE.CapsuleGeometry(0.22, 0.28, 8, 16);
+  bodyGeom.scale(isChica ? 0.94 : 1.05, 1, 1); // narrower / broader shoulders
   const body = new THREE.Mesh(bodyGeom, sweaterMat);
   body.position.y = 0.55;
   body.castShadow = true;
   group.add(body);
 
-  // Sweater bottom ribbed hem ring
-  const hemGeom = new THREE.TorusGeometry(0.22, 0.035, 6, 20);
-  const hem = new THREE.Mesh(hemGeom, sweaterMat);
-  hem.rotation.x = Math.PI / 2;
-  hem.position.y = 0.38;
-  group.add(hem);
+  // Secondary outfit color (overall denim, poncho stripes, dress trim, hoodie pocket…)
+  const detailMat = new THREE.MeshStandardMaterial({
+    color: look.detailColor,
+    roughness: 0.8,
+    metalness: 0.05,
+    side: THREE.DoubleSide,
+  });
+  const goldButtonMat = new THREE.MeshStandardMaterial({ color: 0xe9c46a, roughness: 0.3, metalness: 0.7 });
 
-  // Duffle coat wooden toggle buttons (3 wooden toggles with loops down the front)
-  for (let i = 0; i < 3; i++) {
-    const toggleGeom = new THREE.CylinderGeometry(0.018, 0.018, 0.08, 6);
-    const toggle = new THREE.Mesh(toggleGeom, toggleMat);
-    toggle.rotation.z = Math.PI / 2;
-    toggle.position.set(0, 0.65 - i * 0.09, 0.22);
-    group.add(toggle);
+  switch (look.outfitStyle) {
+    case 'sudadera': {
+      // Hoodie: ribbed hem, kangaroo pocket, drawstrings and a hood resting behind the neck
+      const hem = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.035, 6, 20), detailMat);
+      hem.rotation.x = Math.PI / 2;
+      hem.position.y = 0.38;
+      group.add(hem);
+
+      const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.1, 0.04), detailMat);
+      pocket.position.set(0, 0.47, 0.2);
+      pocket.rotation.x = -0.12;
+      group.add(pocket);
+
+      const cordMat = new THREE.MeshStandardMaterial({ color: 0xf4f1de, roughness: 0.9 });
+      for (const side of [1, -1]) {
+        const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.12, 5), cordMat);
+        cord.position.set(0.045 * side, 0.69, 0.222);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.012, 6, 6), cordMat);
+        tip.position.set(0.045 * side, 0.625, 0.224);
+        group.add(cord, tip);
+      }
+
+      const hoodGeom = new THREE.SphereGeometry(0.18, 16, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+      hoodGeom.scale(1.15, 0.75, 0.75);
+      const hood = new THREE.Mesh(hoodGeom, new THREE.MeshStandardMaterial({
+        color: look.sweaterColor,
+        roughness: 0.85,
+        side: THREE.DoubleSide,
+      }));
+      hood.position.set(0, 0.9, -0.16);
+      hood.rotation.x = -0.9;
+      hood.castShadow = true;
+      group.add(hood);
+      break;
+    }
+    case 'chaqueta': {
+      // Explorer jacket: zipper, chest pockets with flaps, contrasting waistband and shoulder patches
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.222, 0.04, 6, 22), detailMat);
+      band.rotation.x = Math.PI / 2;
+      band.position.y = 0.38;
+      group.add(band);
+
+      const zipperMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.3, metalness: 0.8 });
+      const zipper = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.34, 0.012), zipperMat);
+      zipper.position.set(0, 0.56, 0.222);
+      const pull = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.04, 0.012), zipperMat);
+      pull.position.set(0, 0.69, 0.232);
+      group.add(zipper, pull);
+
+      for (const side of [1, -1]) {
+        const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.02), detailMat);
+        pocket.position.set(0.095 * side, 0.58, 0.208);
+        pocket.rotation.y = 0.35 * side;
+        const flap = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.025, 0.025), detailMat);
+        flap.position.set(0.097 * side, 0.625, 0.212);
+        flap.rotation.y = 0.35 * side;
+        const snap = new THREE.Mesh(new THREE.SphereGeometry(0.01, 6, 6), zipperMat);
+        snap.position.set(0.1 * side, 0.62, 0.228);
+        const patch = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.1), detailMat);
+        patch.position.set(0.215 * side, 0.7, 0);
+        group.add(pocket, flap, snap, patch);
+      }
+      break;
+    }
+    case 'overol': {
+      // Overalls: pants band + bib with straps, pocket and brass buttons over the shirt
+      const pants = new THREE.Mesh(new THREE.CylinderGeometry(0.232, 0.24, 0.16, 20), detailMat);
+      pants.position.y = 0.42;
+      pants.castShadow = true;
+      group.add(pants);
+
+      const bib = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.17, 0.04), detailMat);
+      bib.position.set(0, 0.56, 0.195);
+      group.add(bib);
+
+      const bibPocket = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, 0.06, 0.012),
+        new THREE.MeshStandardMaterial({ color: shade(look.detailColor, 0.75), roughness: 0.85 })
+      );
+      bibPocket.position.set(0, 0.55, 0.218);
+      group.add(bibPocket);
+
+      for (const side of [1, -1]) {
+        const strap = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.2, 0.025), detailMat);
+        strap.position.set(0.085 * side, 0.7, 0.175);
+        strap.rotation.x = -0.35;
+        const backStrap = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.3, 0.025), detailMat);
+        backStrap.position.set(0.085 * side, 0.6, -0.215);
+        const button = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8), goldButtonMat);
+        button.position.set(0.085 * side, 0.635, 0.218);
+        group.add(strap, backStrap, button);
+      }
+      break;
+    }
+    case 'vestido': {
+      // Dress: flared skirt with contrasting trim, waist sash and little buttons
+      const skirt = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.21, 0.34, 0.27, 24, 1, true),
+        new THREE.MeshStandardMaterial({ color: look.sweaterColor, roughness: 0.85, side: THREE.DoubleSide })
+      );
+      skirt.position.y = 0.355;
+      skirt.castShadow = true;
+      group.add(skirt);
+
+      const trim = new THREE.Mesh(new THREE.TorusGeometry(0.338, 0.016, 6, 32), detailMat);
+      trim.rotation.x = Math.PI / 2;
+      trim.position.y = 0.225;
+      group.add(trim);
+
+      const sash = new THREE.Mesh(new THREE.TorusGeometry(0.222, 0.026, 6, 24), detailMat);
+      sash.rotation.x = Math.PI / 2;
+      sash.position.y = 0.48;
+      group.add(sash);
+
+      // Bow on the back of the sash
+      for (const side of [1, -1]) {
+        const loop = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), detailMat);
+        loop.scale.set(1.1, 0.6, 0.4);
+        loop.position.set(0.045 * side, 0.48, -0.24);
+        group.add(loop);
+      }
+
+      for (let i = 0; i < 3; i++) {
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), detailMat);
+        b.position.set(0, 0.68 - i * 0.065, 0.218);
+        group.add(b);
+      }
+      break;
+    }
+    case 'poncho': {
+      // Woven poncho: wide 8-sided blanket with two stripes and a fringe
+      const TOP_Y = 0.77;
+      const H = 0.34;
+      const R_TOP = 0.13;
+      const R_BOT = 0.38;
+      const radiusAt = (t: number) => R_TOP + (R_BOT - R_TOP) * t;
+      const ponchoMat = new THREE.MeshStandardMaterial({ color: look.sweaterColor, roughness: 0.9, side: THREE.DoubleSide });
+      const poncho = new THREE.Mesh(new THREE.CylinderGeometry(R_TOP, R_BOT, H, 8, 1, true), ponchoMat);
+      poncho.position.y = TOP_Y - H / 2;
+      poncho.castShadow = true;
+      group.add(poncho);
+
+      for (const t of [0.45, 0.75]) {
+        const band = 0.06;
+        const stripe = new THREE.Mesh(
+          new THREE.CylinderGeometry(radiusAt(t - band / 2) + 0.004, radiusAt(t + band / 2) + 0.004, H * band, 8, 1, true),
+          detailMat
+        );
+        stripe.position.y = TOP_Y - H * t;
+        group.add(stripe);
+      }
+
+      const fringeGeom = new THREE.BoxGeometry(0.018, 0.06, 0.018);
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        const f = new THREE.Mesh(fringeGeom, detailMat);
+        f.position.set(Math.sin(a) * (R_BOT - 0.01), TOP_Y - H - 0.025, Math.cos(a) * (R_BOT - 0.01));
+        group.add(f);
+      }
+      break;
+    }
+    case 'sueter':
+    default: {
+      // Sweater bottom ribbed hem ring
+      const hemGeom = new THREE.TorusGeometry(0.22, 0.035, 6, 20);
+      const hem = new THREE.Mesh(hemGeom, sweaterMat);
+      hem.rotation.x = Math.PI / 2;
+      hem.position.y = 0.38;
+      group.add(hem);
+
+      // Duffle coat wooden toggle buttons (3 wooden toggles with loops down the front)
+      for (let i = 0; i < 3; i++) {
+        const toggleGeom = new THREE.CylinderGeometry(0.018, 0.018, 0.08, 6);
+        const toggle = new THREE.Mesh(toggleGeom, toggleMat);
+        toggle.rotation.z = Math.PI / 2;
+        toggle.position.set(0, 0.65 - i * 0.09, 0.22);
+        group.add(toggle);
+      }
+      break;
+    }
   }
 
-  // 2. Primary: Head
+  // 2. Primary: Head (headGroup is the bobbing pivot; head mesh sits at its origin offset)
+  const HEAD_Y = 0.95;
   const headGeom = new THREE.SphereGeometry(0.22, 16, 16);
   const head = new THREE.Mesh(headGeom, skinMat);
-  head.position.y = 0.95;
+  head.position.y = HEAD_Y;
   head.castShadow = true;
   group.add(head);
 
-  // Soft caramel hair bangs peeking out from under the beanie
-  const hairBangs = new THREE.Group();
-  for (let b = 0; b < 5; b++) {
-    const bangGeom = new THREE.ConeGeometry(0.045, 0.1, 6);
-    const bang = new THREE.Mesh(bangGeom, hairMat);
-    const angle = (b - 2) * 0.18;
-    bang.position.set(Math.sin(angle) * 0.18, 1.03, Math.cos(angle) * 0.18);
-    bang.rotation.x = 0.45;
-    bang.rotation.z = -angle * 0.5;
-    hairBangs.add(bang);
+  // Hair cap covering the top/back of the head (visible when no hat or under brims)
+  const capGeom = new THREE.SphereGeometry(0.228, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.47);
+  const hairCap = new THREE.Mesh(capGeom, hairMat);
+  hairCap.position.y = HEAD_Y;
+  hairCap.rotation.x = -0.38; // tilt back so the face stays clear
+  hairCap.castShadow = true;
+  headGroup.add(hairCap);
+
+  // Bangs peeking out at the front (shared by most styles)
+  const addBangs = (count: number, length: number, spread: number) => {
+    for (let b = 0; b < count; b++) {
+      const bangGeom = new THREE.ConeGeometry(0.045, length, 6);
+      const bang = new THREE.Mesh(bangGeom, hairMat);
+      const angle = (b - (count - 1) / 2) * spread;
+      bang.position.set(Math.sin(angle) * 0.18, 1.03, Math.cos(angle) * 0.18);
+      bang.rotation.x = 0.45;
+      bang.rotation.z = -angle * 0.5;
+      headGroup.add(bang);
+    }
+  };
+  const addSideTufts = (length: number) => {
+    const leftTuft = new THREE.Mesh(new THREE.ConeGeometry(0.04, length, 6), hairMat);
+    leftTuft.position.set(0.21, 0.94, 0.05);
+    leftTuft.rotation.z = -0.4;
+    const rightTuft = new THREE.Mesh(new THREE.ConeGeometry(0.04, length, 6), hairMat);
+    rightTuft.position.set(-0.21, 0.94, 0.05);
+    rightTuft.rotation.z = 0.4;
+    headGroup.add(leftTuft, rightTuft);
+  };
+
+  // Swinging hair pieces (ponytail / pigtails) animated in updateAnimation
+  const swingingHair: THREE.Group[] = [];
+
+  switch (look.hairStyle) {
+    case 'flequillo': {
+      addBangs(5, 0.1, 0.18);
+      addSideTufts(0.12);
+      break;
+    }
+    case 'puntas': {
+      addBangs(3, 0.13, 0.3);
+      // Spiky tufts radiating from the top & back of the head
+      const spikeGeom = new THREE.ConeGeometry(0.055, 0.17, 6);
+      const spikes: [number, number][] = [
+        [0, 0.55], [0.9, 0.6], [-0.9, 0.6], [1.7, 0.75], [-1.7, 0.75],
+        [2.5, 0.8], [-2.5, 0.8], [Math.PI, 0.7], [0, 0.15],
+      ];
+      for (const [yaw, tilt] of spikes) {
+        const s = new THREE.Mesh(spikeGeom, hairMat);
+        const dir = new THREE.Vector3(Math.sin(yaw) * Math.sin(tilt), Math.cos(tilt), Math.cos(yaw) * Math.sin(tilt) * 0.6 - 0.25).normalize();
+        s.position.set(dir.x * 0.22, HEAD_Y + dir.y * 0.22, dir.z * 0.22);
+        s.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        headGroup.add(s);
+      }
+      break;
+    }
+    case 'coleta': {
+      addBangs(5, 0.1, 0.18);
+      addSideTufts(0.1);
+      const tail = new THREE.Group();
+      tail.position.set(0, 1.02, -0.2);
+      const tie = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.015, 6, 12), hatMat);
+      tie.rotation.x = Math.PI / 2 - 0.5;
+      const tailGeom = new THREE.CapsuleGeometry(0.05, 0.2, 6, 10);
+      tailGeom.translate(0, -0.13, 0);
+      const tailMesh = new THREE.Mesh(tailGeom, hairMat);
+      tailMesh.castShadow = true;
+      tail.add(tie, tailMesh);
+      tail.rotation.x = 0.35;
+      headGroup.add(tail);
+      swingingHair.push(tail);
+      break;
+    }
+    case 'largo': {
+      addBangs(5, 0.11, 0.18);
+      // Long flowing curtain down the back and sides
+      const backGeom = new THREE.CapsuleGeometry(0.19, 0.2, 8, 16);
+      backGeom.scale(1.15, 1, 0.55);
+      const back = new THREE.Mesh(backGeom, hairMat);
+      back.position.set(0, 0.86, -0.12);
+      back.castShadow = true;
+      headGroup.add(back);
+      const sideGeom = new THREE.CapsuleGeometry(0.045, 0.22, 6, 8);
+      const sideL = new THREE.Mesh(sideGeom, hairMat);
+      sideL.position.set(0.2, 0.86, 0.02);
+      const sideR = new THREE.Mesh(sideGeom, hairMat);
+      sideR.position.set(-0.2, 0.86, 0.02);
+      headGroup.add(sideL, sideR);
+      break;
+    }
+    case 'rapado': {
+      // Short crop: just the cap with a tiny fringe and sideburns
+      addBangs(3, 0.05, 0.25);
+      addSideTufts(0.06);
+      break;
+    }
+    case 'chongo': {
+      // Top bun with a ribbon tie
+      addBangs(5, 0.1, 0.18);
+      addSideTufts(0.1);
+      const bun = new THREE.Mesh(new THREE.SphereGeometry(0.085, 12, 12), hairMat);
+      bun.position.set(0, 1.16, -0.14);
+      bun.castShadow = true;
+      const bunTie = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.016, 6, 16), hatMat);
+      bunTie.position.set(0, 1.11, -0.12);
+      bunTie.rotation.x = Math.PI / 2 - 0.6;
+      headGroup.add(bun, bunTie);
+      break;
+    }
+    case 'trenzas': {
+      addBangs(5, 0.1, 0.18);
+      for (const side of [1, -1]) {
+        const pig = new THREE.Group();
+        pig.position.set(0.21 * side, 1.0, -0.06);
+        const tie = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), hatMat);
+        const tuftGeom = new THREE.CapsuleGeometry(0.045, 0.14, 6, 8);
+        tuftGeom.translate(0, -0.1, 0);
+        const tuft = new THREE.Mesh(tuftGeom, hairMat);
+        tuft.castShadow = true;
+        pig.add(tie, tuft);
+        pig.rotation.z = 0.6 * side;
+        headGroup.add(pig);
+        swingingHair.push(pig);
+      }
+      break;
+    }
   }
-  // Side hair tufts framing ears
-  const leftTuft = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.12, 6), hairMat);
-  leftTuft.position.set(0.21, 0.94, 0.05);
-  leftTuft.rotation.z = -0.4;
-  const rightTuft = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.12, 6), hairMat);
-  rightTuft.position.set(-0.21, 0.94, 0.05);
-  rightTuft.rotation.z = 0.4;
-  hairBangs.add(leftTuft, rightTuft);
-  group.add(hairBangs);
 
   // Ears
   const earGeom = new THREE.SphereGeometry(0.045, 8, 8);
@@ -181,62 +485,245 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
   leftEar.position.set(0.22, 0.95, 0);
   const rightEar = new THREE.Mesh(earGeom, skinMat);
   rightEar.position.set(-0.22, 0.95, 0);
-  group.add(leftEar, rightEar);
+  headGroup.add(leftEar, rightEar);
 
-  // Eyes (Cute glossy black beads with white twinkle dot)
-  const eyeGeom = new THREE.SphereGeometry(0.035, 8, 8);
-  const leftEye = new THREE.Mesh(eyeGeom, eyeMat);
-  leftEye.position.set(0.08, 0.97, 0.19);
-  const rightEye = new THREE.Mesh(eyeGeom, eyeMat);
-  rightEye.position.set(-0.08, 0.97, 0.19);
-
-  // Eye highlights
+  // Eyes
   const hlMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const hlGeom = new THREE.SphereGeometry(0.012, 6, 6);
-  const leftHl = new THREE.Mesh(hlGeom, hlMat);
-  leftHl.position.set(0.09, 0.985, 0.215);
-  const rightHl = new THREE.Mesh(hlGeom, hlMat);
-  rightHl.position.set(-0.07, 0.985, 0.215);
-  group.add(leftEye, rightEye, leftHl, rightHl);
+  if (look.eyeStyle === 'felices') {
+    // Closed happy eyes: little ^ ^ arcs
+    const arcGeom = new THREE.TorusGeometry(0.03, 0.009, 6, 10, Math.PI);
+    const leftArc = new THREE.Mesh(arcGeom, eyeMat);
+    leftArc.position.set(0.08, 0.96, 0.205);
+    const rightArc = new THREE.Mesh(arcGeom, eyeMat);
+    rightArc.position.set(-0.08, 0.96, 0.205);
+    headGroup.add(leftArc, rightArc);
+  } else {
+    const big = look.eyeStyle === 'grandes';
+    const eyeGeom = new THREE.SphereGeometry(big ? 0.045 : 0.035, 10, 10);
+    const leftEye = new THREE.Mesh(eyeGeom, eyeMat);
+    leftEye.position.set(0.08, 0.97, big ? 0.185 : 0.19);
+    const rightEye = new THREE.Mesh(eyeGeom, eyeMat);
+    rightEye.position.set(-0.08, 0.97, big ? 0.185 : 0.19);
+
+    // Eye highlights
+    const hlGeom = new THREE.SphereGeometry(big ? 0.015 : 0.012, 6, 6);
+    const leftHl = new THREE.Mesh(hlGeom, hlMat);
+    leftHl.position.set(0.09, 0.985, 0.215);
+    const rightHl = new THREE.Mesh(hlGeom, hlMat);
+    rightHl.position.set(-0.07, 0.985, 0.215);
+    headGroup.add(leftEye, rightEye, leftHl, rightHl);
+    if (big) {
+      const smallHlGeom = new THREE.SphereGeometry(0.007, 6, 6);
+      const l2 = new THREE.Mesh(smallHlGeom, hlMat);
+      l2.position.set(0.068, 0.958, 0.222);
+      const r2 = new THREE.Mesh(smallHlGeom, hlMat);
+      r2.position.set(-0.092, 0.958, 0.222);
+      headGroup.add(l2, r2);
+    }
+  }
+
+  // Eyelashes (chica) or eyebrows (chico)
+  const lashMat = eyeMat;
+  for (const side of [1, -1]) {
+    if (isChica) {
+      const big = look.eyeStyle === 'grandes';
+      const happy = look.eyeStyle === 'felices';
+      const ox = big ? 0.01 : 0;
+      const oy = happy ? -0.03 : 0;
+      const lash1 = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.009, 0.01), lashMat);
+      lash1.position.set((0.118 + ox) * side, 0.992 + oy, 0.183);
+      lash1.rotation.z = (happy ? -0.3 : 0.5) * side;
+      lash1.rotation.y = 0.5 * side;
+      const lash2 = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.008, 0.01), lashMat);
+      lash2.position.set((0.106 + ox) * side, 1.006 + oy * 0.7, 0.19);
+      lash2.rotation.z = (happy ? 0.1 : 0.95) * side;
+      lash2.rotation.y = 0.45 * side;
+      headGroup.add(lash1, lash2);
+    } else {
+      const browY = look.eyeStyle === 'grandes' ? 1.035 : 1.024;
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.015, 0.014), hairMat);
+      brow.position.set(0.082 * side, browY, 0.198);
+      brow.rotation.z = -0.12 * side;
+      brow.rotation.y = 0.38 * side;
+      headGroup.add(brow);
+    }
+  }
 
   // Smiling mouth (Gentle curved smile line)
-  const mouthGeom = new THREE.TorusGeometry(0.03, 0.008, 6, 10, Math.PI);
-  const mouthMat = new THREE.MeshBasicMaterial({ color: 0x8b4513 });
+  const mouthGeom = new THREE.TorusGeometry(isChica ? 0.026 : 0.03, 0.008, 6, 10, Math.PI);
+  const mouthMat = new THREE.MeshBasicMaterial({ color: isChica ? 0xc2566a : 0x8b4513 });
   const mouth = new THREE.Mesh(mouthGeom, mouthMat);
   mouth.position.set(0, 0.89, 0.21);
   mouth.rotation.x = 0.2;
   mouth.rotation.z = Math.PI;
-  group.add(mouth);
+  headGroup.add(mouth);
 
   // Cute blushing rosy cheeks
-  const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff9999, transparent: true, opacity: 0.65 });
+  const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff9999, transparent: true, opacity: isChica ? 0.8 : 0.6 });
   const cheekGeom = new THREE.SphereGeometry(0.032, 8, 8);
   const leftCheek = new THREE.Mesh(cheekGeom, cheekMat);
   leftCheek.position.set(0.12, 0.93, 0.17);
   const rightCheek = new THREE.Mesh(cheekGeom, cheekMat);
   rightCheek.position.set(-0.12, 0.93, 0.17);
-  group.add(leftCheek, rightCheek);
+  headGroup.add(leftCheek, rightCheek);
 
-  // 3. Cozy Beanie Hat
-  const hatGeom = new THREE.ConeGeometry(0.24, 0.28, 16);
-  const hat = new THREE.Mesh(hatGeom, hatMat);
-  hat.position.set(0, 1.15, -0.02);
-  hat.rotation.x = -0.15;
-  hat.castShadow = true;
-  group.add(hat);
+  // Face accessories
+  if (look.accessory === 'lentes') {
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x3a2a20, roughness: 0.4, metalness: 0.4 });
+    const lensGeom = new THREE.TorusGeometry(0.048, 0.007, 6, 18);
+    const lensL = new THREE.Mesh(lensGeom, frameMat);
+    lensL.position.set(0.08, 0.97, 0.215);
+    const lensR = new THREE.Mesh(lensGeom, frameMat);
+    lensR.position.set(-0.08, 0.97, 0.215);
+    const bridge = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.065, 6), frameMat);
+    bridge.rotation.z = Math.PI / 2;
+    bridge.position.set(0, 0.98, 0.222);
+    const glassMat = new THREE.MeshBasicMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.18 });
+    const glassGeom = new THREE.CircleGeometry(0.045, 16);
+    const glassL = new THREE.Mesh(glassGeom, glassMat);
+    glassL.position.set(0.08, 0.97, 0.218);
+    const glassR = new THREE.Mesh(glassGeom, glassMat);
+    glassR.position.set(-0.08, 0.97, 0.218);
+    headGroup.add(lensL, lensR, bridge, glassL, glassR);
+  } else if (look.accessory === 'pecas') {
+    const freckleMat = new THREE.MeshBasicMaterial({ color: shade(look.skinColor, 0.62) });
+    const freckleGeom = new THREE.SphereGeometry(0.008, 5, 5);
+    const spots: [number, number][] = [[0.1, 0.94], [0.135, 0.925], [0.115, 0.91], [0.15, 0.945]];
+    for (const [x, y] of spots) {
+      for (const side of [1, -1]) {
+        const f = new THREE.Mesh(freckleGeom, freckleMat);
+        const z = Math.sqrt(Math.max(0, 0.22 * 0.22 - x * x - (y - HEAD_Y) * (y - HEAD_Y))) + 0.004;
+        f.position.set(x * side, y, z);
+        headGroup.add(f);
+      }
+    }
+  }
 
-  // Folded beanie rim
-  const rimGeom = new THREE.TorusGeometry(0.22, 0.05, 8, 20);
-  const rim = new THREE.Mesh(rimGeom, hatMat);
-  rim.position.set(0, 1.05, -0.01);
-  rim.rotation.x = Math.PI / 2 - 0.15;
-  group.add(rim);
+  // 3. Headwear
+  let hatPompom: THREE.Mesh = new THREE.Mesh(); // invisible placeholder when the hat has no pompom
+  switch (look.hatStyle) {
+    case 'gorro': {
+      // Cozy Beanie Hat
+      const hatGeom = new THREE.ConeGeometry(0.24, 0.28, 16);
+      const hat = new THREE.Mesh(hatGeom, hatMat);
+      hat.position.set(0, 1.15, -0.02);
+      hat.rotation.x = -0.15;
+      hat.castShadow = true;
+      headGroup.add(hat);
 
-  // Fluffy cream pompom on top
-  const pompomGeom = new THREE.SphereGeometry(0.08, 12, 12);
-  const hatPompom = new THREE.Mesh(pompomGeom, pompomMat);
-  hatPompom.position.set(0, 1.32, -0.06);
-  group.add(hatPompom);
+      // Folded beanie rim
+      const rimGeom = new THREE.TorusGeometry(0.22, 0.05, 8, 20);
+      const rim = new THREE.Mesh(rimGeom, hatMat);
+      rim.position.set(0, 1.05, -0.01);
+      rim.rotation.x = Math.PI / 2 - 0.15;
+      headGroup.add(rim);
+
+      // Fluffy cream pompom on top
+      const pompomGeom = new THREE.SphereGeometry(0.08, 12, 12);
+      hatPompom = new THREE.Mesh(pompomGeom, pompomMat);
+      hatPompom.position.set(0, 1.32, -0.06);
+      headGroup.add(hatPompom);
+      break;
+    }
+    case 'gorra': {
+      // Baseball cap with a front bill and a top button
+      const crownGeom = new THREE.SphereGeometry(0.235, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2);
+      crownGeom.scale(1, 0.82, 1);
+      const crown = new THREE.Mesh(crownGeom, hatMat);
+      crown.position.set(0, 1.0, -0.01);
+      crown.rotation.x = -0.12;
+      crown.castShadow = true;
+      const billGeom = new THREE.CylinderGeometry(0.2, 0.2, 0.02, 20, 1, false, -Math.PI / 2, Math.PI);
+      billGeom.scale(1, 1, 0.85);
+      const bill = new THREE.Mesh(billGeom, detailMat);
+      bill.position.set(0, 1.02, 0.15);
+      bill.rotation.x = 0.12;
+      bill.castShadow = true;
+      const capBand = new THREE.Mesh(new THREE.TorusGeometry(0.232, 0.014, 6, 24), detailMat);
+      capBand.rotation.x = Math.PI / 2 - 0.12;
+      capBand.position.set(0, 1.005, -0.01);
+      hatPompom = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 8), detailMat);
+      hatPompom.position.set(0, 1.19, -0.035);
+      headGroup.add(crown, bill, capBand, hatPompom);
+      break;
+    }
+    case 'sombrero': {
+      // Wide-brim explorer hat with a ribbon band
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.42, 0.025, 28), hatMat);
+      brim.position.set(0, 1.1, -0.01);
+      brim.rotation.x = -0.08;
+      brim.castShadow = true;
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.22, 0.18, 20), hatMat);
+      crown.position.set(0, 1.2, -0.02);
+      crown.rotation.x = -0.08;
+      crown.castShadow = true;
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.214, 0.221, 0.045, 20), scarfMat);
+      band.position.set(0, 1.135, -0.015);
+      band.rotation.x = -0.08;
+      // Little feather tucked in the band (acts as the "pompom" for wind sway)
+      const featherGeom = new THREE.SphereGeometry(0.05, 8, 8);
+      featherGeom.scale(0.35, 1.6, 0.6);
+      featherGeom.translate(0, 0.06, 0);
+      hatPompom = new THREE.Mesh(featherGeom, pompomMat);
+      hatPompom.position.set(0.2, 1.16, -0.04);
+      hatPompom.rotation.z = -0.5;
+      headGroup.add(brim, crown, band, hatPompom);
+      break;
+    }
+    case 'orejas': {
+      // Soft headband with fluffy animal ears
+      const bandGeom = new THREE.TorusGeometry(0.225, 0.02, 6, 24, Math.PI);
+      const headband = new THREE.Mesh(bandGeom, hatMat);
+      headband.position.set(0, 0.97, -0.02);
+      const innerMat = new THREE.MeshStandardMaterial({ color: 0xf6b8b8, roughness: 0.9 });
+      for (const side of [1, -1]) {
+        const ear = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.15, 4), hatMat);
+        ear.position.set(0.14 * side, 1.19, -0.02);
+        ear.rotation.z = -0.35 * side;
+        ear.rotation.y = Math.PI / 4;
+        ear.castShadow = true;
+        const inner = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.09, 4), innerMat);
+        inner.position.set(0.137 * side, 1.18, 0.012);
+        inner.rotation.z = -0.35 * side;
+        inner.rotation.y = Math.PI / 4;
+        headGroup.add(ear, inner);
+      }
+      headGroup.add(headband);
+      break;
+    }
+    case 'flores': {
+      // Flower crown: blossoms circling the head with tiny leaves
+      const petalMat = hatMat;
+      const centerMat = new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.6 });
+      const leafMat = new THREE.MeshStandardMaterial({ color: 0x6a994e, roughness: 0.8 });
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.215, 0.012, 6, 28), leafMat);
+      ring.position.set(0, 1.08, -0.02);
+      ring.rotation.x = Math.PI / 2 - 0.3;
+      headGroup.add(ring);
+      const count = 9;
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2;
+        const flower = new THREE.Group();
+        const r = 0.215;
+        // follow the tilted ring
+        const local = new THREE.Vector3(Math.sin(a) * r, 0, Math.cos(a) * r);
+        local.applyAxisAngle(new THREE.Vector3(1, 0, 0), -0.3);
+        flower.position.set(local.x, 1.08 + local.y, local.z - 0.02);
+        const bloomSize = i % 2 === 0 ? 0.042 : 0.032;
+        const bloom = new THREE.Mesh(new THREE.SphereGeometry(bloomSize, 8, 8), i % 3 === 1 ? pompomMat : petalMat);
+        bloom.scale.set(1, 0.6, 1);
+        const center = new THREE.Mesh(new THREE.SphereGeometry(bloomSize * 0.4, 6, 6), centerMat);
+        center.position.y = bloomSize * 0.4;
+        flower.add(bloom, center);
+        headGroup.add(flower);
+        if (i === 0) hatPompom = bloom; // front flower bobs in the wind
+      }
+      break;
+    }
+    case 'ninguno':
+    default:
+      break;
+  }
 
   // 4. Cozy Scarf with Fringed Tassels
   const scarfRingGeom = new THREE.TorusGeometry(0.23, 0.06, 8, 20);
@@ -259,7 +746,7 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
 
   // 5. Articulated Arms & Cozy Mittens (Left & Right)
   const leftArm = new THREE.Group();
-  leftArm.position.set(0.25, 0.68, 0); // Shoulder pivot
+  leftArm.position.set(isChica ? 0.24 : 0.26, 0.68, 0); // Shoulder pivot
 
   const armGeom = new THREE.CapsuleGeometry(0.055, 0.16, 6, 8);
   armGeom.translate(0, -0.08, 0);
@@ -270,7 +757,7 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
   // Sleeve cuff
   const cuffGeom = new THREE.TorusGeometry(0.06, 0.02, 6, 12);
   cuffGeom.rotateX(Math.PI / 2);
-  const leftCuff = new THREE.Mesh(cuffGeom, hatMat); // matching slate blue cuffs
+  const leftCuff = new THREE.Mesh(cuffGeom, hatMat); // cuffs match the hat color
   leftCuff.position.y = -0.18;
   leftArm.add(leftCuff);
 
@@ -287,7 +774,7 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
 
   // Right arm (mirrored)
   const rightArm = new THREE.Group();
-  rightArm.position.set(-0.25, 0.68, 0); // Shoulder pivot
+  rightArm.position.set(isChica ? -0.24 : -0.26, 0.68, 0); // Shoulder pivot
 
   const rightSleeve = new THREE.Mesh(armGeom, sweaterMat);
   rightSleeve.castShadow = true;
@@ -304,50 +791,62 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
   rightArm.add(rightMitten, rightThumb);
   group.add(rightArm);
 
-  // 6. Detailed Adventurer Backpack with Bedroll & Flask
-  const packGeom = new THREE.BoxGeometry(0.28, 0.32, 0.16);
-  const pack = new THREE.Mesh(packGeom, backpackMat);
-  pack.position.set(0, 0.58, -0.22);
-  pack.castShadow = true;
-  group.add(pack);
+  // 6. Detailed Adventurer Backpack with Bedroll & Flask (optional)
+  if (look.backpack) {
+    const packGeom = new THREE.BoxGeometry(0.28, 0.32, 0.16);
+    const pack = new THREE.Mesh(packGeom, backpackMat);
+    pack.position.set(0, 0.58, -0.22);
+    pack.castShadow = true;
+    group.add(pack);
 
-  // Backpack pocket pouch
-  const pocketGeom = new THREE.BoxGeometry(0.22, 0.15, 0.06);
-  const pocket = new THREE.Mesh(pocketGeom, backpackMat);
-  pocket.position.set(0, 0.52, -0.32);
-  group.add(pocket);
+    // Backpack pocket pouch
+    const pocketGeom = new THREE.BoxGeometry(0.22, 0.15, 0.06);
+    const pocket = new THREE.Mesh(pocketGeom, backpackMat);
+    pocket.position.set(0, 0.52, -0.32);
+    group.add(pocket);
 
-  // Chest harness straps wrapping around the front
-  const strapLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
-  strapLeft.position.set(0.12, 0.58, 0.22);
-  const strapRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
-  strapRight.position.set(-0.12, 0.58, 0.22);
-  group.add(strapLeft, strapRight);
+    // Chest harness straps wrapping around the front
+    const strapLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
+    strapLeft.position.set(0.12, 0.58, 0.22);
+    const strapRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
+    strapRight.position.set(-0.12, 0.58, 0.22);
+    group.add(strapLeft, strapRight);
 
-  // Rolled sage-green camping bedroll strapped atop the backpack
-  const rollGeom = new THREE.CylinderGeometry(0.065, 0.065, 0.32, 10);
-  rollGeom.rotateZ(Math.PI / 2);
-  const bedroll = new THREE.Mesh(rollGeom, bedrollMat);
-  bedroll.position.set(0, 0.78, -0.24);
-  bedroll.castShadow = true;
-  // Two buckle strap loops holding bedroll
-  const buckle1 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
-  buckle1.position.set(0.09, 0.78, -0.24);
-  buckle1.rotation.y = Math.PI / 2;
-  const buckle2 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
-  buckle2.position.set(-0.09, 0.78, -0.24);
-  buckle2.rotation.y = Math.PI / 2;
-  group.add(bedroll, buckle1, buckle2);
+    // Rolled sage-green camping bedroll strapped atop the backpack
+    const rollGeom = new THREE.CylinderGeometry(0.065, 0.065, 0.32, 10);
+    rollGeom.rotateZ(Math.PI / 2);
+    const bedroll = new THREE.Mesh(rollGeom, bedrollMat);
+    bedroll.position.set(0, 0.78, -0.24);
+    bedroll.castShadow = true;
+    // Two buckle strap loops holding bedroll
+    const buckle1 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
+    buckle1.position.set(0.09, 0.78, -0.24);
+    buckle1.rotation.y = Math.PI / 2;
+    const buckle2 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
+    buckle2.position.set(-0.09, 0.78, -0.24);
+    buckle2.rotation.y = Math.PI / 2;
+    group.add(bedroll, buckle1, buckle2);
 
-  // Wooden water flask / canteen on side of pack
-  const flaskGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.12, 8);
-  const flask = new THREE.Mesh(flaskGeom, toggleMat);
-  flask.position.set(-0.17, 0.54, -0.22);
-  group.add(flask);
+    // Wooden water flask / canteen on side of pack
+    const flaskGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.12, 8);
+    const flask = new THREE.Mesh(flaskGeom, toggleMat);
+    flask.position.set(-0.17, 0.54, -0.22);
+    group.add(flask);
+  } else {
+    // Simple leather belt so the lantern still has somewhere to hang
+    const belt = new THREE.Mesh(new THREE.TorusGeometry(0.215, 0.022, 6, 24), strapMat);
+    belt.rotation.x = Math.PI / 2;
+    belt.position.y = 0.44;
+    group.add(belt);
+  }
 
-  // Miniature brass lantern hanging on backpack hook
+  // Miniature brass lantern hanging on backpack hook (or belt)
   const lanternPost = new THREE.Group();
-  lanternPost.position.set(0.14, 0.52, -0.32);
+  if (look.backpack) {
+    lanternPost.position.set(0.14, 0.52, -0.32);
+  } else {
+    lanternPost.position.set(0.1, 0.4, -0.25);
+  }
 
   const cageGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.1, 8);
   const cage = new THREE.Mesh(cageGeom, brassMat);
@@ -387,41 +886,174 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
 
   group.add(leftLeg, rightLeg);
 
-  // 8. Floating Cloud Sprite Companion ("Nubi")
+  // 8. Floating Companion
   const companionSprite = new THREE.Group();
   companionSprite.position.set(0.42, 1.25, 0.15); // hovers near shoulder
+  let companionSpinner: THREE.Object3D | null = null;
+  const companionWings: THREE.Mesh[] = [];
 
-  const wispMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.8,
-    metalness: 0.05,
-    emissive: 0xddf2fd,
-    emissiveIntensity: 0.35,
-  });
-  // 3 soft puffs forming tiny cloud sprite
-  const cPuff1 = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), wispMat);
-  const cPuff2 = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 8), wispMat);
-  cPuff2.position.set(-0.065, -0.015, 0);
-  const cPuff3 = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), wispMat);
-  cPuff3.position.set(0.065, -0.02, 0);
+  if (look.companion === 'nube') {
+    // "Nubi": tiny cloud sprite with halo
+    const wispMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.8,
+      metalness: 0.05,
+      emissive: 0xddf2fd,
+      emissiveIntensity: 0.35,
+    });
+    const cPuff1 = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), wispMat);
+    const cPuff2 = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 8), wispMat);
+    cPuff2.position.set(-0.065, -0.015, 0);
+    const cPuff3 = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), wispMat);
+    cPuff3.position.set(0.065, -0.02, 0);
 
-  // Cute blinking dot eyes on cloud sprite
-  const spriteEyeGeom = new THREE.SphereGeometry(0.014, 6, 6);
-  const sEye1 = new THREE.Mesh(spriteEyeGeom, eyeMat);
-  sEye1.position.set(0.03, 0.01, 0.085);
-  const sEye2 = new THREE.Mesh(spriteEyeGeom, eyeMat);
-  sEye2.position.set(-0.03, 0.01, 0.085);
+    const spriteEyeGeom = new THREE.SphereGeometry(0.014, 6, 6);
+    const sEye1 = new THREE.Mesh(spriteEyeGeom, eyeMat);
+    sEye1.position.set(0.03, 0.01, 0.085);
+    const sEye2 = new THREE.Mesh(spriteEyeGeom, eyeMat);
+    sEye2.position.set(-0.03, 0.01, 0.085);
 
-  // Golden floating sparkle halo over sprite
-  const sHalo = new THREE.Mesh(
-    new THREE.RingGeometry(0.07, 0.09, 12),
-    new THREE.MeshBasicMaterial({ color: 0xffe066, side: THREE.DoubleSide })
-  );
-  sHalo.position.y = 0.13;
-  sHalo.rotation.x = Math.PI / 2;
+    const sHalo = new THREE.Mesh(
+      new THREE.RingGeometry(0.07, 0.09, 12),
+      new THREE.MeshBasicMaterial({ color: 0xffe066, side: THREE.DoubleSide })
+    );
+    sHalo.position.y = 0.13;
+    sHalo.rotation.x = Math.PI / 2;
+    companionSpinner = sHalo;
 
-  companionSprite.add(cPuff1, cPuff2, cPuff3, sEye1, sEye2, sHalo);
+    companionSprite.add(cPuff1, cPuff2, cPuff3, sEye1, sEye2, sHalo);
+  } else if (look.companion === 'estrella') {
+    // "Estelita": chubby glowing five-point star
+    const starShape = new THREE.Shape();
+    const outer = 0.11;
+    const inner = 0.05;
+    for (let i = 0; i < 10; i++) {
+      const r = i % 2 === 0 ? outer : inner;
+      const a = (i / 10) * Math.PI * 2 + Math.PI / 2;
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r;
+      if (i === 0) starShape.moveTo(x, y);
+      else starShape.lineTo(x, y);
+    }
+    starShape.closePath();
+    const starGeom = new THREE.ExtrudeGeometry(starShape, {
+      depth: 0.03,
+      bevelEnabled: true,
+      bevelThickness: 0.02,
+      bevelSize: 0.015,
+      bevelSegments: 2,
+    });
+    starGeom.center();
+    const starMat = new THREE.MeshStandardMaterial({
+      color: 0xffd166,
+      roughness: 0.4,
+      metalness: 0.2,
+      emissive: 0xffb703,
+      emissiveIntensity: 0.45,
+    });
+    const starBody = new THREE.Group();
+    const star = new THREE.Mesh(starGeom, starMat);
+    const spriteEyeGeom = new THREE.SphereGeometry(0.012, 6, 6);
+    const sEye1 = new THREE.Mesh(spriteEyeGeom, eyeMat);
+    sEye1.position.set(0.025, 0.0, 0.045);
+    const sEye2 = new THREE.Mesh(spriteEyeGeom, eyeMat);
+    sEye2.position.set(-0.025, 0.0, 0.045);
+    starBody.add(star, sEye1, sEye2);
+    companionSprite.add(starBody);
+    companionSpinner = starBody;
+  } else if (look.companion === 'catarina') {
+    // "Catarina": lucky ladybug with spotted red shell, tiny antennae and a wobble
+    const shellMat = new THREE.MeshStandardMaterial({ color: 0xe63946, roughness: 0.3, metalness: 0.1 });
+    const blackMat = new THREE.MeshStandardMaterial({ color: 0x1b1b1f, roughness: 0.4 });
+    const bug = new THREE.Group();
+
+    const shellGeom = new THREE.SphereGeometry(0.08, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+    shellGeom.scale(1, 1.0, 1.15);
+    const shell = new THREE.Mesh(shellGeom, shellMat);
+    const belly = new THREE.Mesh(new THREE.CircleGeometry(0.08, 18), blackMat);
+    belly.rotation.x = Math.PI / 2;
+    belly.scale.set(1, 1.15, 1);
+
+    // Center seam between the wing covers
+    const seam = new THREE.Mesh(new THREE.TorusGeometry(0.0645, 0.004, 4, 20, Math.PI), blackMat);
+    seam.rotation.y = Math.PI / 2;
+    seam.scale.set(1.15, 1.24, 1);
+
+    // Black spots sitting on the shell surface
+    const spotGeom = new THREE.SphereGeometry(0.014, 8, 8);
+    spotGeom.scale(1, 0.45, 1);
+    const spotDirs: [number, number][] = [
+      [0.8, 0.6], [2.2, 0.75], [0.5, 1.1], [2.6, 1.1], [1.5, 0.35],
+    ];
+    for (const [yaw, polar] of spotDirs) {
+      for (const side of [1, -1]) {
+        if (yaw === 1.5 && side === -1) continue;
+        const x = Math.sin(polar) * Math.cos(yaw) * side;
+        const y = Math.cos(polar);
+        const z = Math.sin(polar) * Math.sin(yaw) * (yaw > Math.PI / 2 ? -1 : 1);
+        const n = new THREE.Vector3(x, y, z).normalize();
+        const spot = new THREE.Mesh(spotGeom, blackMat);
+        spot.position.set(n.x * 0.08, n.y * 0.08, n.z * 0.092);
+        spot.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+        bug.add(spot);
+      }
+    }
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.032, 10, 10), blackMat);
+    head.position.set(0, 0.012, 0.09);
+    const spriteEyeGeom = new THREE.SphereGeometry(0.01, 6, 6);
+    const sEye1 = new THREE.Mesh(spriteEyeGeom, hlMat);
+    sEye1.position.set(0.016, 0.026, 0.121);
+    const sEye2 = new THREE.Mesh(spriteEyeGeom, hlMat);
+    sEye2.position.set(-0.016, 0.026, 0.121);
+
+    for (const side of [1, -1]) {
+      const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.05, 4), blackMat);
+      antenna.position.set(0.015 * side, 0.06, 0.11);
+      antenna.rotation.set(0.5, 0, -0.35 * side);
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 6), blackMat);
+      tip.position.set(0.024 * side, 0.082, 0.123);
+      bug.add(antenna, tip);
+    }
+
+    bug.add(shell, belly, seam, head, sEye1, sEye2);
+    bug.rotation.x = 0.1;
+    companionSprite.add(bug);
+    companionSpinner = bug;
+  } else if (look.companion === 'luciernaga') {
+    // "Chispa": firefly with a glowing tail and flapping wings
+    const bugMat = new THREE.MeshStandardMaterial({ color: 0x3b3a5a, roughness: 0.5 });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xd8ff7a });
+    const bodyBug = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 10), bugMat);
+    bodyBug.position.set(0, 0.02, 0.03);
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 10), glowMat);
+    glow.scale.set(1, 1, 1.25);
+    glow.position.set(0, 0, -0.05);
+    const aura = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xeaff9a, transparent: true, opacity: 0.18, depthWrite: false })
+    );
+    aura.position.copy(glow.position);
+    const spriteEyeGeom = new THREE.SphereGeometry(0.011, 6, 6);
+    const sEye1 = new THREE.Mesh(spriteEyeGeom, hlMat);
+    sEye1.position.set(0.02, 0.035, 0.068);
+    const sEye2 = new THREE.Mesh(spriteEyeGeom, hlMat);
+    sEye2.position.set(-0.02, 0.035, 0.068);
+    const wingMat = new THREE.MeshBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
+    for (const side of [1, -1]) {
+      const wingGeom = new THREE.CircleGeometry(0.05, 10);
+      wingGeom.scale(1, 0.55, 1);
+      wingGeom.translate(0.05, 0, 0);
+      const wing = new THREE.Mesh(wingGeom, wingMat);
+      wing.position.set(0.02 * side, 0.06, 0.0);
+      wing.rotation.y = side === 1 ? 0 : Math.PI;
+      companionWings.push(wing);
+      companionSprite.add(wing);
+    }
+    companionSprite.add(bodyBug, glow, aura, sEye1, sEye2);
+  }
   group.add(companionSprite);
+  companionSprite.visible = look.companion !== 'ninguno';
 
   // 9. Contact shadow plane
   const shadowGeom = new THREE.PlaneGeometry(0.75, 0.75);
@@ -436,10 +1068,19 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
   shadow.position.y = 0.02;
   group.add(shadow);
 
+  // Body proportions (height / build)
+  group.scale.set(look.build, look.height, look.build);
+
   // Animation cycle helper
   let walkCycle = 0;
   const updateAnimation = (speed: number, isGrounded: boolean, dt: number, windTime: number) => {
     if (isGrounded) {
+      // Ease the torso back from the airborne stretch
+      const k = Math.min(1, dt * 12);
+      body.scale.x += (1 - body.scale.x) * k;
+      body.scale.y += (1 - body.scale.y) * k;
+      body.scale.z += (1 - body.scale.z) * k;
+
       if (speed > 0.1) {
         walkCycle += speed * dt * 9.5;
         // Legs stride
@@ -455,7 +1096,7 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
         rightArm.rotation.z = -0.12;
 
         body.position.y = 0.55 + Math.abs(Math.sin(walkCycle)) * 0.045;
-        head.position.y = 0.95 + Math.abs(Math.sin(walkCycle)) * 0.035;
+        head.position.y = HEAD_Y + Math.abs(Math.sin(walkCycle)) * 0.035;
         body.rotation.z = Math.sin(walkCycle * 0.5) * 0.06;
 
         // Lantern pendulum sway
@@ -476,7 +1117,7 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
         rightArm.rotation.z = -0.12;
 
         body.position.y = 0.55 + Math.sin(walkCycle) * 0.015;
-        head.position.y = 0.95 + Math.sin(walkCycle) * 0.02;
+        head.position.y = HEAD_Y + Math.sin(walkCycle) * 0.02;
         body.rotation.z = 0;
         lanternPost.rotation.z = Math.sin(walkCycle * 0.8) * 0.06;
       }
@@ -496,6 +1137,9 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
       lanternPost.rotation.x = -0.35;
     }
 
+    // Everything attached to the head follows its bob
+    headGroup.position.y = head.position.y - HEAD_Y;
+
     // Scarf fluttering reacting dynamically to movement & wind gusts
     const trailAngle = (speed > 0.5 ? 0.65 : 0.2) + Math.sin(windTime * 6) * 0.28;
     scarfTail1.rotation.x = trailAngle;
@@ -504,11 +1148,25 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
     scarfTail2.rotation.y = -Math.sin(windTime * 5.0) * 0.22;
     hatPompom.rotation.x = Math.sin(windTime * 3.5) * 0.12;
 
-    // Companion Cloud Sprite smooth floating orbit
+    // Ponytail / pigtails swing with movement
+    for (let i = 0; i < swingingHair.length; i++) {
+      const h = swingingHair[i];
+      const base = swingingHair.length === 1 ? 0.35 : 0;
+      h.rotation.x = base + (speed > 0.5 ? 0.45 : 0.05) + Math.sin(windTime * 5 + i) * 0.12 + (isGrounded ? 0 : -0.3);
+    }
+
+    // Companion smooth floating orbit
     companionSprite.position.x = 0.4 + Math.sin(windTime * 2.5) * 0.08;
     companionSprite.position.y = 1.25 + Math.sin(windTime * 3.2) * 0.12;
     companionSprite.position.z = 0.15 + Math.cos(windTime * 2.5) * 0.08;
-    sHalo.rotation.z += dt * 1.5;
+    if (companionSpinner) {
+      if (look.companion === 'nube') companionSpinner.rotation.z += dt * 1.5;
+      else companionSpinner.rotation.y = Math.sin(windTime * 1.8) * 0.6;
+    }
+    for (let i = 0; i < companionWings.length; i++) {
+      const flap = Math.sin(windTime * 30) * 0.7;
+      companionWings[i].rotation.x = flap;
+    }
   };
 
   return {
@@ -526,8 +1184,21 @@ export function createPlayerCharacter(textures: ProceduralTextures): PlayerChara
     lanternCore,
     companionSprite,
     shadow,
+    appearance: { ...look },
     updateAnimation,
   };
+}
+
+/** Frees GPU resources of a player model (shared textures like the shadow map are kept). */
+export function disposePlayerCharacter(model: PlayerCharacterModel) {
+  model.group.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.isMesh) {
+      mesh.geometry?.dispose();
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) m?.dispose();
+    }
+  });
 }
 
 // --- Bouncy Mushroom ---

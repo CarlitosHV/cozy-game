@@ -50,6 +50,17 @@ export const WEATHER_PRESETS: Record<WeatherType, WeatherPreset> = {
     hemiGroundColor: 0x606c38,
     hemiIntensity: 1.2,
   },
+  aero_day: {
+    // Frutiger Aero: saturated glossy sky blue, crisp white sun, lush green bounce light
+    skyColor: 0x6cc8f5,
+    fogColor: 0xb8e6ff,
+    fogDensity: 0.0045,
+    sunColor: 0xfffaf0,
+    sunIntensity: 2.15,
+    hemiSkyColor: 0xcdefff,
+    hemiGroundColor: 0x4caf50,
+    hemiIntensity: 1.1,
+  },
   starlit_night: {
     skyColor: 0x0d1321,
     fogColor: 0x1d2d44,

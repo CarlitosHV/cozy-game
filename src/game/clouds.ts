@@ -185,6 +185,9 @@ export class BackgroundCloudsSystem {
           return { color: 0xffeef3, roughness: 0.95 }; // Delicate pastel cherry blossom blush
         case 'starlit_night':
           return { color: 0x223249, roughness: 0.95 }; // Deep moonlit indigo night clouds
+        case 'aero_day':
+        default:
+          return { color: 0xffffff, roughness: 0.6 }; // Bright glossy white Aero clouds
       }
     };
 
