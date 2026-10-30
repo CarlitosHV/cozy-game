@@ -28,6 +28,24 @@ export class ParkourPhysics {
   public hasReachedSummit: boolean = false;
   public knockbackTimer: number = 0;
 
+  // Companion power hooks (driven by CompanionPowerSystem)
+  /** Estelita: multiplies run speed */
+  public speedMultiplier: number = 1;
+  /** Walnut item: multiplies jump strength */
+  public jumpMultiplier: number = 1;
+  /** Nubi: slow, floaty falling; holding jump rises up to floatCeiling */
+  public floatPower: boolean = false;
+  public floatCeiling: number = 0;
+  /** Catarina: catches the player on a fall and carries them back to solid ground */
+  public rescueGuard: boolean = false;
+  public onRescue: (() => void) | null = null;
+  /** Last solid ground the player stood on (a little inward from the edge) */
+  public lastSafePos: THREE.Vector3 = new THREE.Vector3(0, 0.2, 0);
+  private carryTimer: number = 0;
+  private readonly carryDuration = 1.3;
+  private carryFrom = new THREE.Vector3();
+  private carryTo = new THREE.Vector3();
+
   // Jump feel parameters
   private coyoteTimer: number = 0;
   private jumpBufferTimer: number = 0;
@@ -73,6 +91,8 @@ export class ParkourPhysics {
     if (cp) {
       this.currentCheckpointIndex = index;
       this.position.copy(cp.spawnPos);
+      this.lastSafePos.copy(cp.spawnPos);
+      this.carryTimer = 0;
       this.velocity.set(0, 0, 0);
       this.isGrounded = true;
       this.knockbackTimer = 0;
@@ -92,6 +112,27 @@ export class ParkourPhysics {
   ) {
     if (this.isRespawning) return;
 
+    // Catarina rescue flight: gently carried along an arc back to solid ground
+    if (this.carryTimer > 0) {
+      this.carryTimer = Math.max(0, this.carryTimer - dt);
+      const t = 1 - this.carryTimer / this.carryDuration;
+      const e = t * t * (3 - 2 * t);
+      this.position.lerpVectors(this.carryFrom, this.carryTo, e);
+      // Swoop high enough to clear the island's side on the way back up
+      const drop = Math.max(0, this.carryTo.y - this.carryFrom.y);
+      this.position.y += Math.sin(t * Math.PI) * (2.0 + drop * 0.8);
+      this.velocity.set(0, 0, 0);
+      this.playerModel.group.position.copy(this.position);
+      this.playerModel.updateAnimation(0, false, dt, performance.now() * 0.001);
+      if (this.carryTimer === 0) {
+        this.position.copy(this.carryTo);
+        this.isGrounded = true;
+        this.currentPlatform = null;
+      }
+      this.wasJumpPressed = input.jump;
+      return;
+    }
+
     if (this.knockbackTimer > 0) {
       this.knockbackTimer = Math.max(0, this.knockbackTimer - dt);
     }
@@ -110,7 +151,7 @@ export class ParkourPhysics {
     }
 
     // 2. Horizontal Movement relative to camera (Correct Screen-Space Orientation)
-    const maxSpeed = input.sprint ? this.sprintSpeed : this.walkSpeed;
+    const maxSpeed = (input.sprint ? this.sprintSpeed : this.walkSpeed) * this.speedMultiplier;
     const inputMagnitude = Math.min(1.0, Math.hypot(input.forward, input.right));
 
     if (inputMagnitude > 0.05) {
@@ -150,7 +191,7 @@ export class ParkourPhysics {
 
     // 3. Jump Execution with platform momentum transfer
     if (this.jumpBufferTimer > 0 && this.coyoteTimer > 0) {
-      this.velocity.y = this.jumpForce;
+      this.velocity.y = this.jumpForce * this.jumpMultiplier;
 
       // Transfer moving platform linear momentum on jump!
       if (this.currentPlatform && this.currentPlatform.type === 'moving') {
@@ -211,7 +252,17 @@ export class ParkourPhysics {
       if (this.updraftFloatTimer > 0 && this.velocity.y <= 0) {
         gravityMult *= 0.42; // 58% softer gravity float for easy glide to platform!
       }
-      this.velocity.y -= this.gravity * gravityMult * dt;
+      if (this.floatPower) {
+        // Nubi: hold jump to drift upward (up to a ceiling), otherwise glide down slowly
+        if (input.jump && this.position.y < this.floatCeiling) {
+          this.velocity.y = THREE.MathUtils.damp(this.velocity.y, 3.2, 5.0, dt);
+        } else {
+          this.velocity.y -= this.gravity * 0.25 * dt;
+          if (this.velocity.y < -1.8) this.velocity.y = THREE.MathUtils.damp(this.velocity.y, -1.8, 8.0, dt);
+        }
+      } else {
+        this.velocity.y -= this.gravity * gravityMult * dt;
+      }
     }
 
     // Clamp terminal fall velocity
@@ -234,6 +285,20 @@ export class ParkourPhysics {
 
     // 7b. Solid World Objects (Trees, Checkpoint bells, Stone pillars, Obstacle posts)
     this.resolveSolidObstacleCollisions();
+
+    // 7c. Remember the last safe ground (static islands only), nudged toward the island center
+    if (this.isGrounded && this.currentPlatform && this.currentPlatform.type === 'static') {
+      const plat = this.currentPlatform;
+      this.lastSafePos.copy(this.position);
+      const dx = plat.position.x - this.position.x;
+      const dz = plat.position.z - this.position.z;
+      const len = Math.hypot(dx, dz);
+      if (len > 0.001) {
+        const step = Math.min(len, 1.0);
+        this.lastSafePos.x += (dx / len) * step;
+        this.lastSafePos.z += (dz / len) * step;
+      }
+    }
 
     // 8. Update Crumbling Platforms
     this.updateCrumblingPlatforms(dt);
@@ -381,7 +446,23 @@ export class ParkourPhysics {
     }
 
     // 14. Gentle Respawn on falling off into clouds
-    if (this.position.y < -9.0) {
+    if (
+      this.rescueGuard &&
+      !this.isGrounded &&
+      this.velocity.y < 0 &&
+      (this.position.y < this.lastSafePos.y - 6.5 || this.position.y < -8.0)
+    ) {
+      // Catarina swoops in and carries the player back
+      this.rescueGuard = false;
+      this.carryFrom.copy(this.position);
+      this.carryTo.copy(this.lastSafePos);
+      this.carryTimer = this.carryDuration;
+      this.velocity.set(0, 0, 0);
+      this.knockbackTimer = 0;
+      const cb = this.onRescue;
+      this.onRescue = null;
+      cb?.();
+    } else if (this.position.y < -9.0) {
       this.respawnAtCheckpoint();
     }
 

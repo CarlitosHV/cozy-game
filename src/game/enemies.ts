@@ -45,13 +45,16 @@ export interface CozyEnemy {
 
 export class EnemyManager {
   public enemies: CozyEnemy[] = [];
-  private scene: THREE.Scene;
+  private scene: THREE.Object3D;
   private textures: ProceduralTextures;
 
   // Reusable collision vectors
   private _playerPush = new THREE.Vector3();
 
-  constructor(scene: THREE.Scene, textures: ProceduralTextures) {
+  /** Chispa's lure: while set, enemies stop to stare at it and don't push the player */
+  public distractTarget: THREE.Vector3 | null = null;
+
+  constructor(scene: THREE.Object3D, textures: ProceduralTextures) {
     this.scene = scene;
     this.textures = textures;
   }
@@ -538,6 +541,368 @@ export class EnemyManager {
     return enemy;
   }
 
+  // ==========================================================
+  // "Corrupted" skins for the Frutiger Aero level: same AI as the
+  // cozy enemies, but they visually BREAK the glossy aesthetic.
+  // ==========================================================
+  private glitchTexture: THREE.CanvasTexture | null = null;
+
+  private getGlitchTexture(): THREE.CanvasTexture {
+    if (this.glitchTexture) return this.glitchTexture;
+    const c = document.createElement('canvas');
+    c.width = 32;
+    c.height = 32;
+    const ctx = c.getContext('2d')!;
+    const palette = ['#000000', '#000000', '#111111', '#ff00ff', '#00ff66', '#00ffff', '#ffffff', '#ff0033'];
+    for (let y = 0; y < 32; y++) {
+      // Horizontal "scanline tears"
+      const shift = Math.random() < 0.15 ? Math.floor(Math.random() * 6) : 0;
+      for (let x = 0; x < 32; x++) {
+        ctx.fillStyle = palette[Math.floor(Math.random() * palette.length) * (Math.random() < 0.6 ? 0 : 1)];
+        ctx.fillRect((x + shift) % 32, y, 1, 1);
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.glitchTexture = tex;
+    return tex;
+  }
+
+  /** Hides an enemy's original meshes (keeping its contact shadow) and returns a fresh skin group. */
+  private replaceSkin(enemy: CozyEnemy, keep: THREE.Object3D[] = []): THREE.Group {
+    for (const child of enemy.group.children) {
+      const isShadow = (child as THREE.Mesh).isMesh && (child as THREE.Mesh).geometry instanceof THREE.PlaneGeometry;
+      if (!isShadow && !keep.includes(child)) child.visible = false;
+    }
+    const skin = new THREE.Group();
+    enemy.group.add(skin);
+    return skin;
+  }
+
+  /** "Glitch": a corrupted black/magenta pixel cube that waddles like a Sproutling. */
+  public spawnGlitchCube(id: string, spawnPos: THREE.Vector3, patrolAxis: 'x' | 'z', range: number = 3.0): CozyEnemy {
+    const enemy = this.spawnSproutling(id, spawnPos, patrolAxis, range);
+    const skin = this.replaceSkin(enemy);
+    const tex = this.getGlitchTexture();
+    const coreMat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.9,
+      metalness: 0.0,
+      emissive: 0xffffff,
+      emissiveMap: tex,
+      emissiveIntensity: 0.35,
+    });
+    const core = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.72, 0.72), coreMat);
+    core.position.y = 0.45;
+    core.castShadow = true;
+    skin.add(core);
+
+    // Angry red scanline "eye"
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.07, 0.02), new THREE.MeshBasicMaterial({ color: 0xff0033 }));
+    eye.position.set(0, 0.55, 0.37);
+    skin.add(eye);
+
+    // Dead pixels orbiting & jittering around it
+    const pixelMats = [0xff00ff, 0x00ff66, 0x00ffff, 0x000000].map((c) => new THREE.MeshBasicMaterial({ color: c }));
+    const pixels: THREE.Mesh[] = [];
+    for (let i = 0; i < 7; i++) {
+      const px = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.13, 0.13), pixelMats[i % pixelMats.length]);
+      skin.add(px);
+      pixels.push(px);
+    }
+
+    const baseUpdate = enemy.update;
+    enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
+      baseUpdate.call(this, dt, time, playerPos);
+      // Glitchy jitter: random teleport-like offsets and texture tearing
+      const glitching = Math.sin(time * 7.3 + spawnPos.x) > 0.6;
+      core.position.x = glitching ? (Math.random() - 0.5) * 0.12 : 0;
+      core.scale.set(1, glitching && Math.random() < 0.3 ? 0.85 : 1, 1);
+      eye.visible = !glitching || Math.random() < 0.5;
+      tex.offset.set(Math.floor(time * 12) * 0.137, glitching ? Math.random() : tex.offset.y);
+      pixels.forEach((px, i) => {
+        const a = time * (1.5 + i * 0.2) + i;
+        px.position.set(Math.cos(a) * 0.55, 0.45 + Math.sin(a * 1.7) * 0.35, Math.sin(a) * 0.55);
+        if (Math.random() < 0.05) px.position.x += (Math.random() - 0.5) * 0.4;
+      });
+    };
+    return enemy;
+  }
+
+  /** "Error window": a grey crash dialog that floats and blasts gusts like a Zephyr Puff. */
+  public spawnErrorPopup(id: string, spawnPos: THREE.Vector3, patrolAxis: 'x' | 'z', range: number = 3.0): CozyEnemy {
+    const enemy = this.spawnZephyrPuff(id, spawnPos, patrolAxis, range);
+    const windCone = enemy.animParts.windCone;
+    const skin = this.replaceSkin(enemy);
+
+    // Dialog face drawn on a canvas
+    const c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 88;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#c0c0c0';
+    ctx.fillRect(0, 0, 128, 88);
+    ctx.fillStyle = '#5a5a6e';
+    ctx.fillRect(0, 0, 128, 16);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText('ERROR.exe', 5, 12);
+    ctx.fillStyle = '#9a9a9a';
+    ctx.fillRect(112, 3, 11, 10);
+    ctx.fillStyle = '#000';
+    ctx.fillText('x', 114, 12);
+    // Red stop icon
+    ctx.fillStyle = '#e00000';
+    ctx.beginPath();
+    ctx.arc(26, 46, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(19, 39);
+    ctx.lineTo(33, 53);
+    ctx.moveTo(33, 39);
+    ctx.lineTo(19, 53);
+    ctx.stroke();
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText('ERROR', 48, 40);
+    ctx.font = '9px monospace';
+    ctx.fillText('Archivo', 48, 53);
+    ctx.fillText('corrupto', 48, 63);
+    // OK button
+    ctx.fillStyle = '#d8d8d8';
+    ctx.fillRect(48, 69, 34, 14);
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(48, 69, 34, 14);
+    ctx.fillStyle = '#000';
+    ctx.fillText('OK', 59, 80);
+    const faceTex = new THREE.CanvasTexture(c);
+    faceTex.magFilter = THREE.NearestFilter;
+    faceTex.colorSpace = THREE.SRGBColorSpace;
+
+    const greyMat = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.95 });
+    const faceMat = new THREE.MeshStandardMaterial({ map: faceTex, roughness: 0.95, emissive: 0xffffff, emissiveMap: faceTex, emissiveIntensity: 0.25 });
+    const win = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.8, 0.08), [greyMat, greyMat, greyMat, greyMat, faceMat, faceMat]);
+    win.castShadow = true;
+    skin.add(win);
+
+    // Duplicate "ghost" windows trailing behind (the classic frozen-screen smear)
+    const ghostMat = new THREE.MeshBasicMaterial({ map: faceTex, transparent: true, opacity: 0.35, depthWrite: false });
+    const ghosts: THREE.Mesh[] = [];
+    for (let i = 1; i <= 2; i++) {
+      const g = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.8), ghostMat);
+      g.position.set(-0.12 * i, 0.08 * i, -0.06 * i);
+      skin.add(g);
+      ghosts.push(g);
+    }
+
+    // Keep the gust cone visible (it lived on the hidden body)
+    if (windCone) {
+      skin.add(windCone);
+      windCone.position.set(0, 0, 0.45);
+    }
+
+    const baseUpdate = enemy.update;
+    enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
+      baseUpdate.call(this, dt, time, playerPos);
+      // Shudder harder while "inhaling" (telegraph) before the gust
+      const shake = this.isTelegraphing ? 0.06 : 0.012;
+      skin.position.set((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake, 0);
+      const flicker = Math.random() < (this.isTelegraphing ? 0.25 : 0.04);
+      win.visible = !flicker;
+      ghosts.forEach((g, i) => (g.visible = this.isTelegraphing || Math.sin(time * 3 + i) > 0.3));
+    };
+    return enemy;
+  }
+
+  // ==========================================================
+  // Themed skins for the Cosmic level (UFO, alien blob) and the
+  // Swamp level (mud creature, wraith). Same AI as the cozy enemies.
+  // ==========================================================
+
+  /** Cosmic: little UFO that hovers and fires a "tractor gust" (Zephyr behaviour). */
+  public spawnUfo(id: string, spawnPos: THREE.Vector3, patrolAxis: 'x' | 'z', range: number = 3.0): CozyEnemy {
+    const enemy = this.spawnZephyrPuff(id, spawnPos, patrolAxis, range);
+    const windCone = enemy.animParts.windCone;
+    const skin = this.replaceSkin(enemy);
+    const hullMat = new THREE.MeshStandardMaterial({ color: 0xb8c1d9, roughness: 0.25, metalness: 0.85 });
+    const hullGeom = new THREE.SphereGeometry(0.62, 24, 12);
+    hullGeom.scale(1, 0.3, 1);
+    const hull = new THREE.Mesh(hullGeom, hullMat);
+    hull.castShadow = true;
+    skin.add(hull);
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0x9ae6ff, roughness: 0.05, transparent: true, opacity: 0.55 })
+    );
+    dome.position.y = 0.12;
+    skin.add(dome);
+    const alien = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), new THREE.MeshStandardMaterial({ color: 0x4ade80, roughness: 0.5 }));
+    alien.position.y = 0.2;
+    skin.add(alien);
+    for (const sx of [1, -1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), new THREE.MeshBasicMaterial({ color: 0x111111 }));
+      eye.position.set(0.05 * sx, 0.23, 0.11);
+      skin.add(eye);
+    }
+    const lights: THREE.Mesh[] = [];
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const l = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), new THREE.MeshBasicMaterial({ color: i % 2 ? 0xf472b6 : 0xfde047 }));
+      l.position.set(Math.cos(a) * 0.56, -0.02, Math.sin(a) * 0.56);
+      skin.add(l);
+      lights.push(l);
+    }
+    if (windCone) {
+      skin.add(windCone);
+      windCone.position.set(0, -0.05, 0.45);
+      (windCone.material as THREE.MeshBasicMaterial).color.set(0x86efac);
+    }
+    const baseUpdate = enemy.update;
+    enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
+      baseUpdate.call(this, dt, time, playerPos);
+      skin.rotation.z = Math.sin(time * 2.2) * 0.12;
+      lights.forEach((l, i) => (l.visible = Math.floor(time * 6 + i) % 2 === 0 || this.isTelegraphing));
+    };
+    return enemy;
+  }
+
+  /** Cosmic: one-eyed jelly blob that waddles like a Sproutling. */
+  public spawnAlienBlob(id: string, spawnPos: THREE.Vector3, patrolAxis: 'x' | 'z', range: number = 3.0): CozyEnemy {
+    const enemy = this.spawnSproutling(id, spawnPos, patrolAxis, range);
+    const skin = this.replaceSkin(enemy);
+    const jelly = new THREE.Mesh(
+      new THREE.SphereGeometry(0.45, 20, 16),
+      new THREE.MeshStandardMaterial({ color: 0xa855f7, roughness: 0.15, transparent: true, opacity: 0.85, emissive: 0x581c87, emissiveIntensity: 0.4 })
+    );
+    jelly.scale.set(1, 0.85, 1);
+    jelly.position.y = 0.4;
+    jelly.castShadow = true;
+    skin.add(jelly);
+    const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    eyeWhite.position.set(0, 0.5, 0.33);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), new THREE.MeshBasicMaterial({ color: 0x111111 }));
+    pupil.position.set(0, 0.5, 0.47);
+    skin.add(eyeWhite, pupil);
+    const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 6), new THREE.MeshStandardMaterial({ color: 0xc084fc }));
+    stalk.position.set(0, 0.92, 0);
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), new THREE.MeshBasicMaterial({ color: 0xfde047 }));
+    bulb.position.set(0, 1.1, 0);
+    skin.add(stalk, bulb);
+    const baseUpdate = enemy.update;
+    enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
+      baseUpdate.call(this, dt, time, playerPos);
+      const wob = Math.sin(time * 6 + spawnPos.x);
+      jelly.scale.set(1 + wob * 0.06, 0.85 - wob * 0.06, 1 + wob * 0.06);
+      bulb.position.x = Math.sin(time * 3) * 0.06;
+      // Pupil glances toward the player
+      const dx = playerPos.x - this.position.x;
+      pupil.position.x = THREE.MathUtils.clamp(dx * 0.02, -0.06, 0.06);
+    };
+    return enemy;
+  }
+
+  /** Swamp: lumpy mud creature with glowing eyes (Sproutling behaviour). */
+  public spawnMudling(id: string, spawnPos: THREE.Vector3, patrolAxis: 'x' | 'z', range: number = 3.0): CozyEnemy {
+    const enemy = this.spawnSproutling(id, spawnPos, patrolAxis, range);
+    const skin = this.replaceSkin(enemy);
+    const mudMat = new THREE.MeshStandardMaterial({ color: 0x3b2f22, roughness: 0.95, flatShading: true });
+    const body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.45, 1), mudMat);
+    body.scale.set(1.1, 0.85, 1);
+    body.position.y = 0.38;
+    body.castShadow = true;
+    skin.add(body);
+    const lumps: THREE.Mesh[] = [];
+    for (let i = 0; i < 4; i++) {
+      const lump = new THREE.Mesh(new THREE.DodecahedronGeometry(0.16, 0), mudMat);
+      const a = (i / 4) * Math.PI * 2 + 0.4;
+      lump.position.set(Math.cos(a) * 0.35, 0.62 + (i % 2) * 0.08, Math.sin(a) * 0.3);
+      skin.add(lump);
+      lumps.push(lump);
+    }
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+    for (const sx of [1, -1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), eyeMat);
+      eye.scale.set(1, 0.6, 1);
+      eye.position.set(0.15 * sx, 0.5, 0.4);
+      skin.add(eye);
+    }
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.04, 0.02), new THREE.MeshBasicMaterial({ color: 0x0b0b0b }));
+    mouth.position.set(0, 0.34, 0.45);
+    skin.add(mouth);
+    const drips: THREE.Mesh[] = [];
+    for (let i = 0; i < 3; i++) {
+      const drip = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), mudMat);
+      skin.add(drip);
+      drips.push(drip);
+    }
+    const baseUpdate = enemy.update;
+    enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
+      baseUpdate.call(this, dt, time, playerPos);
+      drips.forEach((d, i) => {
+        const t = (time * 0.8 + i * 0.33) % 1;
+        d.position.set(-0.25 + i * 0.25, 0.45 - t * 0.45, 0.3);
+        d.scale.setScalar(1 - t * 0.6);
+      });
+      lumps.forEach((l, i) => (l.rotation.y = time * (0.5 + i * 0.2)));
+    };
+    return enemy;
+  }
+
+  /** Swamp: hooded wraith that floats and blows a cold gust (Zephyr behaviour). */
+  public spawnWraith(id: string, spawnPos: THREE.Vector3, patrolAxis: 'x' | 'z', range: number = 3.0): CozyEnemy {
+    const enemy = this.spawnZephyrPuff(id, spawnPos, patrolAxis, range);
+    const windCone = enemy.animParts.windCone;
+    const skin = this.replaceSkin(enemy);
+    const cloakMat = new THREE.MeshStandardMaterial({ color: 0x1e1b2e, roughness: 0.9, side: THREE.DoubleSide, transparent: true, opacity: 0.92 });
+    const cloak = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.2, 10, 1, true), cloakMat);
+    cloak.position.y = -0.15;
+    skin.add(cloak);
+    const hood = new THREE.Mesh(new THREE.SphereGeometry(0.3, 14, 12, 0, Math.PI * 2, 0, Math.PI * 0.62), cloakMat);
+    hood.position.y = 0.38;
+    skin.add(hood);
+    const face = new THREE.Mesh(new THREE.CircleGeometry(0.2, 16), new THREE.MeshBasicMaterial({ color: 0x05040a }));
+    face.position.set(0, 0.33, 0.24);
+    skin.add(face);
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x67e8f9 });
+    const eyes: THREE.Mesh[] = [];
+    for (const sx of [1, -1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), eyeMat);
+      eye.position.set(0.08 * sx, 0.36, 0.26);
+      skin.add(eye);
+      eyes.push(eye);
+    }
+    // Ragged hem strips
+    const strips: THREE.Mesh[] = [];
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.35), cloakMat);
+      strip.position.set(Math.sin(a) * 0.44, -0.85, Math.cos(a) * 0.44);
+      strip.rotation.y = a;
+      skin.add(strip);
+      strips.push(strip);
+    }
+    if (windCone) {
+      skin.add(windCone);
+      windCone.position.set(0, 0.3, 0.5);
+      (windCone.material as THREE.MeshBasicMaterial).color.set(0xa5f3fc);
+    }
+    const baseUpdate = enemy.update;
+    enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
+      baseUpdate.call(this, dt, time, playerPos);
+      strips.forEach((s, i) => (s.rotation.x = Math.sin(time * 5 + i) * 0.4));
+      const flare = this.isTelegraphing ? 1.8 : 1;
+      eyes.forEach((e) => e.scale.setScalar(flare + Math.sin(time * 8) * 0.15));
+      skin.position.y = Math.sin(time * 1.7) * 0.08;
+    };
+    return enemy;
+  }
+
   // --- Collision resolution with Player ---
   public checkPlayerCollisions(
     playerPosition: THREE.Vector3,
@@ -546,11 +911,12 @@ export class EnemyManager {
     onPlayerBounce: () => void,
     onPlayerKnockback: (forceDir: THREE.Vector3) => void
   ) {
+    const distracted = this.distractTarget !== null;
     for (const enemy of this.enemies) {
       if (enemy.isSquashed) continue;
 
       // 1. Zephyr Puff Wind Gust Blast Check
-      if (enemy.type === 'zephyr_puff' && enemy.isBlowing) {
+      if (!distracted && enemy.type === 'zephyr_puff' && enemy.isBlowing) {
         const toPlayer = playerPosition.clone().sub(enemy.position);
         const forward = new THREE.Vector3(0, 0, 1).applyEuler(enemy.group.rotation);
         const dist = toPlayer.length();
@@ -587,6 +953,9 @@ export class EnemyManager {
           return;
         }
 
+        // Distracted enemies are too busy staring at the lure to push anyone
+        if (distracted) continue;
+
         // Side horizontal collision -> Bonk & forcefully push player OFF the platform!
         this._playerPush.set(dx, 0, dz);
         if (this._playerPush.lengthSq() < 0.001) {
@@ -608,7 +977,24 @@ export class EnemyManager {
   }
 
   public update(dt: number, time: number, playerPos: THREE.Vector3) {
+    const lure = this.distractTarget;
     for (const enemy of this.enemies) {
+      if (lure && !enemy.isSquashed) {
+        // Mesmerized: stop patrolling, turn toward the glowing lure and sway happily
+        const targetYaw = Math.atan2(lure.x - enemy.position.x, lure.z - enemy.position.z);
+        let diff = targetYaw - enemy.group.rotation.y;
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+        enemy.group.rotation.y += diff * Math.min(1, dt * 6);
+        enemy.group.rotation.z = Math.sin(time * 4 + enemy.position.x) * 0.12;
+        enemy.isBlowing = false;
+        enemy.isTelegraphing = false;
+        if (enemy.animParts.windCone) {
+          (enemy.animParts.windCone.material as THREE.MeshBasicMaterial).opacity = 0;
+        }
+        if (enemy.animParts.cheeks) enemy.animParts.cheeks.scale.set(1, 1, 1);
+        continue;
+      }
+      if (enemy.group.rotation.z !== 0) enemy.group.rotation.z = 0;
       enemy.update(dt, time, playerPos);
     }
   }

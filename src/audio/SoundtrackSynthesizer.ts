@@ -3,7 +3,7 @@
  * 100% Web Audio API - Zero external MP3/audio files (Zero 404s).
  */
 
-export type WeatherType = 'golden_hour' | 'cozy_rain' | 'sakura_breeze' | 'starlit_night';
+export type WeatherType = 'golden_hour' | 'cozy_rain' | 'sakura_breeze' | 'starlit_night' | 'aero_day' | 'cosmic' | 'swamp_mist';
 
 class SoundtrackSynthesizer {
   private ctx: AudioContext | null = null;

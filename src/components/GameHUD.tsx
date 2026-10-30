@@ -45,8 +45,17 @@ import {
   Clock,
   AlertTriangle,
   ShieldAlert,
+  UserRound,
+  Backpack as BackpackIcon,
+  Trash2,
+  ArrowRight,
 } from 'lucide-react';
-import { GameEngine, GameState, GameMode } from '../game/GameEngine';
+import { GameEngine, GameState, GameMode, LEVELS } from '../game/GameEngine';
+import { isLevelCompleted } from '../game/progress';
+import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus } from '../game/items';
+import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
+import { COMPANION_POWERS, CompanionPowerStatus } from '../game/companionPowers';
+import { BodyType, CharacterAppearance, loadAppearance, loadRoster } from '../game/character';
 import { WeatherType, soundManager } from '../audio/SoundtrackSynthesizer';
 
 export type PhotoFilter =
@@ -103,6 +112,13 @@ export const PHOTO_FILTERS: {
     css: 'sepia(0.65) contrast(1.15) brightness(0.95) saturate(0.85)',
   },
 ];
+
+const VICTORY_TEXT: Record<number, string> = {
+  1: 'Has navegado con éxito los jardines flotantes y llegado al Mirador Celestial. Disfruta la vista panorámica de las nubes y las estrellas.',
+  2: 'Saltaste entre asteroides y anillos planetarios hasta el Observatorio Estelar. ¡Estelita brilla de alegría!',
+  3: 'Cruzaste la bruma del pantano y escalaste la Torre de la Bruja hasta el Santuario de las Luciérnagas.',
+  4: 'Cruzaste la pradera, las cascadas y la ciudad de cristal hasta la Plaza del Globo. ¡Los glitches no pudieron contigo!',
+};
 
 export const PHOTO_FRAMES: { id: PhotoFrame; name: string; desc: string }[] = [
   { id: 'none', name: 'Sin Marco', desc: 'Composición limpia' },
@@ -378,11 +394,118 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const showToast = (msg: string) => {
+  // Character Generator
+  const [showCreator, setShowCreator] = useState(false);
+  const [appearance, setAppearance] = useState<CharacterAppearance>(() => engine?.playerAppearance ?? loadAppearance());
+
+  const openCreator = () => {
+    setShowCreator(true);
+    engine?.setCharacterPreview(true);
+  };
+
+  const closeCreator = () => {
+    setShowCreator(false);
+    engine?.setCharacterPreview(false);
+  };
+
+  const handleAppearanceChange = (next: CharacterAppearance) => {
+    setAppearance(next);
+    engine?.setPlayerAppearance(next);
+  };
+
+  // Chico / Chica: each keeps its own saved customization
+  const handleSwitchBody = (body: BodyType) => {
+    const next = loadRoster()[body];
+    setAppearance(next);
+    engine?.setPlayerAppearance(next);
+  };
+
+  // The creator only lives on the title screen
+  useEffect(() => {
+    if (gameState !== 'title' && showCreator) {
+      setShowCreator(false);
+      engine?.setCharacterPreview(false);
+    }
+  }, [gameState, showCreator, engine]);
+
+  const showToast = (msg: string, ms: number = 1200) => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((curr) => (curr === msg ? null : curr));
-    }, 1200);
+    }, ms);
+  };
+
+  // Companion power status (polled from the engine while playing)
+  const [power, setPower] = useState<CompanionPowerStatus | null>(null);
+  const lastPowerEventRef = useRef<number>(0);
+  useEffect(() => {
+    if (!engine || gameState !== 'playing') return;
+    const read = () => {
+      const st = engine.companionPowers?.getStatus();
+      if (!st) return;
+      setPower((prev) =>
+        prev &&
+        prev.state === st.state &&
+        prev.companion === st.companion &&
+        prev.eventId === st.eventId &&
+        Math.abs(prev.timeLeft - st.timeLeft) < 0.1
+          ? prev
+          : st
+      );
+      if (st.eventId !== lastPowerEventRef.current) {
+        lastPowerEventRef.current = st.eventId;
+        if (st.eventText) showToast(st.eventText, 2200);
+      }
+    };
+    read();
+    const id = window.setInterval(read, 100);
+    return () => window.clearInterval(id);
+  }, [engine, gameState]);
+  const powerInfo = power ? COMPANION_POWERS[power.companion] : undefined;
+
+  // Backpack (5 slots) status, polled with the same rhythm
+  const [inventory, setInventory] = useState<InventoryStatus | null>(null);
+  const [showBackpack, setShowBackpack] = useState(false);
+  const lastItemEventRef = useRef<number>(0);
+  useEffect(() => {
+    if (!engine || gameState !== 'playing') return;
+    const read = () => {
+      const st = engine.itemSystem?.getStatus();
+      if (!st) return;
+      setInventory((prev) =>
+        prev &&
+        prev.eventId === st.eventId &&
+        prev.slots.every((v, i) => v === st.slots[i]) &&
+        Math.ceil(prev.superJumpLeft) === Math.ceil(st.superJumpLeft)
+          ? prev
+          : st
+      );
+      if (st.eventId !== lastItemEventRef.current) {
+        lastItemEventRef.current = st.eventId;
+        if (st.eventText) showToast(st.eventText, 2200);
+      }
+    };
+    read();
+    const id = window.setInterval(read, 100);
+    return () => window.clearInterval(id);
+  }, [engine, gameState]);
+
+  // Toggle backpack panel with the I key
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if (e.code === 'KeyI' && gameState === 'playing') setShowBackpack((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [gameState]);
+
+  // Level selection on the title screen (the world behind the menu switches too)
+  const [selectedLevel, setSelectedLevel] = useState<number>(() => engine?.currentLevel ?? 1);
+  const pickLevel = (id: number) => {
+    setSelectedLevel(id);
+    engine?.loadLevel(id);
   };
 
   // Photo Mode Studio State
@@ -410,7 +533,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         'KeyW', 'KeyA', 'KeyS', 'KeyD',
         'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
         'Space', 'ShiftLeft', 'ShiftRight',
-        'KeyQ', 'KeyE', 'KeyR', 'KeyC', 'Escape'
+        'KeyQ', 'KeyE', 'KeyR', 'KeyC', 'KeyG', 'KeyI', 'Escape'
       ];
       if (gameKeys.includes(e.code)) {
         setTouchControlsEnabled(false);
@@ -454,6 +577,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   // Global Keyboard shortcuts: H (photo UI), Space (snap), F (fullscreen), O (orientation)
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
+      // Ignore shortcuts while typing (e.g. the character name field)
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       if (e.code === 'KeyH') {
         if (gameState === 'photo_mode') {
           setHidePhotoUI((prev) => !prev);
@@ -508,7 +634,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const handleStartGame = (modeToStart?: GameMode) => {
     const targetMode = modeToStart ?? selectedMode;
-    if (engine) engine.startGame(targetMode);
+    if (engine) engine.startGame(targetMode, selectedLevel);
   };
 
   const handleRestart = (modeToRestart?: GameMode) => {
@@ -541,7 +667,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* ======================================================== */}
       {/* 1. TITLE SCREEN OVERLAY                                  */}
       {/* ======================================================== */}
-      {gameState === 'title' && (
+      {gameState === 'title' && showCreator && (
+        <CharacterCreator
+          appearance={appearance}
+          onChange={handleAppearanceChange}
+          onSwitchBody={handleSwitchBody}
+          onClose={closeCreator}
+          portrait={isPortrait && !isSimulatedLandscape}
+        />
+      )}
+
+      {gameState === 'title' && !showCreator && (
         <div className="absolute inset-0 flex flex-col items-center justify-between pointer-events-auto bg-stone-900/40 text-stone-100 p-6 sm:p-12 transition-opacity duration-700">
           {/* Top subtle badge */}
           <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-stone-900/75 border border-stone-700/60 text-xs tracking-widest text-amber-300 font-medium uppercase mt-2">
@@ -589,6 +725,46 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <p className="text-stone-300 text-xs sm:text-sm max-w-md font-light leading-relaxed mb-4 px-4">
               Salta por plataformas flotantes, rebota en hongos elásticos y supera obstáculos hacia el Mirador Celestial.
             </p>
+
+            {/* Level Selector — each level unlocks its companion */}
+            <div className="w-full max-w-xl flex flex-col gap-2 mb-4 px-2">
+              <span className="text-[11px] text-sky-300 font-bold uppercase tracking-wider text-center">Elige tu Nivel:</span>
+              <div className="grid grid-cols-2 gap-2">
+                {LEVELS.map((lvl) => {
+                  const selected = selectedLevel === lvl.id;
+                  const done = isLevelCompleted(lvl.id);
+                  const comp = COMPANION_POWERS[lvl.companion];
+                  return (
+                    <button
+                      key={lvl.id}
+                      type="button"
+                      onClick={() => pickLevel(lvl.id)}
+                      className={`flex items-center gap-2 text-left p-2.5 rounded-2xl border transition-all cursor-pointer ${
+                        selected ? 'bg-stone-900/90 shadow-lg' : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
+                      }`}
+                      style={selected ? { borderColor: lvl.accent, boxShadow: `0 0 0 1px ${lvl.accent}66` } : undefined}
+                    >
+                      <span
+                        className={`w-8 h-8 shrink-0 rounded-xl flex items-center justify-center text-stone-900 ${done ? '' : 'grayscale opacity-60'}`}
+                        style={{ backgroundColor: comp?.color ?? '#999' }}
+                        title={comp ? comp.companionName : ''}
+                      >
+                        {COMPANION_ICONS[lvl.companion]}
+                      </span>
+                      <span className="flex flex-col min-w-0">
+                        <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: lvl.accent }}>
+                          Nivel {lvl.id}
+                        </span>
+                        <span className="text-xs sm:text-sm font-bold text-stone-100 truncate">{lvl.name}</span>
+                        <span className={`text-[9px] sm:text-[10px] leading-snug ${done ? 'text-emerald-300' : 'text-stone-400'}`}>
+                          {done ? `✓ ${comp?.companionName} desbloqueado` : `🔒 Termínalo para ganar a ${comp?.companionName}`}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {/* Game Mode Selector */}
             <div className="w-full max-w-xl flex flex-col gap-2 mb-6 px-2">
@@ -670,6 +846,28 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             </div>
 
+            {/* Character Generator entry point */}
+            <button
+              type="button"
+              onClick={openCreator}
+              className="group flex items-center gap-3 pl-2 pr-4 py-2 mb-3 rounded-2xl bg-stone-900/80 border border-stone-700 hover:border-amber-400/70 text-left transition-all cursor-pointer active:scale-95"
+            >
+              <span
+                className="w-9 h-9 rounded-xl flex items-center justify-center border border-stone-950/30"
+                style={{ background: `linear-gradient(135deg, ${appearance.sweaterColor}, ${appearance.scarfColor})` }}
+              >
+                <UserRound className="w-5 h-5 text-stone-950/80" />
+              </span>
+              <span className="flex flex-col">
+                <span className="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Tu personaje</span>
+                <span className="text-sm font-semibold text-stone-100 max-w-[12rem] truncate">{appearance.name || 'Sin nombre'}</span>
+              </span>
+              <span className="ml-2 flex items-center gap-1 text-xs text-stone-300 group-hover:text-amber-300">
+                <Palette className="w-4 h-4" />
+                Personalizar
+              </span>
+            </button>
+
             {/* Start CTA Button */}
             <button
               onClick={() => handleStartGame(selectedMode)}
@@ -698,6 +896,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <span className="text-stone-300">Arrastrar / Q-E <span className="text-stone-500">Girar Cámara</span></span>
             <span className="text-stone-600">·</span>
             <span className="text-stone-300">R <span className="text-stone-500">Reiniciar</span></span>
+            <span className="text-stone-600">·</span>
+            <span className="text-stone-300">G <span className="text-stone-500">Poder del compañero</span></span>
           </div>
         </div>
       )}
@@ -714,7 +914,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <MapPin className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
               <div className="flex flex-col">
                 <span className="text-[9px] text-stone-400 font-medium uppercase tracking-wider">
-                  Punto {checkpointIndex}/3
+                  Nivel {engine?.currentLevel ?? 1} · Punto {checkpointIndex}/3
                 </span>
                 <span className="font-semibold text-stone-100 text-xs sm:text-sm">{checkpointName}</span>
               </div>
@@ -790,6 +990,59 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <span>{formatTime(elapsedTime)}</span>
               </div>
             </div>
+
+            {/* Companion Power badge (click / tap or press G) */}
+            {power && powerInfo && (
+              <button
+                type="button"
+                onClick={() => engine?.activateCompanionPower()}
+                title={`${powerInfo.powerName}: ${powerInfo.desc}`}
+                className={`relative overflow-hidden flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-xl border text-left text-xs shadow-md backdrop-blur-md transition-colors cursor-pointer ${
+                  power.state === 'ready'
+                    ? 'bg-stone-900/85 border-amber-400/70 hover:bg-stone-800'
+                    : power.state === 'active'
+                    ? 'bg-stone-900/90 border-emerald-400/70'
+                    : 'bg-stone-900/80 border-stone-700'
+                }`}
+              >
+                {power.state === 'active' && (
+                  <span
+                    className="absolute left-0 bottom-0 h-[3px] bg-emerald-400 transition-[width] duration-100"
+                    style={{ width: `${Math.max(0, (power.timeLeft / power.duration) * 100)}%` }}
+                  />
+                )}
+                <span
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center text-stone-900 ${
+                    power.state === 'hungry' ? 'opacity-50 grayscale' : ''
+                  } ${power.state === 'active' ? 'animate-pulse' : ''}`}
+                  style={{ backgroundColor: powerInfo.color }}
+                >
+                  {COMPANION_ICONS[power.companion]}
+                </span>
+                <span className="flex flex-col leading-tight">
+                  <span className="text-[9px] uppercase tracking-wider text-stone-400 font-semibold">
+                    {powerInfo.companionName} · {powerInfo.powerName}
+                  </span>
+                  <span
+                    className={`font-semibold ${
+                      power.state === 'ready'
+                        ? 'text-amber-300'
+                        : power.state === 'active'
+                        ? 'text-emerald-300'
+                        : 'text-stone-400'
+                    }`}
+                  >
+                    {power.state === 'ready' && (
+                      <>
+                        ¡Listo! <span className="ml-1 px-1.5 rounded bg-stone-800 border border-stone-700 font-mono text-[10px] text-stone-200">G</span>
+                      </>
+                    )}
+                    {power.state === 'active' && `Activo · ${Math.ceil(power.timeLeft)}s`}
+                    {power.state === 'hungry' && 'Con hambre · dale una baya 🍇'}
+                  </span>
+                </span>
+              </button>
+            )}
           </div>
 
           {/* Top-Right Cluster: Quick Actions (Photo Mode, Mute, Mobile Touch Toggle, Help, Reset) */}
@@ -858,6 +1111,100 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
           )}
 
+          {/* BACKPACK HOTBAR (5 slots, keys 1-5, I opens the panel) */}
+          {inventory && (
+            <div
+              className={`absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-auto z-20 ${
+                touchControlsEnabled && isPortrait && !isSimulatedLandscape ? 'bottom-56' : 'bottom-4'
+              }`}
+            >
+              {inventory.superJumpLeft > 0 && (
+                <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-stone-950 text-[11px] font-bold shadow">
+                  🌰 Súper salto · {Math.ceil(inventory.superJumpLeft)}s
+                </span>
+              )}
+
+              {showBackpack && (
+                <div className="w-[min(92vw,340px)] rounded-2xl bg-stone-900/95 border border-stone-700 shadow-2xl backdrop-blur-md p-3 text-stone-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="flex items-center gap-1.5 text-xs font-bold text-amber-300 uppercase tracking-wider">
+                      <BackpackIcon className="w-4 h-4" /> Mochila ({inventory.slots.filter(Boolean).length}/{INVENTORY_SIZE})
+                    </span>
+                    <button onClick={() => setShowBackpack(false)} className="p-1 rounded-lg hover:bg-stone-800 cursor-pointer" aria-label="Cerrar mochila">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    {inventory.slots.map((item, i) => {
+                      const info = item ? ITEM_INFO[item] : null;
+                      return (
+                        <div key={i} className="flex items-center gap-2 p-2 rounded-xl bg-stone-950/60 border border-stone-800">
+                          <span className="w-5 text-[10px] font-mono text-stone-500">{i + 1}</span>
+                          <span className="w-8 h-8 flex items-center justify-center text-xl rounded-lg bg-stone-800/80">{info?.emoji ?? ''}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold truncate">{info ? info.name : 'Vacío'}</div>
+                            {info && <div className="text-[10px] text-stone-400 leading-snug">{info.desc}</div>}
+                          </div>
+                          {info && (
+                            <>
+                              <button
+                                onClick={() => engine?.useItem(i)}
+                                className="px-2 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-[11px] font-bold cursor-pointer"
+                              >
+                                Usar
+                              </button>
+                              <button
+                                onClick={() => engine?.discardItem(i)}
+                                className="p-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 cursor-pointer"
+                                title="Tirar"
+                                aria-label="Tirar"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-[10px] text-stone-400 leading-snug">
+                    Recoge bayas 🍇 y nueces 🌰 en las islas. Úsalas con las teclas 1–5 o tocando el espacio.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-stone-900/80 border border-stone-700/80 shadow-lg backdrop-blur-md">
+                <button
+                  onClick={() => setShowBackpack((v) => !v)}
+                  title="Mochila (I)"
+                  aria-label="Abrir mochila"
+                  className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center cursor-pointer transition-colors ${
+                    showBackpack ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-amber-300 hover:bg-stone-700'
+                  }`}
+                >
+                  <BackpackIcon className="w-5 h-5" />
+                </button>
+                {inventory.slots.map((item, i) => {
+                  const info = item ? ITEM_INFO[item] : null;
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => engine?.useItem(i)}
+                      title={info ? `${info.name}: ${info.desc} (tecla ${i + 1})` : `Espacio ${i + 1} vacío`}
+                      className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center text-xl border transition-transform active:scale-90 cursor-pointer ${
+                        info ? 'bg-stone-800 border-stone-600 hover:border-amber-400' : 'bg-stone-950/50 border-stone-800 border-dashed'
+                      }`}
+                      style={info ? { boxShadow: `inset 0 -3px 0 ${info.color}` } : undefined}
+                    >
+                      <span className="absolute top-0.5 left-1 text-[9px] font-mono text-stone-500">{i + 1}</span>
+                      {info?.emoji}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* 3. MOBILE ON-SCREEN TOUCH CONTROLS                       */}
           {/* ======================================================== */}
           {touchControlsEnabled && (
@@ -869,6 +1216,30 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
               {/* Bottom-Right Action Buttons (Jump & Sprint) */}
               <div className="absolute bottom-6 right-6 flex flex-col items-end gap-3 pointer-events-auto z-20">
+                {/* Companion Power Button */}
+                {power && powerInfo && (
+                  <button
+                    onTouchStart={(e) => {
+                      e.stopPropagation();
+                      engine?.activateCompanionPower();
+                    }}
+                    onClick={() => engine?.activateCompanionPower()}
+                    className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none border-2 ${
+                      power.state === 'ready'
+                        ? 'text-stone-950 border-white/70'
+                        : 'bg-stone-900/80 text-stone-400 border-stone-700/80'
+                    }`}
+                    style={{ touchAction: 'none', backgroundColor: power.state === 'ready' ? powerInfo.color : undefined }}
+                  >
+                    {COMPANION_ICONS[power.companion]}
+                    <span>
+                      {power.state === 'ready' && 'PODER'}
+                      {power.state === 'active' && `${Math.ceil(power.timeLeft)}s`}
+                      {power.state === 'hungry' && 'HAMBRE'}
+                    </span>
+                  </button>
+                )}
+
                 {/* Sprint Toggle Button */}
                 <button
                   onTouchStart={(e) => {
@@ -1451,6 +1822,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             <h2 className="text-3xl font-serif font-bold text-amber-200 mb-1">¡Cúspide Alcanzada!</h2>
+            {appearance.name && (
+              <p className="text-sm text-stone-300 mb-2">¡Bien hecho, {appearance.name}!</p>
+            )}
 
             {/* Mode Victory Badge */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold mb-4 bg-stone-800 border border-stone-700">
@@ -1475,7 +1849,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             <p className="text-sm text-stone-300 font-light max-w-xs mb-6">
-              Has navegado con éxito los jardines flotantes y llegado al Mirador Celestial. Disfruta la vista panorámica de las nubes y las estrellas.
+              {VICTORY_TEXT[engine?.currentLevel ?? 1] ?? VICTORY_TEXT[1]}
             </p>
 
             {/* Run Statistics */}
@@ -1492,7 +1866,51 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             </div>
 
+            {/* Companion unlocked by this level */}
+            {engine?.lastUnlocked && COMPANION_POWERS[engine.lastUnlocked] && (
+              <div
+                className="w-full mb-4 p-3 rounded-2xl border flex items-center gap-3 text-left"
+                style={{ borderColor: COMPANION_POWERS[engine.lastUnlocked]!.color, background: 'rgba(255,255,255,0.04)' }}
+              >
+                <span
+                  className="w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-stone-900 animate-bounce"
+                  style={{ backgroundColor: COMPANION_POWERS[engine.lastUnlocked]!.color }}
+                >
+                  {COMPANION_ICONS[engine.lastUnlocked]}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-stone-100">
+                    ¡Desbloqueaste a {COMPANION_POWERS[engine.lastUnlocked]!.companionName}!
+                  </div>
+                  <div className="text-[11px] text-stone-400 leading-snug">
+                    Poder (G): {COMPANION_POWERS[engine.lastUnlocked]!.powerName}. {COMPANION_POWERS[engine.lastUnlocked]!.desc}
+                  </div>
+                </div>
+                {appearance.companion !== engine.lastUnlocked && (
+                  <button
+                    onClick={() => handleAppearanceChange({ ...appearance, companion: engine.lastUnlocked! })}
+                    className="px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-xs font-bold cursor-pointer shrink-0"
+                  >
+                    Llevarlo
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="w-full flex flex-col gap-2.5">
+              {engine && LEVELS.some((l) => l.id === engine.currentLevel + 1) && (
+                <button
+                  onClick={() => {
+                    setElapsedTime(0);
+                    setSelectedLevel(engine.currentLevel + 1);
+                    engine.goToNextLevel();
+                  }}
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-sky-400 to-emerald-400 hover:from-sky-300 hover:to-emerald-300 text-stone-950 font-bold text-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+                >
+                  Siguiente: Nivel {engine.currentLevel + 1} · {LEVELS.find((l) => l.id === engine.currentLevel + 1)?.name}
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (engine) {
@@ -1570,7 +1988,36 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <span className="text-stone-400">Reiniciar en Punto de Control</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">R</span>
                 </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Poder del Compañero</span>
+                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">G</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Usar objeto de la mochila</span>
+                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">1 – 5</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Abrir / cerrar mochila</span>
+                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">I</span>
+                </div>
               </div>
+            </div>
+
+            {/* Companion powers guide */}
+            <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-400/30 text-[11px] text-rose-100/90 leading-relaxed mb-3">
+              <strong className="text-rose-300">🐾 Poderes de tu Compañero (tecla G):</strong>
+              <ul className="list-disc list-inside mt-1 space-y-1">
+                {Object.values(COMPANION_POWERS).map((p) =>
+                  p ? (
+                    <li key={p.companion}>
+                      <strong>{p.companionName} – {p.powerName}:</strong> {p.desc} ({p.duration}s)
+                    </li>
+                  ) : null
+                )}
+              </ul>
+              <p className="mt-1.5">
+                Después de usarlo, tu compañero queda con hambre. Recoge una <strong>baya mágica 🍇</strong>, se guarda en tu mochila, y úsala (teclas 1–5) para recargar el poder.
+              </p>
             </div>
 
             {/* Game Modes Guide */}

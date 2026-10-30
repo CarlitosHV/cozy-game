@@ -7,11 +7,30 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { soundManager, WeatherType } from '../audio/SoundtrackSynthesizer';
 import { buildCozyParkourWorld, WorldBuildResult } from './levels';
-import { createPlayerCharacter, PlayerCharacterModel } from './models';
+import { createPlayerCharacter, disposePlayerCharacter, PlayerCharacterModel } from './models';
+import { CharacterAppearance, loadAppearance, saveAppearance } from './character';
 import { ParkourPhysics, PlayerInput } from './physics';
 import { createProceduralTextures, ProceduralTextures } from './textures';
 import { WeatherSystem } from './weather';
 import { AetherStalker } from './enemies';
+import { CompanionPowerSystem } from './companionPowers';
+import { ItemSystem, ItemUseContext } from './items';
+import { buildAeroWorld } from './levelAero';
+import { buildCosmicWorld } from './levelCosmic';
+import { buildSwampWorld } from './levelSwamp';
+import { makeGlowTexture } from './levelKit';
+import { LEVELS, markLevelComplete, isCompanionUnlocked } from './progress';
+import { CompanionStyle } from './character';
+
+export { LEVELS };
+
+/** Per-level atmosphere: base weather and the sky shown on victory. */
+const LEVEL_THEMES: Record<number, { weather: WeatherType; title: string; victoryWeather: WeatherType; victoryTitle: string; victoryDesc: string }> = {
+  1: { weather: 'golden_hour', title: 'Hora Dorada', victoryWeather: 'starlit_night', victoryTitle: 'Noche Estrellada', victoryDesc: '¡Cima alcanzada en el Mirador Celestial!' },
+  2: { weather: 'cosmic', title: 'Ruta Cósmica', victoryWeather: 'starlit_night', victoryTitle: 'Lluvia de Estrellas', victoryDesc: '¡Llegaste al Observatorio Estelar!' },
+  3: { weather: 'swamp_mist', title: 'Pantano Sombrío', victoryWeather: 'starlit_night', victoryTitle: 'Noche de Luciérnagas', victoryDesc: '¡Llegaste al Santuario de las Luciérnagas!' },
+  4: { weather: 'aero_day', title: 'Valle Aero', victoryWeather: 'golden_hour', victoryTitle: 'Atardecer Aero', victoryDesc: '¡Llegaste a la Plaza del Globo!' },
+};
 
 export type GameMode = 'free' | 'time_trial' | 'chase';
 export type GameState = 'title' | 'playing' | 'paused' | 'victory' | 'photo_mode' | 'game_over';
@@ -53,6 +72,18 @@ export class GameEngine {
   public playerModel!: PlayerCharacterModel;
   public physics!: ParkourPhysics;
   public weatherSystem!: WeatherSystem;
+  public companionPowers!: CompanionPowerSystem;
+  public itemSystem!: ItemSystem;
+  private itemCtx!: ItemUseContext;
+
+  // Levels
+  public currentLevel: number = 1;
+  private levelRoot!: THREE.Group;
+  /** Companion unlocked by the last victory (shown on the victory screen) */
+  public lastUnlocked: CompanionStyle | null = null;
+  // The level's companion waiting at the summit
+  private showcase: THREE.Object3D | null = null;
+  private showcaseBase = new THREE.Vector3();
 
   // Game state & modes
   public gameState: GameState = 'title';
@@ -72,6 +103,18 @@ export class GameEngine {
   private isMouseDragging: boolean = false;
   private lastMouseX: number = 0;
   private lastMouseY: number = 0;
+
+  // Character Creator preview (close-up turntable camera on the title screen)
+  public playerAppearance: CharacterAppearance = loadAppearance();
+  public characterPreview: boolean = false;
+  private previewBlend: number = 0;
+  private previewYaw: number = 0;
+  private previewDistance: number = 2.35;
+  private viewOffsetActive: boolean = false;
+  private _orbitPos = new THREE.Vector3();
+  private _orbitLook = new THREE.Vector3();
+  private _previewPos = new THREE.Vector3();
+  private _previewLook = new THREE.Vector3();
 
   // Photo Mode State
   public photoModePaused: boolean = false;
@@ -182,12 +225,30 @@ export class GameEngine {
     const maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
     this.textures = createProceduralTextures(maxAnisotropy);
 
-    this.world = buildCozyParkourWorld(this.scene, this.textures);
-    this.playerModel = createPlayerCharacter(this.textures);
+    this.levelRoot = new THREE.Group();
+    this.scene.add(this.levelRoot);
+    this.world = this.buildLevel(this.currentLevel);
+    this.addCompanionShowcase();
+    this.playerModel = createPlayerCharacter(this.textures, this.playerAppearance);
     this.scene.add(this.playerModel.group);
 
     // 7. Physics Controller
     this.physics = new ParkourPhysics(this.world, this.playerModel);
+
+    // 7b. Companion Powers (key G) & companion snacks around the islands
+    this.companionPowers = new CompanionPowerSystem(this.scene);
+    this.companionPowers.setCompanion(this.playerAppearance.companion, this.physics);
+    this.companionPowers.reset(this.physics);
+
+    // 7c. Backpack items (berries, walnuts…) — 5 slots, keys 1-5
+    this.itemSystem = new ItemSystem(this.scene);
+    this.itemSystem.loadSpots(this.world.itemSpots);
+    this.itemCtx = {
+      feedCompanion: () => this.companionPowers.feed(),
+      setJumpMultiplier: (m: number) => {
+        this.physics.jumpMultiplier = m;
+      },
+    };
 
     // 8. Weather System
     this.weatherSystem = new WeatherSystem(this.scene, this.dirLight, this.hemiLight, this.textures);
@@ -235,7 +296,182 @@ export class GameEngine {
     this.callbacks.onModeChange?.(mode);
   }
 
-  public startGame(mode?: GameMode) {
+  /**
+   * Rebuilds the player's 3D model with a new look, keeping its place in the world.
+   * Called live by the Character Creator for every change.
+   */
+  public setPlayerAppearance(appearance: CharacterAppearance, persist: boolean = true) {
+    this.playerAppearance = { ...appearance };
+    if (!isCompanionUnlocked(this.playerAppearance.companion)) this.playerAppearance.companion = 'ninguno';
+    const old = this.playerModel;
+    const next = createPlayerCharacter(this.textures, this.playerAppearance);
+    next.group.position.copy(old.group.position);
+    next.group.rotation.copy(old.group.rotation);
+    this.scene.remove(old.group);
+    disposePlayerCharacter(old);
+    this.scene.add(next.group);
+    this.playerModel = next;
+    this.physics.playerModel = next;
+    this.companionPowers.setCompanion(this.playerAppearance.companion, this.physics);
+    if (persist) saveAppearance(this.playerAppearance);
+  }
+
+  /** Toggles the close-up turntable camera used while the Character Creator is open. */
+  public setCharacterPreview(enabled: boolean) {
+    if (enabled && !this.characterPreview) {
+      // Start on a friendly 3/4 front view of the character
+      this.previewYaw = this.playerModel.group.rotation.y + 0.45;
+      this.previewDistance = 2.35;
+    }
+    this.characterPreview = enabled;
+  }
+
+  /** Uses the companion's temporary power (key G or the HUD button). */
+  public activateCompanionPower() {
+    if (this.gameState !== 'playing') return;
+    this.companionPowers.activate(this.physics, this.stalker ? this.stalker.position : null);
+  }
+
+  /** Fresh run: power ready, snacks restored, companion back to normal size. */
+  private resetCompanionPowers() {
+    this.companionPowers.reset(this.physics);
+    const sprite = this.playerModel.companionSprite;
+    sprite.visible = this.playerAppearance.companion !== 'ninguno';
+    sprite.scale.setScalar(1);
+  }
+
+  private clearPreviewCamera() {
+    this.characterPreview = false;
+    this.previewBlend = 0;
+    if (this.viewOffsetActive) {
+      this.camera.clearViewOffset();
+      this.viewOffsetActive = false;
+    }
+  }
+
+  private buildLevel(level: number): WorldBuildResult {
+    switch (level) {
+      case 2:
+        return buildCosmicWorld(this.levelRoot, this.textures);
+      case 3:
+        return buildSwampWorld(this.levelRoot, this.textures);
+      case 4:
+        return buildAeroWorld(this.levelRoot, this.textures);
+      default:
+        return buildCozyParkourWorld(this.levelRoot, this.textures);
+    }
+  }
+
+  private levelWeather(): WeatherType {
+    return (LEVEL_THEMES[this.currentLevel] ?? LEVEL_THEMES[1]).weather;
+  }
+
+  /** Places a big floating copy of the level's companion at the summit — your reward for finishing. */
+  private addCompanionShowcase() {
+    this.showcase = null;
+    const lvl = LEVELS.find((l) => l.id === this.currentLevel);
+    if (!lvl) return;
+    const temp = createPlayerCharacter(this.textures, { ...this.playerAppearance, companion: lvl.companion });
+    const sprite = temp.companionSprite;
+    temp.group.remove(sprite);
+    disposePlayerCharacter(temp);
+    sprite.visible = true;
+    sprite.scale.setScalar(3.2);
+    const pos = this.world.companionShowcasePos ?? this.world.summitPosition.clone().add(new THREE.Vector3(-4, 3, 0));
+    sprite.position.copy(pos);
+    this.showcaseBase.copy(pos);
+    // Soft glow behind it
+    const glow = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: makeGlowTexture('rgba(255,247,214,0.85)'), transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    glow.scale.setScalar(0.9);
+    sprite.add(glow);
+    this.levelRoot.add(sprite);
+    this.showcase = sprite;
+  }
+
+  private updateShowcase(time: number) {
+    if (!this.showcase) return;
+    this.showcase.position.y = this.showcaseBase.y + Math.sin(time * 1.6) * 0.5;
+    this.showcase.rotation.y = time * 0.6;
+  }
+
+  /** Unloads the current level and builds another one (keeps player, companion & backpack). */
+  public loadLevel(level: number) {
+    if (level === this.currentLevel || !LEVELS.some((l) => l.id === level)) return;
+
+    // Tear down the old world
+    if (this.stalker) {
+      this.stalker.dispose();
+      this.stalker = null;
+    }
+    this.world.enemyManager?.dispose();
+    this.scene.remove(this.levelRoot);
+    const shared = new Set<THREE.Texture>(Object.values(this.textures).filter((t): t is THREE.Texture => t instanceof THREE.Texture));
+    this.levelRoot.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.geometry?.dispose();
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const map = (m as THREE.MeshStandardMaterial).map;
+        if (map && !shared.has(map)) map.dispose();
+        m.dispose();
+      }
+    });
+
+    // Build the new one
+    this.currentLevel = level;
+    this.levelRoot = new THREE.Group();
+    this.scene.add(this.levelRoot);
+    this.world = this.buildLevel(level);
+    this.addCompanionShowcase();
+    this.physics = new ParkourPhysics(this.world, this.playerModel);
+    this.physics.jumpMultiplier = this.itemSystem.superJumpLeft > 0 ? 1.4 : 1;
+    this.companionPowers.reset(this.physics);
+    this.itemSystem.loadSpots(this.world.itemSpots);
+
+    this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
+    const cp0 = this.world.checkpoints[0];
+    this.callbacks.onCheckpointChange(cp0 ? cp0.name : '', 1);
+    // New world: switch the sky almost instantly
+    this.weatherSystem.setWeather(this.levelWeather(), 0.2);
+    soundManager.setWeather(this.levelWeather(), 1.5);
+    this.callbacks.onWeatherChange(this.levelWeather(), true);
+    if (!this.isSoftwareGl) {
+      this.renderer.compile(this.scene, this.camera);
+    }
+  }
+
+  /** From the victory screen: travel to the next level keeping your backpack. */
+  public goToNextLevel() {
+    const next = this.currentLevel + 1;
+    if (!LEVELS.some((l) => l.id === next)) return;
+    this.loadLevel(next);
+    this.beginRun(this.gameMode, false);
+  }
+
+  /** Uses the backpack item in a slot (0-4). */
+  public useItem(slot: number) {
+    if (this.gameState !== 'playing') return;
+    this.itemSystem.use(slot, this.itemCtx);
+  }
+
+  public discardItem(slot: number) {
+    this.itemSystem.discard(slot);
+  }
+
+  public startGame(mode?: GameMode, level?: number) {
+    if (level !== undefined) this.loadLevel(level);
+    this.beginRun(mode, true);
+  }
+
+  private beginRun(mode: GameMode | undefined, freshBackpack: boolean) {
+    this.lastUnlocked = null;
+    this.clearPreviewCamera();
+    this.resetCompanionPowers();
+    this.itemSystem.resetPickups();
+    if (freshBackpack) this.itemSystem.clearInventory(this.itemCtx);
     soundManager.init();
     soundManager.resume();
     if (mode) {
@@ -254,8 +490,13 @@ export class GameEngine {
         this.stalker.resetPosition(this.physics.position);
       }
     }
-    if (this.weatherSystem.currentWeather !== 'golden_hour') {
-      this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Prado del Amanecer');
+    if (this.weatherSystem.currentWeather !== this.levelWeather()) {
+      if (this.currentLevel === 1) {
+        this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Prado del Amanecer');
+      } else {
+        const theme = LEVEL_THEMES[this.currentLevel];
+        this.transitionWeather(theme.weather, 2.5, 'milestone', theme.title, this.world.checkpoints[0]?.name ?? '');
+      }
     }
   }
 
@@ -268,6 +509,7 @@ export class GameEngine {
   public returnToTitle() {
     this.gameState = 'title';
     this.physics.respawnAtCheckpoint(0, true);
+    this.resetCompanionPowers();
     if (this.stalker) {
       this.stalker.dispose();
       this.stalker = null;
@@ -307,6 +549,18 @@ export class GameEngine {
         title: 'Noche Estrellada',
         desc: 'Cielo índigo cósmico y luciérnagas mágicas',
       },
+      aero_day: {
+        title: 'Día Aero',
+        desc: 'Cielo azul brillante, cristal y burbujas',
+      },
+      cosmic: {
+        title: 'Noche Cósmica',
+        desc: 'Estrellas, planetas y nebulosas',
+      },
+      swamp_mist: {
+        title: 'Bruma del Pantano',
+        desc: 'Niebla espesa y luces fantasmales',
+      },
     };
 
     const info = descriptions[weather];
@@ -336,6 +590,9 @@ export class GameEngine {
       this.setGameMode(mode);
     }
     this.physics.respawnAtCheckpoint(0, true);
+    this.resetCompanionPowers();
+    this.itemSystem.resetPickups();
+    this.itemSystem.clearInventory(this.itemCtx);
     this.gameState = 'playing';
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
@@ -349,7 +606,12 @@ export class GameEngine {
         this.stalker.resetPosition(this.physics.position);
       }
     }
-    this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Comienzo en el Prado del Amanecer');
+    if (this.currentLevel === 1) {
+      this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Comienzo en el Prado del Amanecer');
+    } else {
+      const theme = LEVEL_THEMES[this.currentLevel];
+      this.transitionWeather(theme.weather, 2.5, 'milestone', theme.title, `De vuelta a ${this.world.checkpoints[0]?.name ?? 'el inicio'}`);
+    }
   }
 
   public warpToCheckpoint(index: number) {
@@ -362,7 +624,10 @@ export class GameEngine {
       this.stalker.setCheckpointSpeed(index + 1);
     }
     // Smoothly transition weather to match target zone milestone
-    if (index === 0) {
+    if (this.currentLevel !== 1) {
+      const theme = LEVEL_THEMES[this.currentLevel];
+      this.transitionWeather(theme.weather, 2.0, 'milestone', theme.title, this.world.checkpoints[index]?.name ?? '');
+    } else if (index === 0) {
       this.transitionWeather('golden_hour', 2.8, 'milestone', 'Hora Dorada', 'Retorno al Prado del Amanecer');
     } else if (index === 1) {
       this.transitionWeather('sakura_breeze', 2.8, 'milestone', 'Brisa de Sakura', 'Viaje al Dosel Ventoso');
@@ -462,10 +727,16 @@ export class GameEngine {
   }
 
   private handleKeyDown = (e: KeyboardEvent) => {
+    // Typing in a text field (e.g. the character name) must not move or start the game
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
+      return;
+    }
     soundManager.resume();
     this.rawKeys[e.code] = true;
 
     if (this.gameState === 'title') {
+      if (this.characterPreview) return;
       if (e.code === 'Space' || e.code === 'Enter') {
         this.startGame();
       }
@@ -492,6 +763,14 @@ export class GameEngine {
     }
     if (e.code === 'KeyM') {
       soundManager.setMuted(!soundManager.getMuted());
+    }
+    if (e.code === 'KeyG' && !e.repeat) {
+      this.activateCompanionPower();
+    }
+    // Backpack slots 1-5
+    const slotMatch = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);
+    if (slotMatch && !e.repeat) {
+      this.useItem(parseInt(slotMatch[1], 10) - 1);
     }
   };
 
@@ -537,6 +816,11 @@ export class GameEngine {
     this.lastMouseX = e.clientX;
     this.lastMouseY = e.clientY;
 
+    if (this.gameState === 'title' && this.characterPreview) {
+      this.previewYaw -= dx * 0.008;
+      return;
+    }
+
     if (this.gameState === 'photo_mode') {
       this.photoYaw += dx * 0.006;
       this.photoPitch = Math.max(-0.45, Math.min(1.25, this.photoPitch - dy * 0.005));
@@ -552,6 +836,10 @@ export class GameEngine {
   };
 
   private handleWheel = (e: WheelEvent) => {
+    if (this.gameState === 'title' && this.characterPreview) {
+      this.previewDistance = Math.max(1.6, Math.min(4.5, this.previewDistance + e.deltaY * 0.003));
+      return;
+    }
     if (this.gameState === 'photo_mode') {
       this.photoDistance = Math.max(1.8, Math.min(16.0, this.photoDistance + e.deltaY * 0.005));
       return;
@@ -577,7 +865,7 @@ export class GameEngine {
     for (let i = 0; i < e.touches.length; i++) {
       const t = e.touches[i];
       // Avoid bottom-left zone reserved for virtual joystick (unless in photo mode)
-      if (this.gameState === 'photo_mode' || t.clientX > window.innerWidth * 0.35 || t.clientY < window.innerHeight * 0.5) {
+      if (this.gameState === 'photo_mode' || this.gameState === 'title' || t.clientX > window.innerWidth * 0.35 || t.clientY < window.innerHeight * 0.5) {
         this.touchId = t.identifier;
         this.touchStartX = t.clientX;
         this.touchStartY = t.clientY;
@@ -612,7 +900,9 @@ export class GameEngine {
         this.touchStartX = t.clientX;
         this.touchStartY = t.clientY;
 
-        if (this.gameState === 'photo_mode') {
+        if (this.gameState === 'title' && this.characterPreview) {
+          this.previewYaw -= dx * 0.009;
+        } else if (this.gameState === 'photo_mode') {
           this.photoYaw += dx * 0.007;
           this.photoPitch = Math.max(-0.45, Math.min(1.25, this.photoPitch - dy * 0.006));
         } else {
@@ -714,11 +1004,50 @@ export class GameEngine {
       this.cameraYaw = time * 0.15;
       const camX = Math.sin(this.cameraYaw) * 12.0;
       const camZ = Math.cos(this.cameraYaw) * 12.0;
-      this.camera.position.set(camX, 4.0, camZ);
-      this.camera.lookAt(0, 1.2, 0);
+      this._orbitPos.set(camX, 4.0, camZ);
+      this._orbitLook.set(0, 1.2, 0);
+
+      // Character Creator: blend smoothly into a close-up turntable around the player
+      this.previewBlend = THREE.MathUtils.damp(this.previewBlend, this.characterPreview ? 1 : 0, 4.0, dt);
+      if (this.previewBlend > 0.001) {
+        if (this.characterPreview && !this.isMouseDragging) this.previewYaw += dt * 0.3;
+        const p = this.physics.position;
+        const h = this.playerAppearance.height;
+        const w = this.container.clientWidth;
+        const hgt = this.container.clientHeight;
+        const portrait = hgt > w;
+        const dist = this.previewDistance * (portrait ? 1.1 : 1.0);
+        this._previewPos.set(
+          p.x + Math.sin(this.previewYaw) * dist,
+          p.y + 0.95 * h + dist * 0.12,
+          p.z + Math.cos(this.previewYaw) * dist
+        );
+        this._previewLook.set(p.x, p.y + 0.68 * h, p.z);
+
+        const e = this.previewBlend * this.previewBlend * (3 - 2 * this.previewBlend); // smoothstep
+        this.camera.position.lerpVectors(this._orbitPos, this._previewPos, e);
+        this.camera.lookAt(this._orbitLook.lerp(this._previewLook, e));
+
+        // Shift the framing so the character isn't hidden behind the creator panel
+        if (portrait) {
+          this.camera.setViewOffset(w, hgt, 0, hgt * 0.27 * e, w, hgt);
+        } else {
+          this.camera.setViewOffset(w, hgt, w * 0.17 * e, 0, w, hgt);
+        }
+        this.viewOffsetActive = true;
+      } else {
+        this.camera.position.copy(this._orbitPos);
+        this.camera.lookAt(this._orbitLook);
+        if (this.viewOffsetActive) {
+          this.camera.clearViewOffset();
+          this.viewOffsetActive = false;
+        }
+      }
 
       this.playerModel.updateAnimation(0, true, dt, time);
       this.weatherSystem.update(dt, new THREE.Vector3(0, 0, 0), time);
+      this.world.levelUpdate?.(dt, time);
+      this.updateShowcase(time);
       return;
     }
 
@@ -745,6 +1074,8 @@ export class GameEngine {
           this.world.enemyManager.update(dt, time, this.physics.position);
         }
         this.playerModel.updateAnimation(0, true, dt, time);
+        this.world.levelUpdate?.(dt, time);
+        this.updateShowcase(time);
       }
 
       // Smooth Orbit & Framing Camera
@@ -841,7 +1172,10 @@ export class GameEngine {
       if (!this.stalker) {
         this.stalker = new AetherStalker(this.scene, this.physics.position);
       }
-      this.stalker.update(dt, time, this.physics.position, () => {
+      // While Chispa's lure glows, the Stalker chases the lure instead of the player
+      const lure = this.companionPowers.lureTarget;
+      this.stalker.update(dt, time, lure ?? this.physics.position, () => {
+        if (lure) return; // it only bumped into the lure
         // Caught by Stalker! Respawn player at checkpoint with warning notice
         this.physics.respawnAtCheckpoint();
         this.callbacks.onWeatherNotice?.({
@@ -851,10 +1185,24 @@ export class GameEngine {
           reason: 'manual',
         });
       });
-      this.callbacks.onStalkerProximity?.(
-        this.stalker.distanceToPlayer,
-        this.stalker.warningLevel
-      );
+      if (lure) {
+        const realDist = this.stalker.position.distanceTo(this.physics.position);
+        this.callbacks.onStalkerProximity?.(realDist, realDist < 8 ? 'danger' : realDist < 18 ? 'caution' : 'none');
+      } else {
+        this.callbacks.onStalkerProximity?.(
+          this.stalker.distanceToPlayer,
+          this.stalker.warningLevel
+        );
+      }
+    }
+
+    // 5c. Companion powers (float, speed, lure, rescue), backpack pickups & level decor
+    this.companionPowers.update(dt, time, this.physics, this.playerModel.companionSprite);
+    this.itemSystem.update(dt, this.physics.position, this.itemCtx);
+    this.world.levelUpdate?.(dt, time);
+    this.updateShowcase(time);
+    if (this.world.enemyManager) {
+      this.world.enemyManager.distractTarget = this.companionPowers.lureTarget;
     }
 
     // 6. Physics Step
@@ -874,8 +1222,10 @@ export class GameEngine {
           this.stalker.setCheckpointSpeed(cpIdx + 1);
         }
 
-        // Milestone-triggered smooth weather transitions
-        if (cpIdx === 1) {
+        // Milestone-triggered smooth weather transitions (level 1 only; Valle Aero stays sunny)
+        if (this.currentLevel !== 1) {
+          // no weather change
+        } else if (cpIdx === 1) {
           // Checkpoint 2: Windy Canopy
           this.transitionWeather(
             'sakura_breeze',
@@ -896,7 +1246,8 @@ export class GameEngine {
         }
       },
       () => {
-        // Milestone: Summit Victory!
+        // Milestone: Summit Victory! (finishing a level unlocks its companion)
+        this.lastUnlocked = markLevelComplete(this.currentLevel);
         this.gameState = 'victory';
         this.callbacks.onStateChange('victory');
         soundManager.playVictory();
@@ -904,13 +1255,8 @@ export class GameEngine {
           this.stalker.isStunned = true;
           this.stalker.stunTimer = 999;
         }
-        this.transitionWeather(
-          'starlit_night',
-          4.5,
-          'milestone',
-          'Noche Estrellada',
-          '¡Cima alcanzada en el Mirador Celestial!'
-        );
+        const theme = LEVEL_THEMES[this.currentLevel] ?? LEVEL_THEMES[1];
+        this.transitionWeather(theme.victoryWeather, 4.5, 'milestone', theme.victoryTitle, theme.victoryDesc);
       }
     );
 
@@ -974,6 +1320,8 @@ export class GameEngine {
     dom.removeEventListener('wheel', this.handleWheel);
 
     this.stalker?.dispose();
+    this.companionPowers?.dispose();
+    this.itemSystem?.dispose();
     this.world.enemyManager?.dispose();
     this.weatherSystem.dispose();
     this.renderer.dispose();

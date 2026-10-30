@@ -28,6 +28,7 @@ import {
   UpdraftVortexModel,
 } from './models';
 import { ProceduralTextures } from './textures';
+import { ItemSpot } from './items';
 
 export interface PlatformItem {
   id: string;
@@ -80,10 +81,16 @@ export interface WorldBuildResult {
   decorativeMeshes: THREE.Object3D[];
   summitPosition: THREE.Vector3;
   enemyManager: EnemyManager;
+  /** Where backpack items (berries, walnuts…) can be picked up */
+  itemSpots: ItemSpot[];
+  /** Where the level's companion waits at the summit (defaults near the summit) */
+  companionShowcasePos?: THREE.Vector3;
+  /** Optional per-frame animation for level decorations (waterfalls, bubbles…) */
+  levelUpdate?: (dt: number, time: number) => void;
 }
 
 export function buildCozyParkourWorld(
-  scene: THREE.Scene,
+  scene: THREE.Object3D,
   textures: ProceduralTextures
 ): WorldBuildResult {
   const platforms: PlatformItem[] = [];
@@ -718,5 +725,20 @@ export function buildCozyParkourWorld(
     decorativeMeshes,
     summitPosition: summitPos,
     enemyManager,
+    companionShowcasePos: new THREE.Vector3(18.0, summitY + 9.5, 123.0),
+    itemSpots: [
+      // Magic berries (feed your companion)
+      { type: 'baya', pos: new THREE.Vector3(-2.5, 0.95, 5.0) },
+      { type: 'baya', pos: new THREE.Vector3(-0.5, 6.95, 35.0) },
+      { type: 'baya', pos: new THREE.Vector3(2.0, 8.15, 47.5) },
+      { type: 'baya', pos: new THREE.Vector3(4.5, 11.35, 70.5) },
+      { type: 'baya', pos: new THREE.Vector3(-2.5, 18.95, 85.5) },
+      { type: 'baya', pos: new THREE.Vector3(-14.5, 25.45, 104.0) },
+      { type: 'baya', pos: new THREE.Vector3(3.5, 33.15, 125.5) },
+      // Energetic walnuts (super jump)
+      { type: 'nuez', pos: new THREE.Vector3(2.5, 0.95, 4.5) },
+      { type: 'nuez', pos: new THREE.Vector3(2.0, 8.15, 44.0) },
+      { type: 'nuez', pos: new THREE.Vector3(-20.0, 25.45, 107.5) },
+    ],
   };
 }
