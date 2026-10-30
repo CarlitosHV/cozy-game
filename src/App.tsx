@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import React, { useRef, useEffect, useState } from 'react';
-import { GameEngine, GameState } from './game/GameEngine';
+import { GameEngine, GameState, GameMode } from './game/GameEngine';
 import { GameHUD } from './components/GameHUD';
 import { WeatherType } from './audio/SoundtrackSynthesizer';
 
@@ -170,6 +170,16 @@ export default function App() {
     }, 150);
   };
 
+  // Game Mode, Time Trial, and Stalker States
+  const [gameMode, setGameMode] = useState<GameMode>('free');
+  const [timeRemaining, setTimeRemaining] = useState<number>(90);
+  const [timeBonus, setTimeBonus] = useState<{ amount: number; reason: string; timestamp: number } | null>(null);
+  const [stalkerDistance, setStalkerDistance] = useState<number>(24);
+  const [stalkerWarningLevel, setStalkerWarningLevel] = useState<'none' | 'caution' | 'danger'>('none');
+
+  const weatherTimerRef = useRef<number | null>(null);
+  const timeBonusTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!mountRef.current) return;
 
@@ -189,13 +199,37 @@ export default function App() {
         setIsWeatherTransitioning(Boolean(isTransitioning));
       },
       onWeatherNotice: (notice) => {
+        if (weatherTimerRef.current) window.clearTimeout(weatherTimerRef.current);
         setWeatherNotice(notice);
+        weatherTimerRef.current = window.setTimeout(() => {
+          setWeatherNotice(null);
+        }, 1400);
+      },
+      onModeChange: (mode) => {
+        setGameMode(mode);
+      },
+      onTimeTrialTick: (time, bonus) => {
+        setTimeRemaining(time);
+        if (bonus) {
+          if (timeBonusTimerRef.current) window.clearTimeout(timeBonusTimerRef.current);
+          const bonusObj = { amount: bonus.seconds, reason: bonus.reason, timestamp: Date.now() };
+          setTimeBonus(bonusObj);
+          timeBonusTimerRef.current = window.setTimeout(() => {
+            setTimeBonus(null);
+          }, 1100);
+        }
+      },
+      onStalkerProximity: (distance, warningLevel) => {
+        setStalkerDistance(distance);
+        setStalkerWarningLevel(warningLevel);
       },
     });
 
     engineRef.current = engine;
 
     return () => {
+      if (weatherTimerRef.current) window.clearTimeout(weatherTimerRef.current);
+      if (timeBonusTimerRef.current) window.clearTimeout(timeBonusTimerRef.current);
       engine.dispose();
       engineRef.current = null;
     };
@@ -232,6 +266,11 @@ export default function App() {
       <GameHUD
         engine={engineRef.current}
         gameState={gameState}
+        gameMode={gameMode}
+        timeRemaining={timeRemaining}
+        timeBonus={timeBonus}
+        stalkerDistance={stalkerDistance}
+        stalkerWarningLevel={stalkerWarningLevel}
         checkpointName={checkpointName}
         checkpointIndex={checkpointIndex}
         collectedCount={collectedCount}
@@ -239,6 +278,7 @@ export default function App() {
         currentWeather={currentWeather}
         isWeatherTransitioning={isWeatherTransitioning}
         weatherNotice={weatherNotice}
+        onDismissWeatherNotice={() => setWeatherNotice(null)}
         isFullscreen={isFullscreen}
         toggleFullscreen={toggleFullscreen}
         isSimulatedLandscape={isSimulatedLandscape}

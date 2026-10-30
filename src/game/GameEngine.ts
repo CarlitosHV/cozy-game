@@ -11,8 +11,10 @@ import { createPlayerCharacter, PlayerCharacterModel } from './models';
 import { ParkourPhysics, PlayerInput } from './physics';
 import { createProceduralTextures, ProceduralTextures } from './textures';
 import { WeatherSystem } from './weather';
+import { AetherStalker } from './enemies';
 
-export type GameState = 'title' | 'playing' | 'paused' | 'victory' | 'photo_mode';
+export type GameMode = 'free' | 'time_trial' | 'chase';
+export type GameState = 'title' | 'playing' | 'paused' | 'victory' | 'photo_mode' | 'game_over';
 
 export interface WeatherNotice {
   weather: WeatherType;
@@ -27,6 +29,9 @@ export interface GameEngineCallbacks {
   onCollectiblesChange: (collected: number, total: number) => void;
   onWeatherChange: (weather: WeatherType, isTransitioning?: boolean) => void;
   onWeatherNotice?: (notice: WeatherNotice) => void;
+  onModeChange?: (mode: GameMode) => void;
+  onTimeTrialTick?: (timeRemaining: number, bonusNotice?: { seconds: number; reason: string }) => void;
+  onStalkerProximity?: (distance: number, warningLevel: 'none' | 'caution' | 'danger') => void;
 }
 
 export class GameEngine {
@@ -49,10 +54,14 @@ export class GameEngine {
   public physics!: ParkourPhysics;
   public weatherSystem!: WeatherSystem;
 
-  // Game state
+  // Game state & modes
   public gameState: GameState = 'title';
+  public gameMode: GameMode = 'free';
+  public timeRemaining: number = 90;
+  public stalker: AetherStalker | null = null;
   private frameId: number = 0;
   private isDisposed: boolean = false;
+
 
   // Camera Orbit & Follow
   public cameraYaw: number = 0;
@@ -202,20 +211,68 @@ export class GameEngine {
     this.startLoop();
   }
 
-  public startGame() {
+  public setGameMode(mode: GameMode) {
+    this.gameMode = mode;
+    if (mode === 'time_trial') {
+      this.timeRemaining = 90;
+      if (this.stalker) {
+        this.stalker.dispose();
+        this.stalker = null;
+      }
+      this.callbacks.onTimeTrialTick?.(this.timeRemaining);
+    } else if (mode === 'chase') {
+      if (!this.stalker) {
+        this.stalker = new AetherStalker(this.scene, this.physics.position);
+      } else {
+        this.stalker.resetPosition(this.physics.position);
+      }
+    } else {
+      if (this.stalker) {
+        this.stalker.dispose();
+        this.stalker = null;
+      }
+    }
+    this.callbacks.onModeChange?.(mode);
+  }
+
+  public startGame(mode?: GameMode) {
     soundManager.init();
     soundManager.resume();
+    if (mode) {
+      this.setGameMode(mode);
+    }
     this.gameState = 'playing';
+    this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
+    if (this.gameMode === 'time_trial') {
+      this.timeRemaining = 90;
+      this.callbacks.onTimeTrialTick?.(this.timeRemaining);
+    } else if (this.gameMode === 'chase') {
+      if (!this.stalker) {
+        this.stalker = new AetherStalker(this.scene, this.physics.position);
+      } else {
+        this.stalker.resetPosition(this.physics.position);
+      }
+    }
     if (this.weatherSystem.currentWeather !== 'golden_hour') {
       this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Prado del Amanecer');
     }
   }
 
   public setPaused(paused: boolean) {
-    if (this.gameState === 'title' || this.gameState === 'victory') return;
+    if (this.gameState === 'title' || this.gameState === 'victory' || this.gameState === 'game_over') return;
     this.gameState = paused ? 'paused' : 'playing';
     this.callbacks.onStateChange(this.gameState);
+  }
+
+  public returnToTitle() {
+    this.gameState = 'title';
+    this.physics.respawnAtCheckpoint(0, true);
+    if (this.stalker) {
+      this.stalker.dispose();
+      this.stalker = null;
+    }
+    this.callbacks.onStateChange('title');
   }
 
   /**
@@ -267,11 +324,31 @@ export class GameEngine {
     this.transitionWeather(weather, 3.2, 'manual');
   }
 
-  public restartGame() {
+  public addTimeTrialBonus(seconds: number, reason: string) {
+    if (this.gameMode !== 'time_trial') return;
+    this.timeRemaining += seconds;
+    soundManager.playTimeBonus();
+    this.callbacks.onTimeTrialTick?.(this.timeRemaining, { seconds, reason });
+  }
+
+  public restartGame(mode?: GameMode) {
+    if (mode) {
+      this.setGameMode(mode);
+    }
     this.physics.respawnAtCheckpoint(0, true);
     this.gameState = 'playing';
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
+    if (this.gameMode === 'time_trial') {
+      this.timeRemaining = 90;
+      this.callbacks.onTimeTrialTick?.(this.timeRemaining);
+    } else if (this.gameMode === 'chase') {
+      if (!this.stalker) {
+        this.stalker = new AetherStalker(this.scene, this.physics.position);
+      } else {
+        this.stalker.resetPosition(this.physics.position);
+      }
+    }
     this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Comienzo en el Prado del Amanecer');
   }
 
@@ -279,6 +356,10 @@ export class GameEngine {
     this.physics.respawnAtCheckpoint(index, true);
     if (this.world.checkpoints[index]) {
       this.callbacks.onCheckpointChange(this.world.checkpoints[index].name, index + 1);
+    }
+    if (this.gameMode === 'chase' && this.stalker) {
+      this.stalker.resetPosition(this.physics.position);
+      this.stalker.setCheckpointSpeed(index + 1);
     }
     // Smoothly transition weather to match target zone milestone
     if (index === 0) {
@@ -288,7 +369,7 @@ export class GameEngine {
     } else if (index === 2) {
       this.transitionWeather('cozy_rain', 2.8, 'milestone', 'Lluvia Acogedora', 'Viaje a la Aguja Celestial');
     }
-    if (this.gameState === 'paused' || this.gameState === 'photo_mode') {
+    if (this.gameState === 'paused' || this.gameState === 'photo_mode' || this.gameState === 'game_over') {
       this.gameState = 'playing';
       this.callbacks.onStateChange('playing');
     }
@@ -738,6 +819,44 @@ export class GameEngine {
       col.update(dt);
     }
 
+    // 5b. Game Mode Execution (Time Trial Countdown & Chase Stalker)
+    if (this.gameMode === 'time_trial') {
+      const prevSec = Math.floor(this.timeRemaining);
+      this.timeRemaining -= dt;
+      const curSec = Math.floor(this.timeRemaining);
+      if (prevSec !== curSec) {
+        this.callbacks.onTimeTrialTick?.(Math.max(0, this.timeRemaining));
+        if (curSec <= 15 && curSec > 0) {
+          soundManager.playTimeWarning();
+        }
+      }
+      if (this.timeRemaining <= 0) {
+        this.timeRemaining = 0;
+        this.gameState = 'game_over';
+        this.callbacks.onStateChange('game_over');
+        soundManager.playGameOver();
+        return;
+      }
+    } else if (this.gameMode === 'chase') {
+      if (!this.stalker) {
+        this.stalker = new AetherStalker(this.scene, this.physics.position);
+      }
+      this.stalker.update(dt, time, this.physics.position, () => {
+        // Caught by Stalker! Respawn player at checkpoint with warning notice
+        this.physics.respawnAtCheckpoint();
+        this.callbacks.onWeatherNotice?.({
+          weather: this.weatherSystem.currentWeather,
+          title: '¡Acechador te atrapó!',
+          desc: 'La sombra te lanzó al vacío. Reapareces en el santuario.',
+          reason: 'manual',
+        });
+      });
+      this.callbacks.onStalkerProximity?.(
+        this.stalker.distanceToPlayer,
+        this.stalker.warningLevel
+      );
+    }
+
     // 6. Physics Step
     const prevCollectibles = this.physics.collectedCount;
     this.physics.update(
@@ -747,6 +866,13 @@ export class GameEngine {
       (cpName) => {
         const cpIdx = this.physics.currentCheckpointIndex;
         this.callbacks.onCheckpointChange(cpName, cpIdx + 1);
+
+        // Mode specific checkpoint bonuses
+        if (this.gameMode === 'time_trial') {
+          this.addTimeTrialBonus(15, 'Punto de Control (+15s)');
+        } else if (this.gameMode === 'chase' && this.stalker) {
+          this.stalker.setCheckpointSpeed(cpIdx + 1);
+        }
 
         // Milestone-triggered smooth weather transitions
         if (cpIdx === 1) {
@@ -773,6 +899,11 @@ export class GameEngine {
         // Milestone: Summit Victory!
         this.gameState = 'victory';
         this.callbacks.onStateChange('victory');
+        soundManager.playVictory();
+        if (this.stalker) {
+          this.stalker.isStunned = true;
+          this.stalker.stunTimer = 999;
+        }
         this.transitionWeather(
           'starlit_night',
           4.5,
@@ -788,6 +919,9 @@ export class GameEngine {
         this.physics.collectedCount,
         this.physics.totalCollectibles
       );
+      if (this.gameMode === 'time_trial') {
+        this.addTimeTrialBonus(8, 'Reliquia (+8s)');
+      }
     }
 
     // 7. Update Weather & Background Clouds
@@ -839,6 +973,7 @@ export class GameEngine {
     window.removeEventListener('mouseup', this.handleMouseUp);
     dom.removeEventListener('wheel', this.handleWheel);
 
+    this.stalker?.dispose();
     this.world.enemyManager?.dispose();
     this.weatherSystem.dispose();
     this.renderer.dispose();
@@ -847,3 +982,4 @@ export class GameEngine {
     }
   }
 }
+

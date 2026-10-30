@@ -39,8 +39,14 @@ import {
   RotateCw,
   Undo2,
   Redo2,
+  Timer,
+  Ghost,
+  Flame,
+  Clock,
+  AlertTriangle,
+  ShieldAlert,
 } from 'lucide-react';
-import { GameEngine, GameState } from '../game/GameEngine';
+import { GameEngine, GameState, GameMode } from '../game/GameEngine';
 import { WeatherType, soundManager } from '../audio/SoundtrackSynthesizer';
 
 export type PhotoFilter =
@@ -109,6 +115,11 @@ export const PHOTO_FRAMES: { id: PhotoFrame; name: string; desc: string }[] = [
 interface GameHUDProps {
   engine: GameEngine | null;
   gameState: GameState;
+  gameMode?: GameMode;
+  timeRemaining?: number;
+  timeBonus?: { amount: number; reason: string; timestamp: number } | null;
+  stalkerDistance?: number;
+  stalkerWarningLevel?: 'none' | 'caution' | 'danger';
   checkpointName: string;
   checkpointIndex: number;
   collectedCount: number;
@@ -121,6 +132,7 @@ interface GameHUDProps {
     desc: string;
     reason: 'milestone' | 'manual';
   } | null;
+  onDismissWeatherNotice?: () => void;
   isFullscreen?: boolean;
   toggleFullscreen?: () => void;
   isSimulatedLandscape?: boolean;
@@ -339,6 +351,11 @@ function renderFinalPhotoWithFrame(
 export const GameHUD: React.FC<GameHUDProps> = ({
   engine,
   gameState,
+  gameMode = 'free',
+  timeRemaining = 90,
+  timeBonus = null,
+  stalkerDistance = 999,
+  stalkerWarningLevel = 'none',
   checkpointName,
   checkpointIndex,
   collectedCount,
@@ -346,6 +363,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   currentWeather,
   isWeatherTransitioning = false,
   weatherNotice = null,
+  onDismissWeatherNotice,
   isFullscreen = false,
   toggleFullscreen,
   isSimulatedLandscape = false,
@@ -353,10 +371,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   isPortrait = false,
 }) => {
   const [isMuted, setIsMuted] = useState(false);
-  // Default to collapsed dock on mobile screens to maximize touch canvas space
-  const [isDockCollapsed, setIsDockCollapsed] = useState(() => {
-    return typeof window !== 'undefined' && window.innerWidth < 768;
-  });
+  const [selectedMode, setSelectedMode] = useState<GameMode>('free');
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isSprintActive, setIsSprintActive] = useState(false);
@@ -367,7 +382,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((curr) => (curr === msg ? null : curr));
-    }, 2400);
+    }, 1200);
   };
 
   // Photo Mode Studio State
@@ -436,14 +451,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     }
   }, [gameState, photoFilter]);
 
-  // Global Keyboard shortcuts: H (dock/UI), Space (snap), F (fullscreen), O (orientation)
+  // Global Keyboard shortcuts: H (photo UI), Space (snap), F (fullscreen), O (orientation)
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.code === 'KeyH') {
         if (gameState === 'photo_mode') {
           setHidePhotoUI((prev) => !prev);
-        } else {
-          setIsDockCollapsed((prev) => !prev);
         }
       }
       if (e.code === 'KeyF') {
@@ -466,7 +479,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     return () => window.removeEventListener('keydown', handleKey);
   }, [gameState, photoFilter, photoFrame, capturedPhotoUrl, isFullscreen, isSimulatedLandscape, toggleFullscreen, toggleOrientation]);
 
-
   const handleSnapPhoto = async () => {
     if (!engine) return;
     setIsFlashing(true);
@@ -484,7 +496,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
-    const s = secs % 60;
+    const s = Math.floor(secs % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
@@ -494,13 +506,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     soundManager.setMuted(next);
   };
 
-  const handleStartGame = () => {
-    if (engine) engine.startGame();
+  const handleStartGame = (modeToStart?: GameMode) => {
+    const targetMode = modeToStart ?? selectedMode;
+    if (engine) engine.startGame(targetMode);
   };
 
-  const handleRestart = () => {
+  const handleRestart = (modeToRestart?: GameMode) => {
     setElapsedTime(0);
-    if (engine) engine.restartGame();
+    const targetMode = modeToRestart ?? gameMode;
+    if (engine) engine.restartGame(targetMode);
+  };
+
+  const handleReturnToTitle = () => {
+    setElapsedTime(0);
+    if (engine) engine.returnToTitle();
   };
 
   const handleWeatherSelect = (w: WeatherType) => {
@@ -563,21 +582,105 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 className="text-xs sm:text-sm font-light tracking-[0.3em] uppercase"
                 fill="#ffd166"
               >
-                Parkour Relajante en las Nubes
+                Parkour Aéreo en las Nubes
               </text>
             </svg>
 
-            <p className="text-stone-300 text-xs sm:text-sm max-w-md font-light leading-relaxed mb-6 px-4">
-              Salta por plataformas flotantes, rebota en hongos gigantes, surca corrientes de viento y supera obstáculos físicos hasta el Mirador Celestial.
+            <p className="text-stone-300 text-xs sm:text-sm max-w-md font-light leading-relaxed mb-4 px-4">
+              Salta por plataformas flotantes, rebota en hongos elásticos y supera obstáculos hacia el Mirador Celestial.
             </p>
+
+            {/* Game Mode Selector */}
+            <div className="w-full max-w-xl flex flex-col gap-2 mb-6 px-2">
+              <span className="text-[11px] text-amber-300 font-bold uppercase tracking-wider text-center">
+                Elige tu Modo de Juego:
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                {/* 1. Modo Libre */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedMode('free')}
+                  className={`flex flex-col text-left p-3 rounded-2xl border transition-all cursor-pointer ${
+                    selectedMode === 'free'
+                      ? 'bg-emerald-950/50 border-emerald-400 shadow-lg shadow-emerald-900/30 ring-1 ring-emerald-400/50'
+                      : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 text-emerald-400">
+                      <Sparkles className="w-4 h-4" />
+                      <span className="text-xs font-bold text-stone-100">Modo Libre</span>
+                    </div>
+                    {selectedMode === 'free' && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-stone-300 leading-snug">
+                    Explora a tu ritmo sin prisas ni enemigos. Clima dinámico por hitos.
+                  </p>
+                </button>
+
+                {/* 2. Modo Contrarreloj */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedMode('time_trial')}
+                  className={`flex flex-col text-left p-3 rounded-2xl border transition-all cursor-pointer ${
+                    selectedMode === 'time_trial'
+                      ? 'bg-amber-950/50 border-amber-400 shadow-lg shadow-amber-900/30 ring-1 ring-amber-400/50'
+                      : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 text-amber-400">
+                      <Clock className="w-4 h-4" />
+                      <span className="text-xs font-bold text-stone-100">Contrarreloj</span>
+                    </div>
+                    {selectedMode === 'time_trial' && (
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-stone-300 leading-snug">
+                    90s al iniciar. +8s por reliquia, +15s por checkpoint. ¡Corre!
+                  </p>
+                </button>
+
+                {/* 3. Modo Persecución / Acechador */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedMode('chase')}
+                  className={`flex flex-col text-left p-3 rounded-2xl border transition-all cursor-pointer ${
+                    selectedMode === 'chase'
+                      ? 'bg-rose-950/50 border-rose-400 shadow-lg shadow-rose-900/30 ring-1 ring-rose-400/50'
+                      : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 text-rose-400">
+                      <Ghost className="w-4 h-4" />
+                      <span className="text-xs font-bold text-stone-100">Persecución</span>
+                    </div>
+                    {selectedMode === 'chase' && (
+                      <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse" />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-stone-300 leading-snug">
+                    Un Acechador te persigue por todo el mapa. Si te alcanza, te expulsará.
+                  </p>
+                </button>
+              </div>
+            </div>
 
             {/* Start CTA Button */}
             <button
-              onClick={handleStartGame}
+              onClick={() => handleStartGame(selectedMode)}
               className="group flex items-center gap-3 px-8 py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-base transition-all transform active:scale-95 shadow-lg shadow-amber-950/40 cursor-pointer"
             >
               <Play className="w-5 h-5 fill-stone-950" />
-              <span>Comenzar Viaje / Start</span>
+              <span>
+                {selectedMode === 'free' && 'Comenzar Modo Libre'}
+                {selectedMode === 'time_trial' && 'Comenzar Contrarreloj'}
+                {selectedMode === 'chase' && 'Comenzar Persecución'}
+              </span>
               <span className="hidden sm:inline-block text-xs px-2 py-0.5 rounded bg-amber-600/40 text-stone-900 border border-amber-600/60 font-mono">
                 Space / Enter
               </span>
@@ -604,10 +707,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* ======================================================== */}
       {gameState === 'playing' && (
         <>
-          {/* Top-Left Cluster: Checkpoint & Collectibles */}
+          {/* Top-Left Cluster: Mode Badge, Checkpoint, Collectibles, Time/Radar */}
           <div className="absolute top-4 left-4 flex flex-col gap-2 pointer-events-auto">
             {/* Stage & Checkpoint Badge */}
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-900/80 border border-stone-800/80 text-stone-200 text-xs shadow-md">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-900/85 border border-stone-800/80 text-stone-200 text-xs shadow-md backdrop-blur-md">
               <MapPin className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
               <div className="flex flex-col">
                 <span className="text-[9px] text-stone-400 font-medium uppercase tracking-wider">
@@ -617,8 +720,64 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             </div>
 
+            {/* Mode-Specific Status Banner */}
+            {gameMode === 'time_trial' && (
+              <div
+                className={`relative flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-colors shadow-md backdrop-blur-md ${
+                  timeRemaining <= 20
+                    ? 'bg-red-950/90 border-red-500/80 text-red-200 animate-pulse'
+                    : 'bg-amber-950/80 border-amber-500/50 text-amber-200'
+                }`}
+              >
+                <Clock className={`w-3.5 h-3.5 ${timeRemaining <= 20 ? 'text-red-400' : 'text-amber-400'}`} />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">Tiempo:</span>
+                  <span className="font-mono font-black text-sm tracking-wide">
+                    {timeRemaining > 0 ? `${timeRemaining}s` : '0s'}
+                  </span>
+                </div>
+
+                {/* Animated Time Bonus Pill */}
+                {timeBonus && (
+                  <div className="absolute left-full ml-2 px-2.5 py-0.5 rounded-full bg-emerald-500 text-stone-950 text-[11px] font-extrabold shadow-lg animate-bounce whitespace-nowrap">
+                    +{timeBonus.amount}s {timeBonus.reason}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {gameMode === 'chase' && (
+              <div
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all shadow-md backdrop-blur-md ${
+                  stalkerWarningLevel === 'danger'
+                    ? 'bg-rose-950/95 border-rose-500 text-rose-200 animate-pulse ring-2 ring-rose-500/50'
+                    : stalkerWarningLevel === 'caution'
+                    ? 'bg-amber-950/85 border-amber-500/60 text-amber-200'
+                    : 'bg-stone-900/85 border-stone-800 text-stone-300'
+                }`}
+              >
+                {stalkerWarningLevel === 'danger' ? (
+                  <Flame className="w-4 h-4 text-rose-400 animate-bounce" />
+                ) : (
+                  <Ghost className="w-3.5 h-3.5 text-rose-400" />
+                )}
+                <div className="flex flex-col">
+                  <span className="text-[9px] font-bold uppercase tracking-wider">
+                    {stalkerWarningLevel === 'danger'
+                      ? '🚨 ¡ACECHADOR CERCA!'
+                      : stalkerWarningLevel === 'caution'
+                      ? '⚠️ Acechador Próximo'
+                      : 'Acechador Sombrío'}
+                  </span>
+                  <span className="font-mono text-xs font-semibold">
+                    {stalkerDistance < 100 ? `${stalkerDistance.toFixed(1)}m` : 'Buscándote...'}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Sun Crystals / Acorns Collectibles & Timer */}
-            <div className="flex items-center gap-3 px-3 py-1.5 rounded-xl bg-stone-900/80 border border-stone-800/80 text-xs text-stone-300 shadow-md">
+            <div className="flex items-center gap-3 px-3 py-1.5 rounded-xl bg-stone-900/85 border border-stone-800/80 text-xs text-stone-300 shadow-md backdrop-blur-md">
               <div className="flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
                 <span className="tabular-nums font-semibold text-amber-300">
@@ -627,6 +786,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
               <div className="w-[1px] h-3 bg-stone-700/60" />
               <div className="flex items-center gap-1 font-mono text-stone-300">
+                <Timer className="w-3 h-3 text-stone-400" />
                 <span>{formatTime(elapsedTime)}</span>
               </div>
             </div>
@@ -678,24 +838,22 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </button>
           </div>
 
-          {/* Weather Transition & Milestone Toast */}
-          {weatherNotice && (
-            <div className="absolute top-16 left-1/2 -translate-x-1/2 pointer-events-none z-30 transition-all duration-500 ease-out animate-in fade-in slide-in-from-top-4">
-              <div className="flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-stone-900/95 border border-amber-500/40 text-stone-100 shadow-2xl backdrop-blur-md">
-                <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
-                <div className="flex flex-col">
-                  <span className="text-[10px] text-amber-300 font-medium uppercase tracking-wider">
-                    {weatherNotice.reason === 'milestone' ? 'Hito Alcanzado' : 'Transición de Clima'}
-                  </span>
-                  <span className="text-xs font-semibold text-white">
-                    {weatherNotice.title} · {weatherNotice.desc}
-                  </span>
-                </div>
-                {isWeatherTransitioning && (
-                  <span className="text-[10px] text-stone-400 font-mono ml-1 px-1.5 py-0.5 rounded bg-stone-800">
-                    Transicionando...
-                  </span>
-                )}
+          {/* Discreet, Fast-Dismissing Micro Toast (Milestones & In-Game Alerts) */}
+          {(weatherNotice || toastMessage) && (
+            <div
+              onClick={() => {
+                if (onDismissWeatherNotice) onDismissWeatherNotice();
+                setToastMessage(null);
+              }}
+              className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-auto z-30 transition-all duration-200 ease-out animate-in fade-in zoom-in-95 cursor-pointer max-w-[80vw]"
+              title="Toca para descartar"
+            >
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-stone-900/90 border border-amber-500/35 text-stone-100 text-[11px] font-medium shadow-lg backdrop-blur-md">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="truncate">
+                  {toastMessage || (weatherNotice ? `${weatherNotice.title}` : '')}
+                </span>
+                <span className="text-[9px] text-stone-500 hover:text-stone-300 ml-1">✕</span>
               </div>
             </div>
           )}
@@ -757,126 +915,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             </>
           )}
-
-          {/* ======================================================== */}
-          {/* 4. COLLAPSIBLE BOTTOM DOCK (Weather, Warps, Zen Mode)    */}
-          {/* ======================================================== */}
-          <div
-            className={`absolute bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 pointer-events-auto flex flex-col items-center transition-transform duration-300 ease-out max-w-[94vw] z-10 ${
-              isDockCollapsed ? 'translate-y-[calc(100%-28px)]' : 'translate-y-0'
-            }`}
-          >
-            {/* Collapse / Expand Tab Handle */}
-            <button
-              onClick={() => setIsDockCollapsed(!isDockCollapsed)}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-t-lg bg-stone-900/90 border-t border-x border-stone-800 text-[11px] text-stone-400 hover:text-stone-200 cursor-pointer shadow-md"
-            >
-              {isDockCollapsed ? (
-                <>
-                  <ChevronUp className="w-3.5 h-3.5" />
-                  <span>Clima / Dock (H)</span>
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="w-3.5 h-3.5" />
-                  <span>Modo Zen (H)</span>
-                </>
-              )}
-            </button>
-
-            {/* Main Dock Container */}
-            <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 px-3 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-stone-900/90 border border-stone-800/90 shadow-xl">
-              {/* Weather Presets */}
-              <div className="flex items-center gap-1 bg-stone-950/60 p-1 rounded-xl border border-stone-800/60">
-                <button
-                  onClick={() => handleWeatherSelect('golden_hour')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    currentWeather === 'golden_hour'
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
-                  title="Hora Dorada: Luz cálida y polen brillante"
-                >
-                  <Sun className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="hidden sm:inline">Dorado</span>
-                </button>
-
-                <button
-                  onClick={() => handleWeatherSelect('cozy_rain')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    currentWeather === 'cozy_rain'
-                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
-                  title="Lluvia Acogedora: Gotas suaves y sonido relajante"
-                >
-                  <CloudRain className="w-3.5 h-3.5 text-sky-400" />
-                  <span className="hidden sm:inline">Lluvia</span>
-                </button>
-
-                <button
-                  onClick={() => handleWeatherSelect('sakura_breeze')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    currentWeather === 'sakura_breeze'
-                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
-                  title="Brisa de Sakura: Pétalos flotantes al viento"
-                >
-                  <Flower2 className="w-3.5 h-3.5 text-rose-400" />
-                  <span className="hidden sm:inline">Sakura</span>
-                </button>
-
-                <button
-                  onClick={() => handleWeatherSelect('starlit_night')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    currentWeather === 'starlit_night'
-                      ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
-                  title="Noche Estrellada: Luciérnagas y cielo índigo"
-                >
-                  <Moon className="w-3.5 h-3.5 text-indigo-400" />
-                  <span className="hidden sm:inline">Noche</span>
-                </button>
-              </div>
-
-              {/* Checkpoint Warp Buttons */}
-              <div className="hidden lg:flex items-center gap-1.5 text-xs text-stone-400">
-                <span className="text-[11px] text-stone-500 uppercase font-medium">Ir a:</span>
-                <button
-                  onClick={() => handleWarpCheckpoint(0)}
-                  className={`px-2 py-1 rounded-lg border text-xs cursor-pointer ${
-                    checkpointIndex === 1
-                      ? 'bg-stone-800 text-stone-100 border-stone-600'
-                      : 'bg-stone-950/50 text-stone-400 border-stone-800 hover:text-stone-200'
-                  }`}
-                >
-                  Prado
-                </button>
-                <button
-                  onClick={() => handleWarpCheckpoint(1)}
-                  className={`px-2 py-1 rounded-lg border text-xs cursor-pointer ${
-                    checkpointIndex === 2
-                      ? 'bg-stone-800 text-stone-100 border-stone-600'
-                      : 'bg-stone-950/50 text-stone-400 border-stone-800 hover:text-stone-200'
-                  }`}
-                >
-                  Puentes
-                </button>
-                <button
-                  onClick={() => handleWarpCheckpoint(2)}
-                  className={`px-2 py-1 rounded-lg border text-xs cursor-pointer ${
-                    checkpointIndex === 3
-                      ? 'bg-stone-800 text-stone-100 border-stone-600'
-                      : 'bg-stone-950/50 text-stone-400 border-stone-800 hover:text-stone-200'
-                  }`}
-                >
-                  Cúspide
-                </button>
-              </div>
-            </div>
-          </div>
         </>
       )}
 
@@ -1281,26 +1319,38 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-stone-950/70 p-6 z-30">
           <div className="w-full max-w-sm rounded-3xl bg-stone-900 border border-stone-800 p-6 text-stone-100 shadow-2xl flex flex-col items-center text-center">
             <h2 className="text-2xl font-serif font-bold text-amber-200 mb-1">Pausa</h2>
-            <p className="text-xs text-stone-400 mb-6">Tómate un respiro y disfruta la melodía.</p>
+            <p className="text-xs text-stone-400 mb-4">Tómate un respiro y disfruta la melodía.</p>
 
             <div className="w-full flex flex-col gap-2.5 mb-6">
               <button
                 onClick={() => engine?.setPaused(false)}
-                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm transition-colors cursor-pointer"
+                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm transition-colors cursor-pointer shadow-md"
               >
                 Reanudar / Resume
               </button>
               <button
-                onClick={() => engine?.physics.respawnAtCheckpoint()}
+                onClick={() => {
+                  engine?.physics.respawnAtCheckpoint();
+                  engine?.setPaused(false);
+                }}
                 className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-medium transition-colors cursor-pointer"
               >
                 Reiniciar en Punto de Control
               </button>
               <button
-                onClick={handleRestart}
+                onClick={() => {
+                  handleRestart(gameMode);
+                  engine?.setPaused(false);
+                }}
                 className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-medium transition-colors cursor-pointer"
               >
-                Comenzar desde el Inicio
+                Reiniciar desde el Inicio
+              </button>
+              <button
+                onClick={handleReturnToTitle}
+                className="w-full py-2.5 rounded-xl bg-stone-800/80 hover:bg-stone-700/80 border border-stone-700/60 text-amber-300 text-sm font-semibold transition-colors cursor-pointer"
+              >
+                Volver al Menú Principal
               </button>
             </div>
 
@@ -1333,6 +1383,64 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {/* ======================================================== */}
+      {/* 5b. GAME OVER MODAL (Time Trial Timeout)                 */}
+      {/* ======================================================== */}
+      {gameState === 'game_over' && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-stone-950/85 p-6 z-30">
+          <div className="w-full max-w-sm rounded-3xl bg-stone-900 border border-red-500/50 p-6 text-stone-100 shadow-2xl flex flex-col items-center text-center animate-in fade-in zoom-in-95">
+            <div className="w-14 h-14 rounded-2xl bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400 mb-3 animate-pulse">
+              <Clock className="w-8 h-8" />
+            </div>
+
+            <h2 className="text-2xl font-serif font-bold text-red-300 mb-1">¡Tiempo Agotado!</h2>
+            <p className="text-xs text-stone-300 mb-5">
+              El reloj llegó a cero antes de conquistar la cúspide.
+            </p>
+
+            {/* Run Stats */}
+            <div className="w-full grid grid-cols-2 gap-2 mb-5 p-3 rounded-xl bg-stone-950/70 border border-stone-800 text-xs">
+              <div className="flex flex-col items-center">
+                <span className="text-[10px] text-stone-400 uppercase font-medium">Punto Alcanzado</span>
+                <span className="text-base font-bold font-mono text-amber-300">{checkpointIndex} / 3</span>
+              </div>
+              <div className="flex flex-col items-center">
+                <span className="text-[10px] text-stone-400 uppercase font-medium">Reliquias</span>
+                <span className="text-base font-bold font-mono text-emerald-400">
+                  {collectedCount} / {totalCollectibles}
+                </span>
+              </div>
+            </div>
+
+            <div className="w-full flex flex-col gap-2">
+              <button
+                onClick={() => handleRestart('time_trial')}
+                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm transition-colors cursor-pointer"
+              >
+                Reintentar Contrarreloj (90s)
+              </button>
+              <button
+                onClick={() => {
+                  if (engine) {
+                    engine.addTimeTrialBonus(30, 'Continuar');
+                    engine.gameState = 'playing';
+                  }
+                }}
+                className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Continuar con +30s Extra
+              </button>
+              <button
+                onClick={() => handleRestart('free')}
+                className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-medium transition-colors cursor-pointer"
+              >
+                Cambiar a Modo Libre
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
       {/* 6. VICTORY MODAL (Summit Gazebo Reached)                  */}
       {/* ======================================================== */}
       {gameState === 'victory' && (
@@ -1342,7 +1450,30 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <Award className="w-8 h-8" />
             </div>
 
-            <h2 className="text-3xl font-serif font-bold text-amber-200 mb-2">¡Cúspide Alcanzada!</h2>
+            <h2 className="text-3xl font-serif font-bold text-amber-200 mb-1">¡Cúspide Alcanzada!</h2>
+
+            {/* Mode Victory Badge */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold mb-4 bg-stone-800 border border-stone-700">
+              {gameMode === 'time_trial' && (
+                <>
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-amber-300">¡Contrarreloj Superado! (Restaron {timeRemaining}s)</span>
+                </>
+              )}
+              {gameMode === 'chase' && (
+                <>
+                  <Ghost className="w-3.5 h-3.5 text-rose-400" />
+                  <span className="text-rose-300">¡Escapaste del Acechador con éxito!</span>
+                </>
+              )}
+              {gameMode === 'free' && (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-300">¡Travesía en Modo Libre Completada!</span>
+                </>
+              )}
+            </div>
+
             <p className="text-sm text-stone-300 font-light max-w-xs mb-6">
               Has navegado con éxito los jardines flotantes y llegado al Mirador Celestial. Disfruta la vista panorámica de las nubes y las estrellas.
             </p>
@@ -1373,7 +1504,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 Explorar Libremente
               </button>
               <button
-                onClick={handleRestart}
+                onClick={() => handleRestart(gameMode)}
                 className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-medium transition-colors cursor-pointer"
               >
                 Jugar de Nuevo
@@ -1432,14 +1563,30 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">O</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Modo Foto / Menú Zen</span>
-                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">P / H</span>
+                  <span className="text-stone-400">Modo Foto (Estudio)</span>
+                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">P</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Reiniciar en Punto de Control</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">R</span>
                 </div>
               </div>
+            </div>
+
+            {/* Game Modes Guide */}
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200/90 leading-relaxed mb-3">
+              <strong className="text-amber-300">🏆 Modos de Juego Disponibles:</strong>
+              <ul className="list-disc list-inside mt-1 space-y-1">
+                <li>
+                  <strong>Modo Libre (Free Mode):</strong> Parkour sin prisa. Sin cuenta regresiva ni enemigos hostiles. El clima cambia fluidamente según los hitos alcanzados (Prado Soleado → Niebla y Lluvia → Brisa de Pétalos → Noche Estelar).
+                </li>
+                <li>
+                  <strong>Modo Contrarreloj (Time Trial):</strong> Empiezas con 90 segundos. Cada reliquia/bellota otorga <strong>+8 segundos</strong> y cada campana de checkpoint te da <strong>+15 segundos</strong>. Si el reloj llega a cero, ¡fin de la partida!
+                </li>
+                <li>
+                  <strong>Modo Persecución (Stalker Mode):</strong> Un <em>Acechador Sombrío</em> de éter aparece detrás de ti y te persigue por todo el archipiélago. Su velocidad aumenta en cada isla. Si te alcanza, desatará una onda de choque que te expulsará de la plataforma. ¡Mantente en movimiento!
+                </li>
+              </ul>
             </div>
 
             {/* Mobile Touch Section */}

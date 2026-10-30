@@ -620,3 +620,257 @@ export class EnemyManager {
     this.enemies = [];
   }
 }
+
+// =====================================================================
+// Aether Stalker: Relentless parkour pursuer for "Modo Persecución"
+// =====================================================================
+export class AetherStalker {
+  public group: THREE.Group;
+  public position: THREE.Vector3 = new THREE.Vector3();
+  public velocity: THREE.Vector3 = new THREE.Vector3();
+  public distanceToPlayer: number = 24.0;
+  public warningLevel: 'none' | 'caution' | 'danger' = 'none';
+  public isStunned: boolean = false;
+  public stunTimer: number = 0;
+  public currentSpeed: number = 4.6;
+
+  private scene: THREE.Scene;
+  private coreMesh: THREE.Mesh;
+  private ringMesh: THREE.Mesh;
+  private leftWing: THREE.Group;
+  private rightWing: THREE.Group;
+  private eyeLight: THREE.PointLight;
+  private eyesGroup: THREE.Group;
+  private particles: THREE.Points;
+  private warningSoundCooldown: number = 0;
+
+  constructor(scene: THREE.Scene, initialPlayerPos: THREE.Vector3) {
+    this.scene = scene;
+    this.group = new THREE.Group();
+
+    // Spawn ~16m behind player initially
+    this.position.copy(initialPlayerPos).add(new THREE.Vector3(-14, 3, -14));
+    this.group.position.copy(this.position);
+
+    // 1. Dark Void Core Material
+    const coreMat = new THREE.MeshStandardMaterial({
+      color: 0x140b24,
+      roughness: 0.35,
+      metalness: 0.85,
+      emissive: 0x240d42,
+      emissiveIntensity: 0.6,
+      flatShading: true,
+    });
+
+    const coreGeom = new THREE.DodecahedronGeometry(0.58);
+    this.coreMesh = new THREE.Mesh(coreGeom, coreMat);
+    this.coreMesh.castShadow = true;
+    this.group.add(this.coreMesh);
+
+    // 2. Menacing Curved Horns
+    const hornMat = new THREE.MeshStandardMaterial({
+      color: 0x090511,
+      roughness: 0.2,
+      metalness: 0.9,
+    });
+    const hornGeom = new THREE.ConeGeometry(0.12, 0.55, 6);
+    hornGeom.rotateX(-0.35);
+
+    const leftHorn = new THREE.Mesh(hornGeom, hornMat);
+    leftHorn.position.set(0.24, 0.48, -0.05);
+    leftHorn.rotation.z = -0.35;
+
+    const rightHorn = new THREE.Mesh(hornGeom, hornMat);
+    rightHorn.position.set(-0.24, 0.48, -0.05);
+    rightHorn.rotation.z = 0.35;
+    this.group.add(leftHorn, rightHorn);
+
+    // 3. Piercing Crimson / Violet Eyes
+    this.eyesGroup = new THREE.Group();
+    const eyeGeom = new THREE.SphereGeometry(0.085, 8, 8);
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff1e56 });
+
+    const leftEye = new THREE.Mesh(eyeGeom, eyeMat);
+    leftEye.position.set(0.17, 0.12, 0.48);
+    const rightEye = new THREE.Mesh(eyeGeom, eyeMat);
+    rightEye.position.set(-0.17, 0.12, 0.48);
+    this.eyesGroup.add(leftEye, rightEye);
+
+    // Menacing Eye PointLight
+    this.eyeLight = new THREE.PointLight(0xff1e56, 1.6, 7);
+    this.eyeLight.position.set(0, 0.12, 0.5);
+    this.eyesGroup.add(this.eyeLight);
+    this.group.add(this.eyesGroup);
+
+    // 4. Orbiting Shadow Rune Ring
+    const ringGeom = new THREE.TorusGeometry(0.85, 0.035, 8, 28);
+    const ringMat = new THREE.MeshStandardMaterial({
+      color: 0xa855f7,
+      emissive: 0x9333ea,
+      emissiveIntensity: 0.8,
+      transparent: true,
+      opacity: 0.75,
+    });
+    this.ringMesh = new THREE.Mesh(ringGeom, ringMat);
+    this.ringMesh.rotation.x = Math.PI / 2;
+    this.group.add(this.ringMesh);
+
+    // 5. Floating Shadow Claws / Wings
+    const wingMat = new THREE.MeshStandardMaterial({
+      color: 0x1f1238,
+      roughness: 0.5,
+      metalness: 0.5,
+      side: THREE.DoubleSide,
+    });
+
+    this.leftWing = new THREE.Group();
+    this.leftWing.position.set(0.55, 0, 0);
+    const wingShape = new THREE.ConeGeometry(0.16, 0.75, 4);
+    wingShape.rotateZ(-Math.PI / 2.5);
+    const leftWingMesh = new THREE.Mesh(wingShape, wingMat);
+    this.leftWing.add(leftWingMesh);
+
+    this.rightWing = new THREE.Group();
+    this.rightWing.position.set(-0.55, 0, 0);
+    const rightWingShape = new THREE.ConeGeometry(0.16, 0.75, 4);
+    rightWingShape.rotateZ(Math.PI / 2.5);
+    const rightWingMesh = new THREE.Mesh(rightWingShape, wingMat);
+    this.rightWing.add(rightWingMesh);
+
+    this.group.add(this.leftWing, this.rightWing);
+
+    // 6. Ethereal Shadow Particle Aura
+    const particleCount = 45;
+    const pGeom = new THREE.BufferGeometry();
+    const pPositions = new Float32Array(particleCount * 3);
+    for (let i = 0; i < particleCount * 3; i += 3) {
+      pPositions[i] = (Math.random() - 0.5) * 1.8;
+      pPositions[i + 1] = (Math.random() - 0.5) * 1.8;
+      pPositions[i + 2] = (Math.random() - 0.5) * 1.8;
+    }
+    pGeom.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+    const pMat = new THREE.PointsMaterial({
+      color: 0x9333ea,
+      size: 0.12,
+      transparent: true,
+      opacity: 0.65,
+    });
+    this.particles = new THREE.Points(pGeom, pMat);
+    this.group.add(this.particles);
+
+    this.scene.add(this.group);
+  }
+
+  public update(
+    dt: number,
+    time: number,
+    playerPos: THREE.Vector3,
+    onCatchPlayer: () => void
+  ) {
+    this.warningSoundCooldown -= dt;
+
+    // 1. Stun / Recovery state
+    if (this.isStunned) {
+      this.stunTimer -= dt;
+      if (this.stunTimer <= 0) {
+        this.isStunned = false;
+      }
+      // Floating wobble during stun
+      this.position.y += Math.sin(time * 6) * 0.01;
+      this.group.position.copy(this.position);
+      this.coreMesh.rotation.y += dt * 0.8;
+      return;
+    }
+
+    // 2. Vector pursuit toward player
+    const targetY = playerPos.y + 0.9 + Math.sin(time * 3) * 0.25;
+    const target = new THREE.Vector3(playerPos.x, targetY, playerPos.z);
+    const toPlayer = new THREE.Vector3().subVectors(target, this.position);
+    const dist = toPlayer.length();
+    this.distanceToPlayer = dist;
+
+    // Update Proximity Warning Level
+    if (dist < 8.0) {
+      this.warningLevel = 'danger';
+      if (this.warningSoundCooldown <= 0) {
+        soundManager.playStalkerWarning();
+        this.warningSoundCooldown = 1.8;
+      }
+    } else if (dist < 18.0) {
+      this.warningLevel = 'caution';
+    } else {
+      this.warningLevel = 'none';
+    }
+
+    // Dynamic speed: accelerate if falling too far behind
+    let desiredSpeed = this.currentSpeed;
+    if (dist > 35) {
+      desiredSpeed = this.currentSpeed * 1.6;
+    } else if (dist > 20) {
+      desiredSpeed = this.currentSpeed * 1.25;
+    }
+
+    // Steering velocity
+    const dir = toPlayer.clone().normalize();
+    const desiredVel = dir.multiplyScalar(desiredSpeed);
+    this.velocity.lerp(desiredVel, Math.min(1.0, dt * 3.2));
+    this.position.addScaledVector(this.velocity, dt);
+    this.group.position.copy(this.position);
+
+    // Smoothly orient towards player
+    this.group.lookAt(playerPos.x, playerPos.y + 0.9, playerPos.z);
+
+    // Animations: core rotation, ring tilt, wing flap
+    this.coreMesh.rotation.y = time * 2.5;
+    this.coreMesh.rotation.x = Math.sin(time * 1.8) * 0.2;
+    this.ringMesh.rotation.z = time * 3.5;
+
+    const flapSpeed = this.warningLevel === 'danger' ? 18 : 9;
+    this.leftWing.rotation.z = Math.sin(time * flapSpeed) * 0.45;
+    this.rightWing.rotation.z = -Math.sin(time * flapSpeed) * 0.45;
+
+    // Eye light pulse
+    this.eyeLight.intensity = 1.4 + Math.sin(time * 8) * 0.6;
+
+    // Particle cloud swirl
+    this.particles.rotation.y = time * 1.2;
+
+    // 3. Attack collision check
+    if (dist < 1.7) {
+      // Caught the player!
+      this.isStunned = true;
+      this.stunTimer = 3.2;
+
+      // Recoil stalker backward
+      this.position.sub(dir.multiplyScalar(7.5));
+      this.group.position.copy(this.position);
+
+      soundManager.playEnemyBonk();
+      soundManager.playStalkerWarning();
+      onCatchPlayer();
+    }
+  }
+
+  public setCheckpointSpeed(cpIndex: number) {
+    if (cpIndex === 1) {
+      this.currentSpeed = 4.6;
+    } else if (cpIndex === 2) {
+      this.currentSpeed = 5.2;
+    } else if (cpIndex >= 3) {
+      this.currentSpeed = 5.8;
+    }
+  }
+
+  public resetPosition(playerPos: THREE.Vector3) {
+    this.isStunned = false;
+    this.stunTimer = 0;
+    this.position.copy(playerPos).add(new THREE.Vector3(-14, 3, -14));
+    this.velocity.set(0, 0, 0);
+    this.group.position.copy(this.position);
+  }
+
+  public dispose() {
+    this.scene.remove(this.group);
+  }
+}
+
