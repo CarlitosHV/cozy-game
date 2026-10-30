@@ -61,6 +61,28 @@ export const WEATHER_PRESETS: Record<WeatherType, WeatherPreset> = {
     hemiGroundColor: 0x4caf50,
     hemiIntensity: 1.1,
   },
+  cosmic: {
+    // Deep space: indigo void, cool starlight, violet bounce light
+    skyColor: 0x0a0720,
+    fogColor: 0x1b1240,
+    fogDensity: 0.0035,
+    sunColor: 0xdfe6ff,
+    sunIntensity: 1.9,
+    hemiSkyColor: 0x8b7cf6,
+    hemiGroundColor: 0x1e1038,
+    hemiIntensity: 0.95,
+  },
+  swamp_mist: {
+    // Dark fantasy swamp: thick green-grey fog and a pale sickly moon
+    skyColor: 0x1d2a24,
+    fogColor: 0x2c3a31,
+    fogDensity: 0.022,
+    sunColor: 0xb8d4b0,
+    sunIntensity: 1.25,
+    hemiSkyColor: 0x5d7a68,
+    hemiGroundColor: 0x1a1f17,
+    hemiIntensity: 0.8,
+  },
   starlit_night: {
     skyColor: 0x0d1321,
     fogColor: 0x1d2d44,

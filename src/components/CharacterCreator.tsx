@@ -21,6 +21,7 @@ import {
   X,
   Mars,
   Venus,
+  Lock,
 } from 'lucide-react';
 import {
   BodyType,
@@ -42,6 +43,7 @@ import {
   generateRandomName,
 } from '../game/character';
 import { COMPANION_POWERS } from '../game/companionPowers';
+import { isCompanionUnlocked, levelForCompanion } from '../game/progress';
 
 type Tab = 'cuerpo' | 'pelo' | 'ropa' | 'companero';
 
@@ -481,6 +483,31 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
               <div className="grid grid-cols-2 gap-2">
                 {COMPANIONS.map((c) => {
                   const selected = appearance.companion === c.id;
+                  const unlocked = isCompanionUnlocked(c.id);
+                  const lvl = levelForCompanion(c.id);
+                  if (!unlocked) {
+                    return (
+                      <div
+                        key={c.id}
+                        className="flex flex-col gap-1 p-3 rounded-2xl border border-dashed border-stone-700 bg-stone-950/50 text-left opacity-80"
+                        aria-disabled="true"
+                      >
+                        <span className="flex items-center gap-1.5 text-stone-500">
+                          {COMPANION_ICONS[c.id]}
+                          <Lock className="w-3.5 h-3.5" />
+                        </span>
+                        <span className="text-xs font-bold text-stone-300">{c.name}</span>
+                        <span className="text-[10px] text-amber-300/90 leading-snug">
+                          🔒 Termina el Nivel {lvl?.id} · {lvl?.name} para desbloquearlo
+                        </span>
+                        {COMPANION_POWERS[c.id] && (
+                          <span className="text-[10px] leading-snug text-stone-500">
+                            Poder: {COMPANION_POWERS[c.id]!.powerName}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  }
                   return (
                     <button
                       key={c.id}

@@ -4,6 +4,8 @@
  * Shared by the 3D model builder (models.ts), the engine and the HUD.
  */
 
+import { isCompanionUnlocked } from './progress';
+
 export type BodyType = 'chico' | 'chica';
 export type HairStyle = 'flequillo' | 'puntas' | 'rapado' | 'coleta' | 'largo' | 'trenzas' | 'chongo';
 export type HatStyle = 'gorro' | 'gorra' | 'sombrero' | 'orejas' | 'flores' | 'ninguno';
@@ -80,7 +82,10 @@ export const DEFAULT_CHICA: CharacterAppearance = {
 };
 
 export function defaultAppearanceFor(body: BodyType): CharacterAppearance {
-  return { ...(body === 'chica' ? DEFAULT_CHICA : DEFAULT_APPEARANCE) };
+  const a = { ...(body === 'chica' ? DEFAULT_CHICA : DEFAULT_APPEARANCE) };
+  // Companions must be earned by finishing their level
+  if (!isCompanionUnlocked(a.companion)) a.companion = 'ninguno';
+  return a;
 }
 
 // ---------- Option lists (labels in Spanish for the UI) ----------
@@ -220,7 +225,7 @@ export function generateRandomAppearance(body: BodyType = 'chico', keepName?: st
     scarfColor,
     bootColor: pick(BOOT_COLORS),
     backpack: Math.random() < 0.75,
-    companion: pick(COMPANIONS).id,
+    companion: pick(COMPANIONS.filter((c) => isCompanionUnlocked(c.id))).id,
     height: round2(0.9 + Math.random() * 0.2),
     build: round2(0.9 + Math.random() * 0.22),
   };
@@ -263,7 +268,7 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType): Charact
   if (oneOf(r.hatStyle, hatStylesFor(body))) out.hatStyle = r.hatStyle;
   if (oneOf(r.eyeStyle, EYE_STYLES)) out.eyeStyle = r.eyeStyle;
   if (oneOf(r.accessory, ACCESSORIES)) out.accessory = r.accessory;
-  if (oneOf(r.companion, COMPANIONS)) out.companion = r.companion;
+  if (oneOf(r.companion, COMPANIONS) && isCompanionUnlocked(r.companion)) out.companion = r.companion;
   if (typeof r.backpack === 'boolean') out.backpack = r.backpack;
   out.height = clamp(r.height, 0.88, 1.12, out.height);
   out.build = clamp(r.build, 0.88, 1.15, out.build);

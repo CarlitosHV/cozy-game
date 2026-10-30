@@ -51,6 +51,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { GameEngine, GameState, GameMode, LEVELS } from '../game/GameEngine';
+import { isLevelCompleted } from '../game/progress';
 import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus } from '../game/items';
 import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
 import { COMPANION_POWERS, CompanionPowerStatus } from '../game/companionPowers';
@@ -111,6 +112,13 @@ export const PHOTO_FILTERS: {
     css: 'sepia(0.65) contrast(1.15) brightness(0.95) saturate(0.85)',
   },
 ];
+
+const VICTORY_TEXT: Record<number, string> = {
+  1: 'Has navegado con éxito los jardines flotantes y llegado al Mirador Celestial. Disfruta la vista panorámica de las nubes y las estrellas.',
+  2: 'Saltaste entre asteroides y anillos planetarios hasta el Observatorio Estelar. ¡Estelita brilla de alegría!',
+  3: 'Cruzaste la bruma del pantano y escalaste la Torre de la Bruja hasta el Santuario de las Luciérnagas.',
+  4: 'Cruzaste la pradera, las cascadas y la ciudad de cristal hasta la Plaza del Globo. ¡Los glitches no pudieron contigo!',
+};
 
 export const PHOTO_FRAMES: { id: PhotoFrame; name: string; desc: string }[] = [
   { id: 'none', name: 'Sin Marco', desc: 'Composición limpia' },
@@ -718,31 +726,40 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               Salta por plataformas flotantes, rebota en hongos elásticos y supera obstáculos hacia el Mirador Celestial.
             </p>
 
-            {/* Level Selector */}
+            {/* Level Selector — each level unlocks its companion */}
             <div className="w-full max-w-xl flex flex-col gap-2 mb-4 px-2">
               <span className="text-[11px] text-sky-300 font-bold uppercase tracking-wider text-center">Elige tu Nivel:</span>
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-2 gap-2">
                 {LEVELS.map((lvl) => {
                   const selected = selectedLevel === lvl.id;
-                  const aero = lvl.id === 2;
+                  const done = isLevelCompleted(lvl.id);
+                  const comp = COMPANION_POWERS[lvl.companion];
                   return (
                     <button
                       key={lvl.id}
                       type="button"
                       onClick={() => pickLevel(lvl.id)}
-                      className={`flex flex-col text-left p-3 rounded-2xl border transition-all cursor-pointer ${
-                        selected
-                          ? aero
-                            ? 'bg-gradient-to-br from-sky-500/40 to-emerald-500/30 border-sky-300 ring-1 ring-sky-300/60 shadow-lg shadow-sky-900/30'
-                            : 'bg-amber-950/50 border-amber-400 ring-1 ring-amber-400/50 shadow-lg shadow-amber-900/30'
-                          : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
+                      className={`flex items-center gap-2 text-left p-2.5 rounded-2xl border transition-all cursor-pointer ${
+                        selected ? 'bg-stone-900/90 shadow-lg' : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
                       }`}
+                      style={selected ? { borderColor: lvl.accent, boxShadow: `0 0 0 1px ${lvl.accent}66` } : undefined}
                     >
-                      <span className={`text-[10px] font-bold uppercase tracking-wider ${aero ? 'text-sky-300' : 'text-amber-300'}`}>
-                        Nivel {lvl.id}
+                      <span
+                        className={`w-8 h-8 shrink-0 rounded-xl flex items-center justify-center text-stone-900 ${done ? '' : 'grayscale opacity-60'}`}
+                        style={{ backgroundColor: comp?.color ?? '#999' }}
+                        title={comp ? comp.companionName : ''}
+                      >
+                        {COMPANION_ICONS[lvl.companion]}
                       </span>
-                      <span className="text-sm font-bold text-stone-100">{lvl.name}</span>
-                      <span className="text-[10px] text-stone-300 leading-snug">{lvl.desc}</span>
+                      <span className="flex flex-col min-w-0">
+                        <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: lvl.accent }}>
+                          Nivel {lvl.id}
+                        </span>
+                        <span className="text-xs sm:text-sm font-bold text-stone-100 truncate">{lvl.name}</span>
+                        <span className={`text-[9px] sm:text-[10px] leading-snug ${done ? 'text-emerald-300' : 'text-stone-400'}`}>
+                          {done ? `✓ ${comp?.companionName} desbloqueado` : `🔒 Termínalo para ganar a ${comp?.companionName}`}
+                        </span>
+                      </span>
                     </button>
                   );
                 })}
@@ -1832,9 +1849,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             <p className="text-sm text-stone-300 font-light max-w-xs mb-6">
-              {engine?.currentLevel === 2
-                ? 'Cruzaste la pradera, las cascadas y la ciudad de cristal hasta la Plaza del Globo. ¡Los glitches no pudieron contigo!'
-                : 'Has navegado con éxito los jardines flotantes y llegado al Mirador Celestial. Disfruta la vista panorámica de las nubes y las estrellas.'}
+              {VICTORY_TEXT[engine?.currentLevel ?? 1] ?? VICTORY_TEXT[1]}
             </p>
 
             {/* Run Statistics */}
@@ -1850,6 +1865,37 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* Companion unlocked by this level */}
+            {engine?.lastUnlocked && COMPANION_POWERS[engine.lastUnlocked] && (
+              <div
+                className="w-full mb-4 p-3 rounded-2xl border flex items-center gap-3 text-left"
+                style={{ borderColor: COMPANION_POWERS[engine.lastUnlocked]!.color, background: 'rgba(255,255,255,0.04)' }}
+              >
+                <span
+                  className="w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-stone-900 animate-bounce"
+                  style={{ backgroundColor: COMPANION_POWERS[engine.lastUnlocked]!.color }}
+                >
+                  {COMPANION_ICONS[engine.lastUnlocked]}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-stone-100">
+                    ¡Desbloqueaste a {COMPANION_POWERS[engine.lastUnlocked]!.companionName}!
+                  </div>
+                  <div className="text-[11px] text-stone-400 leading-snug">
+                    Poder (G): {COMPANION_POWERS[engine.lastUnlocked]!.powerName}. {COMPANION_POWERS[engine.lastUnlocked]!.desc}
+                  </div>
+                </div>
+                {appearance.companion !== engine.lastUnlocked && (
+                  <button
+                    onClick={() => handleAppearanceChange({ ...appearance, companion: engine.lastUnlocked! })}
+                    className="px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-xs font-bold cursor-pointer shrink-0"
+                  >
+                    Llevarlo
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="w-full flex flex-col gap-2.5">
               {engine && LEVELS.some((l) => l.id === engine.currentLevel + 1) && (

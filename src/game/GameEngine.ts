@@ -16,11 +16,21 @@ import { AetherStalker } from './enemies';
 import { CompanionPowerSystem } from './companionPowers';
 import { ItemSystem, ItemUseContext } from './items';
 import { buildAeroWorld } from './levelAero';
+import { buildCosmicWorld } from './levelCosmic';
+import { buildSwampWorld } from './levelSwamp';
+import { makeGlowTexture } from './levelKit';
+import { LEVELS, markLevelComplete, isCompanionUnlocked } from './progress';
+import { CompanionStyle } from './character';
 
-export const LEVELS: { id: number; name: string; desc: string }[] = [
-  { id: 1, name: 'Archipiélago Acogedor', desc: 'Islas flotantes, hongos y nubes al atardecer.' },
-  { id: 2, name: 'Valle Aero', desc: 'Pradera brillante, cascadas y ciudad de cristal.' },
-];
+export { LEVELS };
+
+/** Per-level atmosphere: base weather and the sky shown on victory. */
+const LEVEL_THEMES: Record<number, { weather: WeatherType; title: string; victoryWeather: WeatherType; victoryTitle: string; victoryDesc: string }> = {
+  1: { weather: 'golden_hour', title: 'Hora Dorada', victoryWeather: 'starlit_night', victoryTitle: 'Noche Estrellada', victoryDesc: '¡Cima alcanzada en el Mirador Celestial!' },
+  2: { weather: 'cosmic', title: 'Ruta Cósmica', victoryWeather: 'starlit_night', victoryTitle: 'Lluvia de Estrellas', victoryDesc: '¡Llegaste al Observatorio Estelar!' },
+  3: { weather: 'swamp_mist', title: 'Pantano Sombrío', victoryWeather: 'starlit_night', victoryTitle: 'Noche de Luciérnagas', victoryDesc: '¡Llegaste al Santuario de las Luciérnagas!' },
+  4: { weather: 'aero_day', title: 'Valle Aero', victoryWeather: 'golden_hour', victoryTitle: 'Atardecer Aero', victoryDesc: '¡Llegaste a la Plaza del Globo!' },
+};
 
 export type GameMode = 'free' | 'time_trial' | 'chase';
 export type GameState = 'title' | 'playing' | 'paused' | 'victory' | 'photo_mode' | 'game_over';
@@ -69,6 +79,11 @@ export class GameEngine {
   // Levels
   public currentLevel: number = 1;
   private levelRoot!: THREE.Group;
+  /** Companion unlocked by the last victory (shown on the victory screen) */
+  public lastUnlocked: CompanionStyle | null = null;
+  // The level's companion waiting at the summit
+  private showcase: THREE.Object3D | null = null;
+  private showcaseBase = new THREE.Vector3();
 
   // Game state & modes
   public gameState: GameState = 'title';
@@ -213,6 +228,7 @@ export class GameEngine {
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(this.currentLevel);
+    this.addCompanionShowcase();
     this.playerModel = createPlayerCharacter(this.textures, this.playerAppearance);
     this.scene.add(this.playerModel.group);
 
@@ -286,6 +302,7 @@ export class GameEngine {
    */
   public setPlayerAppearance(appearance: CharacterAppearance, persist: boolean = true) {
     this.playerAppearance = { ...appearance };
+    if (!isCompanionUnlocked(this.playerAppearance.companion)) this.playerAppearance.companion = 'ninguno';
     const old = this.playerModel;
     const next = createPlayerCharacter(this.textures, this.playerAppearance);
     next.group.position.copy(old.group.position);
@@ -333,13 +350,50 @@ export class GameEngine {
   }
 
   private buildLevel(level: number): WorldBuildResult {
-    return level === 2
-      ? buildAeroWorld(this.levelRoot, this.textures)
-      : buildCozyParkourWorld(this.levelRoot, this.textures);
+    switch (level) {
+      case 2:
+        return buildCosmicWorld(this.levelRoot, this.textures);
+      case 3:
+        return buildSwampWorld(this.levelRoot, this.textures);
+      case 4:
+        return buildAeroWorld(this.levelRoot, this.textures);
+      default:
+        return buildCozyParkourWorld(this.levelRoot, this.textures);
+    }
   }
 
   private levelWeather(): WeatherType {
-    return this.currentLevel === 2 ? 'aero_day' : 'golden_hour';
+    return (LEVEL_THEMES[this.currentLevel] ?? LEVEL_THEMES[1]).weather;
+  }
+
+  /** Places a big floating copy of the level's companion at the summit — your reward for finishing. */
+  private addCompanionShowcase() {
+    this.showcase = null;
+    const lvl = LEVELS.find((l) => l.id === this.currentLevel);
+    if (!lvl) return;
+    const temp = createPlayerCharacter(this.textures, { ...this.playerAppearance, companion: lvl.companion });
+    const sprite = temp.companionSprite;
+    temp.group.remove(sprite);
+    disposePlayerCharacter(temp);
+    sprite.visible = true;
+    sprite.scale.setScalar(3.2);
+    const pos = this.world.companionShowcasePos ?? this.world.summitPosition.clone().add(new THREE.Vector3(-4, 3, 0));
+    sprite.position.copy(pos);
+    this.showcaseBase.copy(pos);
+    // Soft glow behind it
+    const glow = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: makeGlowTexture('rgba(255,247,214,0.85)'), transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    glow.scale.setScalar(0.9);
+    sprite.add(glow);
+    this.levelRoot.add(sprite);
+    this.showcase = sprite;
+  }
+
+  private updateShowcase(time: number) {
+    if (!this.showcase) return;
+    this.showcase.position.y = this.showcaseBase.y + Math.sin(time * 1.6) * 0.5;
+    this.showcase.rotation.y = time * 0.6;
   }
 
   /** Unloads the current level and builds another one (keeps player, companion & backpack). */
@@ -371,6 +425,7 @@ export class GameEngine {
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(level);
+    this.addCompanionShowcase();
     this.physics = new ParkourPhysics(this.world, this.playerModel);
     this.physics.jumpMultiplier = this.itemSystem.superJumpLeft > 0 ? 1.4 : 1;
     this.companionPowers.reset(this.physics);
@@ -412,6 +467,7 @@ export class GameEngine {
   }
 
   private beginRun(mode: GameMode | undefined, freshBackpack: boolean) {
+    this.lastUnlocked = null;
     this.clearPreviewCamera();
     this.resetCompanionPowers();
     this.itemSystem.resetPickups();
@@ -435,10 +491,11 @@ export class GameEngine {
       }
     }
     if (this.weatherSystem.currentWeather !== this.levelWeather()) {
-      if (this.currentLevel === 2) {
-        this.transitionWeather('aero_day', 2.5, 'milestone', 'Valle Aero', 'Pradera Aero');
-      } else {
+      if (this.currentLevel === 1) {
         this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Prado del Amanecer');
+      } else {
+        const theme = LEVEL_THEMES[this.currentLevel];
+        this.transitionWeather(theme.weather, 2.5, 'milestone', theme.title, this.world.checkpoints[0]?.name ?? '');
       }
     }
   }
@@ -496,6 +553,14 @@ export class GameEngine {
         title: 'Día Aero',
         desc: 'Cielo azul brillante, cristal y burbujas',
       },
+      cosmic: {
+        title: 'Noche Cósmica',
+        desc: 'Estrellas, planetas y nebulosas',
+      },
+      swamp_mist: {
+        title: 'Bruma del Pantano',
+        desc: 'Niebla espesa y luces fantasmales',
+      },
     };
 
     const info = descriptions[weather];
@@ -541,10 +606,11 @@ export class GameEngine {
         this.stalker.resetPosition(this.physics.position);
       }
     }
-    if (this.currentLevel === 2) {
-      this.transitionWeather('aero_day', 2.5, 'milestone', 'Valle Aero', 'De vuelta a la Pradera Aero');
-    } else {
+    if (this.currentLevel === 1) {
       this.transitionWeather('golden_hour', 2.5, 'milestone', 'Hora Dorada', 'Comienzo en el Prado del Amanecer');
+    } else {
+      const theme = LEVEL_THEMES[this.currentLevel];
+      this.transitionWeather(theme.weather, 2.5, 'milestone', theme.title, `De vuelta a ${this.world.checkpoints[0]?.name ?? 'el inicio'}`);
     }
   }
 
@@ -558,8 +624,9 @@ export class GameEngine {
       this.stalker.setCheckpointSpeed(index + 1);
     }
     // Smoothly transition weather to match target zone milestone
-    if (this.currentLevel === 2) {
-      this.transitionWeather('aero_day', 2.0, 'milestone', 'Valle Aero', this.world.checkpoints[index]?.name ?? '');
+    if (this.currentLevel !== 1) {
+      const theme = LEVEL_THEMES[this.currentLevel];
+      this.transitionWeather(theme.weather, 2.0, 'milestone', theme.title, this.world.checkpoints[index]?.name ?? '');
     } else if (index === 0) {
       this.transitionWeather('golden_hour', 2.8, 'milestone', 'Hora Dorada', 'Retorno al Prado del Amanecer');
     } else if (index === 1) {
@@ -980,6 +1047,7 @@ export class GameEngine {
       this.playerModel.updateAnimation(0, true, dt, time);
       this.weatherSystem.update(dt, new THREE.Vector3(0, 0, 0), time);
       this.world.levelUpdate?.(dt, time);
+      this.updateShowcase(time);
       return;
     }
 
@@ -1007,6 +1075,7 @@ export class GameEngine {
         }
         this.playerModel.updateAnimation(0, true, dt, time);
         this.world.levelUpdate?.(dt, time);
+        this.updateShowcase(time);
       }
 
       // Smooth Orbit & Framing Camera
@@ -1131,6 +1200,7 @@ export class GameEngine {
     this.companionPowers.update(dt, time, this.physics, this.playerModel.companionSprite);
     this.itemSystem.update(dt, this.physics.position, this.itemCtx);
     this.world.levelUpdate?.(dt, time);
+    this.updateShowcase(time);
     if (this.world.enemyManager) {
       this.world.enemyManager.distractTarget = this.companionPowers.lureTarget;
     }
@@ -1176,7 +1246,8 @@ export class GameEngine {
         }
       },
       () => {
-        // Milestone: Summit Victory!
+        // Milestone: Summit Victory! (finishing a level unlocks its companion)
+        this.lastUnlocked = markLevelComplete(this.currentLevel);
         this.gameState = 'victory';
         this.callbacks.onStateChange('victory');
         soundManager.playVictory();
@@ -1184,17 +1255,8 @@ export class GameEngine {
           this.stalker.isStunned = true;
           this.stalker.stunTimer = 999;
         }
-        if (this.currentLevel === 2) {
-          this.transitionWeather('golden_hour', 4.5, 'milestone', 'Atardecer Aero', '¡Llegaste a la Plaza del Globo!');
-        } else {
-          this.transitionWeather(
-            'starlit_night',
-            4.5,
-            'milestone',
-            'Noche Estrellada',
-            '¡Cima alcanzada en el Mirador Celestial!'
-          );
-        }
+        const theme = LEVEL_THEMES[this.currentLevel] ?? LEVEL_THEMES[1];
+        this.transitionWeather(theme.victoryWeather, 4.5, 'milestone', theme.victoryTitle, theme.victoryDesc);
       }
     );
 

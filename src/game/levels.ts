@@ -83,6 +83,8 @@ export interface WorldBuildResult {
   enemyManager: EnemyManager;
   /** Where backpack items (berries, walnuts…) can be picked up */
   itemSpots: ItemSpot[];
+  /** Where the level's companion waits at the summit (defaults near the summit) */
+  companionShowcasePos?: THREE.Vector3;
   /** Optional per-frame animation for level decorations (waterfalls, bubbles…) */
   levelUpdate?: (dt: number, time: number) => void;
 }
@@ -723,6 +725,7 @@ export function buildCozyParkourWorld(
     decorativeMeshes,
     summitPosition: summitPos,
     enemyManager,
+    companionShowcasePos: new THREE.Vector3(18.0, summitY + 9.5, 123.0),
     itemSpots: [
       // Magic berries (feed your companion)
       { type: 'baya', pos: new THREE.Vector3(-2.5, 0.95, 5.0) },
