@@ -1,6 +1,6 @@
 {
-  "name": "Aether Leap: Cozy Cloud Parkour",
-  "description": "A relaxing 3D parkour adventure across floating cloud islands with dynamic weather, responsive physics, and generative procedural ambient music.",
+  "name": "Cozy Leap",
+  "description": "Cozy Leap: parkour relajado entre islas flotantes, clima dinámico y música ambient.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

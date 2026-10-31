@@ -25,14 +25,12 @@ export default function App() {
     reason: 'milestone' | 'manual';
   } | null>(null);
 
-  // Fullscreen and Orientation States
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [isSimulatedLandscape, setIsSimulatedLandscape] = useState<boolean>(false);
   const [isPortrait, setIsPortrait] = useState<boolean>(() => {
     return typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false;
   });
+  const [showEasterEgg, setShowEasterEgg] = useState(false);
 
-  // Track Fullscreen state changes across vendor implementations
   useEffect(() => {
     const handleFsChange = () => {
       const doc = document as any;
@@ -62,15 +60,9 @@ export default function App() {
     };
   }, []);
 
-  // Track physical window orientation / viewport resize
   useEffect(() => {
     const handleResize = () => {
-      const portrait = window.innerHeight > window.innerWidth;
-      setIsPortrait(portrait);
-      // If user physically rotated their device to landscape, turn off simulated landscape
-      if (!portrait) {
-        setIsSimulatedLandscape(false);
-      }
+      setIsPortrait(window.innerHeight > window.innerWidth);
       engineRef.current?.handleResize();
     };
 
@@ -83,15 +75,6 @@ export default function App() {
     };
   }, []);
 
-  // Sync engine simulated landscape state
-  useEffect(() => {
-    if (engineRef.current) {
-      (engineRef.current as any).isSimulatedLandscape = isSimulatedLandscape;
-      engineRef.current.handleResize();
-    }
-  }, [isSimulatedLandscape]);
-
-  // Fullscreen toggle handler
   const toggleFullscreen = async () => {
     try {
       const doc = document as any;
@@ -129,48 +112,6 @@ export default function App() {
     }
   };
 
-  // Screen Orientation toggle handler: Attempts native lock first, with seamless CSS simulated rotation fallback
-  const toggleOrientation = async () => {
-    const screenAny = window.screen as any;
-    const currentIsPortrait = window.innerHeight > window.innerWidth;
-    const targetOrientation = (isSimulatedLandscape || !currentIsPortrait) ? 'portrait' : 'landscape';
-
-    let nativeLockSucceeded = false;
-
-    // Try native Screen Orientation API lock
-    if (screenAny?.orientation?.lock) {
-      try {
-        const doc = document as any;
-        const isFs = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
-        // On Android Chrome, orientation lock often requires fullscreen
-        if (!isFs && document.documentElement.requestFullscreen) {
-          try {
-            await document.documentElement.requestFullscreen();
-          } catch {
-            // continue
-          }
-        }
-        await screenAny.orientation.lock(targetOrientation);
-        nativeLockSucceeded = true;
-        setIsSimulatedLandscape(false);
-      } catch (err) {
-        nativeLockSucceeded = false;
-      }
-    }
-
-    // Fallback: If native lock was rejected or unsupported (e.g. iOS Safari), toggle CSS simulated rotation
-    if (!nativeLockSucceeded) {
-      setIsSimulatedLandscape((prev) => !prev);
-    }
-
-    // Trigger engine resize smoothly
-    setTimeout(() => {
-      engineRef.current?.handleResize();
-      window.dispatchEvent(new Event('resize'));
-    }, 150);
-  };
-
-  // Game Mode, Time Trial, and Stalker States
   const [gameMode, setGameMode] = useState<GameMode>('free');
   const [timeRemaining, setTimeRemaining] = useState<number>(90);
   const [timeBonus, setTimeBonus] = useState<{ amount: number; reason: string; timestamp: number } | null>(null);
@@ -183,7 +124,6 @@ export default function App() {
   useEffect(() => {
     if (!mountRef.current) return;
 
-    // Instantiate Three.js engine once inside isolated container
     const engine = new GameEngine(mountRef.current, {
       onStateChange: (state) => setGameState(state),
       onCheckpointChange: (name, index) => {
@@ -223,6 +163,7 @@ export default function App() {
         setStalkerDistance(distance);
         setStalkerWarningLevel(warningLevel);
       },
+      onEasterEgg: () => setShowEasterEgg(true),
     });
 
     engineRef.current = engine;
@@ -237,32 +178,14 @@ export default function App() {
 
   return (
     <div
-      className={`relative overflow-hidden bg-stone-950 select-none transition-all duration-300 ${
-        isSimulatedLandscape
-          ? 'fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rotate-90 origin-center z-50'
-          : 'w-screen h-screen'
-      }`}
-      style={
-        isSimulatedLandscape
-          ? {
-              width: '100vh',
-              height: '100vw',
-              maxWidth: '100vh',
-              maxHeight: '100vw',
-            }
-          : {
-              width: '100vw',
-              height: '100dvh',
-            }
-      }
+      className="relative w-screen h-screen overflow-hidden bg-stone-950 select-none"
+      style={{ width: '100vw', height: '100dvh' }}
     >
-      {/* 3D WebGL Canvas Container - isolated from React state updates */}
       <div
         ref={mountRef}
         className="w-full h-full cursor-grab active:cursor-grabbing touch-none select-none"
       />
 
-      {/* World-Matched Minimal HUD & UI Modals Overlay */}
       <GameHUD
         engine={engineRef.current}
         gameState={gameState}
@@ -281,11 +204,10 @@ export default function App() {
         onDismissWeatherNotice={() => setWeatherNotice(null)}
         isFullscreen={isFullscreen}
         toggleFullscreen={toggleFullscreen}
-        isSimulatedLandscape={isSimulatedLandscape}
-        toggleOrientation={toggleOrientation}
         isPortrait={isPortrait}
+        showEasterEgg={showEasterEgg}
+        onDismissEasterEgg={() => setShowEasterEgg(false)}
       />
     </div>
   );
 }
-

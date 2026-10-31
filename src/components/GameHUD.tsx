@@ -57,6 +57,7 @@ import {
   isLevelCompleted,
   isLevelUnlocked,
   levelInfo,
+  levelHowTo,
   maxPlayableLevel,
   highestCompleted,
   nextCompanionUnlock,
@@ -171,17 +172,16 @@ interface GameHUDProps {
   onDismissWeatherNotice?: () => void;
   isFullscreen?: boolean;
   toggleFullscreen?: () => void;
-  isSimulatedLandscape?: boolean;
-  toggleOrientation?: () => void;
   isPortrait?: boolean;
+  showEasterEgg?: boolean;
+  onDismissEasterEgg?: () => void;
 }
 
 // --- 360° Analog Virtual Joystick for Mobile Devices ---
 const VirtualJoystick: React.FC<{
   onMove: (forward: number, right: number) => void;
-  isSimulatedLandscape?: boolean;
   compact?: boolean;
-}> = ({ onMove, isSimulatedLandscape = false, compact = false }) => {
+}> = ({ onMove, compact = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [knobPos, setKnobPos] = useState({ x: 0, y: 0 });
   const [isActive, setIsActive] = useState(false);
@@ -195,16 +195,8 @@ const VirtualJoystick: React.FC<{
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
 
-    const rawDx = clientX - centerX;
-    const rawDy = clientY - centerY;
-
-    // Adapt coordinates if simulated CSS 90deg landscape rotation is active
-    let dx = rawDx;
-    let dy = rawDy;
-    if (isSimulatedLandscape) {
-      dx = rawDy;
-      dy = -rawDx;
-    }
+    const dx = clientX - centerX;
+    const dy = clientY - centerY;
 
     const dist = Math.hypot(dx, dy);
 
@@ -350,7 +342,7 @@ function renderFinalPhotoWithFrame(
         ctx.fillStyle = '#3a2d21';
         ctx.font = `600 ${Math.round(canvas.height * 0.04)}px 'Playfair Display', serif`;
         ctx.textAlign = 'center';
-        ctx.fillText('Aether Leap · ' + checkpointName, canvas.width / 2, canvas.height - bottomY * 0.38);
+        ctx.fillText('Cozy Leap · ' + checkpointName, canvas.width / 2, canvas.height - bottomY * 0.38);
 
         resolve(canvas.toDataURL('image/png'));
       } else if (frame === 'cinematic') {
@@ -368,7 +360,7 @@ function renderFinalPhotoWithFrame(
         ctx.fillStyle = '#dfb15b';
         ctx.font = `600 ${Math.round(canvas.height * 0.026)}px 'Outfit', sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText('AETHER LEAP · ' + checkpointName.toUpperCase(), canvas.width / 2, canvas.height - barHeight * 0.36);
+        ctx.fillText('COZY LEAP · ' + checkpointName.toUpperCase(), canvas.width / 2, canvas.height - barHeight * 0.36);
 
         resolve(canvas.toDataURL('image/png'));
       } else if (frame === 'postcard') {
@@ -429,9 +421,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   onDismissWeatherNotice,
   isFullscreen = false,
   toggleFullscreen,
-  isSimulatedLandscape = false,
-  toggleOrientation,
   isPortrait = false,
+  showEasterEgg = false,
+  onDismissEasterEgg,
 }) => {
   const [isMuted, setIsMuted] = useState(false);
   const [selectedMode, setSelectedMode] = useState<GameMode>('free');
@@ -442,6 +434,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [previousTitleStep, setPreviousTitleStep] = useState<'main' | 'select_level' | 'game_modes'>('main');
 
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showLevelBrief, setShowLevelBrief] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isSprintActive, setIsSprintActive] = useState(false);
   const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
@@ -449,6 +442,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [viewportNarrow, setViewportNarrow] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 900 : false
   );
+  const briefLevelRef = useRef<number | null>(null);
 
   useEffect(() => {
     const onResize = () => setViewportNarrow(window.innerWidth < 900);
@@ -457,10 +451,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!isPortrait || isSimulatedLandscape) {
-      setDismissPortraitHint(false);
-    }
-  }, [isPortrait, isSimulatedLandscape]);
+    if (!isPortrait) setDismissPortraitHint(false);
+  }, [isPortrait]);
+
+  useEffect(() => {
+    if (gameState !== 'playing' || !engine) return;
+    const lvl = engine.currentLevel;
+    if (briefLevelRef.current === lvl) return;
+    briefLevelRef.current = lvl;
+    setShowLevelBrief(true);
+  }, [gameState, engine, engine?.currentLevel]);
+
+  useEffect(() => {
+    if (gameState === 'title') briefLevelRef.current = null;
+  }, [gameState]);
 
   // Character Generator
   const [showCreator, setShowCreator] = useState(false);
@@ -615,6 +619,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   // Freeze and lock player movement when any modal, pause, or victory screen is active
   const isAnyModalOpen =
     showHelpModal ||
+    showLevelBrief ||
+    showEasterEgg ||
     showBackpack ||
     showCreator ||
     Boolean(capturedPhotoUrl) ||
@@ -622,6 +628,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     gameState === 'victory' ||
     gameState === 'game_over' ||
     gameState === 'photo_mode';
+
+  const currentHowTo = levelHowTo(engine?.currentLevel ?? pendingLevel);
 
   useEffect(() => {
     if (engine) {
@@ -643,7 +651,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   );
 
   const isMobileUi = touchControlsEnabled || isTouchDevice || viewportNarrow;
-  const isPortraitPlay = isPortrait && !isSimulatedLandscape;
+  const isPortraitPlay = isPortrait;
   const compactControls = isMobileUi && isPortraitPlay;
   const filledSlots = inventory?.slots.filter(Boolean).length ?? 0;
   const showPortraitHint =
@@ -704,7 +712,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     }
   }, [gameState, photoFilter]);
 
-  // Global Keyboard shortcuts: H (photo UI), Space (snap), F (fullscreen), O (orientation)
+  // Global Keyboard shortcuts: H (photo UI), Space (snap), F (fullscreen)
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       // Ignore shortcuts while typing (e.g. the character name field)
@@ -721,19 +729,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
         }
       }
-      if (e.code === 'KeyO') {
-        if (toggleOrientation) {
-          toggleOrientation();
-          showToast(isSimulatedLandscape ? 'Orientación Vertical' : 'Orientación Horizontal');
-        }
-      }
       if (gameState === 'photo_mode' && (e.code === 'Space' || e.code === 'Enter') && !capturedPhotoUrl) {
         handleSnapPhoto();
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [gameState, photoFilter, photoFrame, capturedPhotoUrl, isFullscreen, isSimulatedLandscape, toggleFullscreen, toggleOrientation]);
+  }, [gameState, photoFilter, photoFrame, capturedPhotoUrl, isFullscreen, toggleFullscreen]);
 
   const handleSnapPhoto = async () => {
     if (!engine) return;
@@ -811,24 +813,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <div>
               <h3 className="text-lg font-serif font-bold text-amber-200 mb-1">Gira tu dispositivo</h3>
               <p className="text-xs text-stone-300 leading-relaxed">
-                El juego se ve y se controla mucho mejor en horizontal. Puedes rotar la pantalla o simular landscape desde aquí.
+                Cozy Leap se ve y se controla mucho mejor en horizontal. Activa la rotación del móvil y gira la pantalla físicamente.
               </p>
             </div>
             <div className="w-full flex flex-col gap-2">
-              {toggleOrientation && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggleOrientation();
-                    setDismissPortraitHint(true);
-                    showToast('Orientación Horizontal');
-                  }}
-                  className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm cursor-pointer flex items-center justify-center gap-2"
-                >
-                  <RotateCw className="w-4 h-4" />
-                  Jugar en horizontal
-                </button>
-              )}
               {toggleFullscreen && (
                 <button
                   type="button"
@@ -836,9 +824,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     toggleFullscreen();
                     showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
                   }}
-                  className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-100 text-sm font-semibold cursor-pointer flex items-center justify-center gap-2"
+                  className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm cursor-pointer flex items-center justify-center gap-2"
                 >
-                  {isFullscreen ? <Minimize className="w-4 h-4 text-amber-300" /> : <Maximize className="w-4 h-4 text-amber-300" />}
+                  {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
                   {isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
                 </button>
               )}
@@ -863,40 +851,25 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           onChange={handleAppearanceChange}
           onSwitchBody={handleSwitchBody}
           onClose={closeCreator}
-          portrait={isPortrait && !isSimulatedLandscape}
+          portrait={isPortrait}
         />
       )}
 
       {gameState === 'title' && !showCreator && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-gradient-to-t from-stone-950/85 via-stone-950/45 to-stone-950/20 text-stone-100 p-3 sm:p-6 pt-safe pb-safe transition-opacity duration-500 overflow-y-auto font-['Outfit',sans-serif]">
-          {isMobileUi && (
+          {isMobileUi && toggleFullscreen && (
             <div className="absolute top-safe right-0 pt-3 pr-3 pr-safe flex items-center gap-1.5 z-20">
-              {toggleFullscreen && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggleFullscreen();
-                    showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
-                  }}
-                  title={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
-                  className="p-2 rounded-xl bg-stone-900/80 border border-stone-700 text-amber-300 cursor-pointer"
-                >
-                  {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-                </button>
-              )}
-              {toggleOrientation && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggleOrientation();
-                    showToast(isSimulatedLandscape ? 'Orientación Vertical' : 'Orientación Horizontal');
-                  }}
-                  title="Rotar orientación"
-                  className="p-2 rounded-xl bg-stone-900/80 border border-stone-700 text-amber-300 cursor-pointer"
-                >
-                  <RotateCw className="w-4 h-4" />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  toggleFullscreen();
+                  showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
+                }}
+                title={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+                className="p-2 rounded-xl bg-stone-900/80 border border-stone-700 text-amber-300 cursor-pointer"
+              >
+                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+              </button>
             </div>
           )}
           <div className="w-full max-w-sm rounded-3xl bg-stone-950/90 border border-stone-800/90 p-5 sm:p-6 shadow-2xl backdrop-blur-xl flex flex-col my-auto transition-all animate-in fade-in zoom-in-95">
@@ -909,14 +882,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 {/* Header Lockup */}
                 <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900/80 border border-amber-600/30 text-[10px] text-amber-200 font-semibold tracking-wider mb-2">
                   <Sparkles className="w-3 h-3 text-amber-400" />
-                  <span>Aether Leap</span>
+                  <span>Parkour en las nubes</span>
                 </div>
 
                 <h1
                   className="font-serif font-black text-3xl sm:text-4xl text-amber-100 tracking-wide drop-shadow-md mb-1"
                   style={{ fontFamily: "'Playfair Display', serif" }}
                 >
-                  Aether Leap
+                  Cozy Leap
                 </h1>
                 <p className="text-xs text-stone-400 font-light tracking-wide mb-6">
                   Parkour en las nubes
@@ -1458,18 +1431,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
               </button>
             )}
-            {isMobileUi && toggleOrientation && (
-              <button
-                onClick={() => {
-                  toggleOrientation();
-                  showToast(isSimulatedLandscape ? 'Orientación Vertical' : 'Orientación Horizontal');
-                }}
-                title="Rotar orientación"
-                className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 text-amber-300 border border-stone-700 shadow-md cursor-pointer"
-              >
-                <RotateCw className="w-4 h-4" />
-              </button>
-            )}
             <button
               onClick={() => engine?.setPaused(true)}
               title="Pausa"
@@ -1711,7 +1672,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 </div>
                 <VirtualJoystick
                   onMove={handleJoystickMove}
-                  isSimulatedLandscape={isSimulatedLandscape}
                   compact={compactControls}
                 />
               </div>
@@ -1827,7 +1787,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
               <div className="w-full h-[12vh] bg-stone-950/95 border-t border-stone-800 flex items-center justify-center">
                 <span className="text-xs text-amber-200/90 font-serif tracking-widest uppercase">
-                  Aether Leap · {checkpointName}
+                  Cozy Leap · {checkpointName}
                 </span>
               </div>
             </div>
@@ -1836,7 +1796,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {photoFrame === 'polaroid' && (
             <div className="absolute inset-4 sm:inset-10 border-[16px] sm:border-[24px] border-b-[56px] sm:border-b-[72px] border-stone-100/95 shadow-2xl rounded-sm pointer-events-none z-10 flex items-end justify-center pb-2">
               <span className="text-stone-800 font-serif italic text-sm sm:text-base tracking-wide">
-                Aether Leap · {checkpointName} ☁️
+                Cozy Leap · {checkpointName} ☁️
               </span>
             </div>
           )}
@@ -1876,21 +1836,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     >
                       {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-amber-300" /> : <Maximize className="w-3.5 h-3.5 text-amber-400" />}
                       <span className="hidden md:inline">{isFullscreen ? 'Salir' : 'Fullscreen'}</span>
-                    </button>
-                  )}
-
-                  {/* Rotate Button in Photo Mode */}
-                  {toggleOrientation && (
-                    <button
-                      onClick={() => {
-                        toggleOrientation();
-                        showToast(isSimulatedLandscape ? 'Orientación Vertical' : 'Orientación Horizontal');
-                      }}
-                      title="Rotar Orientación (Tecla O)"
-                      className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-stone-900/90 border border-stone-800 hover:bg-stone-800 text-amber-300 text-xs font-semibold shadow-md cursor-pointer backdrop-blur-md flex items-center gap-1"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                      <span className="hidden md:inline">Rotar</span>
                     </button>
                   )}
 
@@ -2188,6 +2133,70 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {/* ======================================================== */}
+      {/* LEVEL OBJECTIVE BRIEF                                    */}
+      {/* ======================================================== */}
+      {showLevelBrief && (gameState === 'playing' || gameState === 'paused') && (
+        <div className="absolute inset-0 z-[55] pointer-events-auto flex items-center justify-center p-4 pt-safe pb-safe bg-stone-950/70 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-stone-900 border border-amber-500/30 shadow-2xl p-5 text-stone-100 flex flex-col gap-3 animate-in fade-in zoom-in-95">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Objetivo</p>
+                <h3 className="text-lg font-serif font-bold text-amber-100 leading-snug">{currentHowTo.title}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowLevelBrief(false)}
+                className="p-1.5 rounded-xl hover:bg-stone-800 text-stone-400 cursor-pointer"
+                aria-label="Cerrar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-sm text-amber-200/90 font-semibold leading-snug">{currentHowTo.goal}</p>
+            <ul className="space-y-2 text-xs text-stone-300 leading-relaxed">
+              {currentHowTo.steps.map((step) => (
+                <li key={step} className="flex gap-2">
+                  <span className="text-amber-400 shrink-0 mt-0.5">•</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={() => setShowLevelBrief(false)}
+              className="w-full mt-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm cursor-pointer"
+            >
+              {gameState === 'paused' ? 'Entendido' : '¡A jugar!'}
+            </button>
+            <p className="text-[10px] text-stone-500 text-center">También puedes volver a ver esto desde el menú de pausa.</p>
+          </div>
+        </div>
+      )}
+
+      {showEasterEgg && (
+        <div className="absolute inset-0 z-[70] pointer-events-auto flex items-center justify-center p-4 pt-safe pb-safe bg-stone-950/75 backdrop-blur-sm">
+          <div className="w-full max-w-xs rounded-3xl bg-gradient-to-b from-rose-950/90 to-stone-900 border border-rose-400/40 shadow-2xl p-6 text-stone-100 flex flex-col items-center text-center gap-3 animate-in fade-in zoom-in-95">
+            <div className="w-14 h-14 rounded-full bg-rose-500/20 border border-rose-300/50 flex items-center justify-center text-2xl">
+              ♥
+            </div>
+            <h3 className="text-xl font-serif font-bold text-rose-100 leading-snug">
+              Este juego fue creado para hacer feliz a Monse
+            </h3>
+            <p className="text-xs text-rose-200/80 leading-relaxed">
+              Un secreto entre nubes, islas y saltos. Gracias por jugar Cozy Leap.
+            </p>
+            <button
+              type="button"
+              onClick={() => onDismissEasterEgg?.()}
+              className="w-full py-3 rounded-xl bg-rose-400 hover:bg-rose-300 text-stone-950 font-bold text-sm cursor-pointer"
+            >
+              Con cariño ♥
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
       {/* 5. PAUSE MODAL                                           */}
       {/* ======================================================== */}
       {gameState === 'paused' && (
@@ -2229,6 +2238,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 Reiniciar
               </button>
               <button
+                onClick={() => setShowLevelBrief(true)}
+                className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-200 text-sm font-medium transition-colors cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Compass className="w-4 h-4" />
+                Objetivo del nivel
+              </button>
+              <button
                 onClick={() => {
                   setShowHelpModal(true);
                 }}
@@ -2251,15 +2267,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-amber-400" /> : <Maximize className="w-3.5 h-3.5 text-amber-400" />}
                   <span>{isFullscreen ? 'Ventana' : 'Pantalla completa'}</span>
                 </button>
-              )}
-              {toggleOrientation && (
-                <>
-                  {toggleFullscreen && <span>·</span>}
-                  <button onClick={toggleOrientation} className="flex items-center gap-1.5 hover:text-stone-200 cursor-pointer">
-                    <RotateCw className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Girar pantalla</span>
-                  </button>
-                </>
               )}
             </div>
           </div>
@@ -2481,10 +2488,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Pantalla completa</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">F</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Rotar pantalla</span>
-                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">O</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Modo foto</span>
