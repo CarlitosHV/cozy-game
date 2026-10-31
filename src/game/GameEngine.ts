@@ -68,7 +68,7 @@ export class GameEngine {
   public camera!: THREE.PerspectiveCamera;
   private dirLight!: THREE.DirectionalLight;
   private hemiLight!: THREE.HemisphereLight;
-  private clock!: THREE.Clock;
+  private clock!: THREE.Timer;
   private isSoftwareGl: boolean = false;
 
   // Systems
@@ -205,7 +205,8 @@ export class GameEngine {
       0.1,
       250
     );
-    this.clock = new THREE.Clock();
+    this.clock = new THREE.Timer();
+    this.clock.connect(document);
 
     // 4. Procedural Studio Environment Reflection
     try {
@@ -1095,9 +1096,10 @@ export class GameEngine {
     const tick = () => {
       if (this.isDisposed) return;
 
+      this.clock.update();
       const rawDt = this.clock.getDelta();
-      const dt = Math.min(rawDt, 0.05); // Clamp dt to avoid physics tunnelling
-      const elapsedTime = this.clock.getElapsedTime();
+      const dt = Math.min(rawDt, 0.05);
+      const elapsedTime = this.clock.getElapsed();
 
       this.update(dt, elapsedTime);
       this.renderer.render(this.scene, this.camera);
@@ -1508,6 +1510,7 @@ export class GameEngine {
     this.itemSystem?.dispose();
     this.world.enemyManager?.dispose();
     this.weatherSystem.dispose();
+    this.clock.dispose();
     this.renderer.dispose();
     if (dom.parentElement) {
       dom.parentElement.removeChild(dom);
