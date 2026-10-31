@@ -56,6 +56,7 @@ export interface GameEngineCallbacks {
   onModeChange?: (mode: GameMode) => void;
   onTimeTrialTick?: (timeRemaining: number, bonusNotice?: { seconds: number; reason: string }) => void;
   onStalkerProximity?: (distance: number, warningLevel: 'none' | 'caution' | 'danger') => void;
+  onEasterEgg?: () => void;
 }
 
 export class GameEngine {
@@ -88,6 +89,7 @@ export class GameEngine {
   private levelRoot!: THREE.Group;
   /** Companion unlocked by the last victory (shown on the victory screen) */
   public lastUnlocked: CompanionStyle | null = null;
+  private easterEggFound = false;
   // The level's companion waiting at the summit
   private showcase: THREE.Object3D | null = null;
   private showcaseBase = new THREE.Vector3();
@@ -1284,6 +1286,14 @@ export class GameEngine {
     }
     for (const col of this.world.collectibles) {
       col.update(dt);
+    }
+
+    if (!this.easterEggFound && this.world.easterEgg) {
+      const egg = this.world.easterEgg;
+      if (this.physics.position.distanceTo(egg.position) <= egg.radius) {
+        this.easterEggFound = true;
+        this.callbacks.onEasterEgg?.();
+      }
     }
 
     // 5b. Game Mode Execution (Time Trial Countdown & Chase Stalker)

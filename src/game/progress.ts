@@ -50,6 +50,78 @@ export function levelInfo(level: number): LevelInfo {
   };
 }
 
+export interface LevelHowTo {
+  title: string;
+  goal: string;
+  steps: string[];
+}
+
+/** Clear objective + steps shown at level start and in the pause menu. */
+export function levelHowTo(level: number): LevelHowTo {
+  const info = levelInfo(level);
+
+  if (level === 1) {
+    return {
+      title: 'Nivel 1 · Archipiélago Acogedor',
+      goal: 'Cruza las plataformas y llega al portal de la cima',
+      steps: [
+        'Avanza hacia adelante por las islas flotantes',
+        'Usa hongos elásticos, nubes móviles y géiseres para ganar altura',
+        'Toca los santuarios para guardar tu progreso',
+        'Al final, cruza el portal brillante para completar el nivel',
+      ],
+    };
+  }
+
+  if (level === 2) {
+    return {
+      title: 'Nivel 2 · Ruta Cósmica',
+      goal: 'Salta entre asteroides hasta el portal estelar',
+      steps: [
+        'Sigue la ruta entre islas espaciales y anillos',
+        'Usa plataformas móviles e impulsos para no caer al vacío',
+        'Llega al portal del Observatorio Estelar para ganar',
+      ],
+    };
+  }
+
+  if (level === 3) {
+    return {
+      title: 'Nivel 3 · Pantano Sombrío',
+      goal: 'Atraviesa la bruma y escala hasta el santuario',
+      steps: [
+        'Avanza por las plataformas del pantano y las ruinas',
+        'Cuidado con la niebla y los obstáculos del camino',
+        'Escala la torre y cruza el portal del santuario',
+      ],
+    };
+  }
+
+  if (level === 4) {
+    return {
+      title: 'Nivel 4 · Valle Aero',
+      goal: 'Cruza praderas y cristal hasta el portal final',
+      steps: [
+        'Sigue la ruta por cascadas y plataformas aéreas',
+        'Usa impulsos y trampolines para salvar los huecos',
+        'Llega a la Plaza del Globo y cruza el portal',
+      ],
+    };
+  }
+
+  return {
+    title: `Nivel ${level} · ${info.name}`,
+    goal: 'Reúne los orbes y conquista la fortaleza',
+    steps: [
+      'Explora el mundo abierto con calma',
+      'Encuentra los orbes 🔮 siguiendo sus rayos de luz',
+      'Algunos orbes están en bóvedas: busca una llave 🔑',
+      'Con todos los orbes se abre la fortaleza del centro',
+      'Entra y sube la espiral hasta la cima para ganar',
+    ],
+  };
+}
+
 /** The 4 handmade worlds (kept for reference/UI). */
 export const LEVELS: LevelInfo[] = [1, 2, 3, 4].map(levelInfo);
 

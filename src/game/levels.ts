@@ -101,6 +101,8 @@ export interface WorldBuildResult {
   summitRequiresLanding?: boolean;
   /** Push blocks, locked doors, key carriers, sentinels (generated levels) */
   puzzles?: PuzzleData;
+  /** Hidden interactable for the Monse easter egg (early levels) */
+  easterEgg?: { position: THREE.Vector3; radius: number };
 }
 
 export function buildCozyParkourWorld(
@@ -340,6 +342,30 @@ export function buildCozyParkourWorld(
   decorativeMeshes.push(tree1, tree2);
   registerCylinderCollider('tree_start_sakura', -4.5, 0, -4.0, 0.42, 3.5);
   registerCylinderCollider('tree_start_autumn', 4.5, 0, -3.5, 0.38, 3.2);
+
+  // Tiny hidden heart behind the sakura (walk behind the shrine / trees)
+  const easterEggPos = new THREE.Vector3(-5.85, 0.55, -5.9);
+  const easterHeart = new THREE.Group();
+  easterHeart.position.copy(easterEggPos);
+  const heartMat = new THREE.MeshStandardMaterial({
+    color: 0xf472b6,
+    emissive: 0xbe185d,
+    emissiveIntensity: 0.35,
+    roughness: 0.45,
+    metalness: 0.1,
+  });
+  const lobeGeo = new THREE.SphereGeometry(0.16, 12, 12);
+  const lobeL = new THREE.Mesh(lobeGeo, heartMat);
+  lobeL.position.set(-0.09, 0.06, 0);
+  const lobeR = new THREE.Mesh(lobeGeo, heartMat);
+  lobeR.position.set(0.09, 0.06, 0);
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.28, 10), heartMat);
+  tip.position.set(0, -0.1, 0);
+  tip.rotation.z = Math.PI;
+  easterHeart.add(lobeL, lobeR, tip);
+  easterHeart.scale.setScalar(0.85);
+  scene.add(easterHeart);
+  decorativeMeshes.push(easterHeart);
 
   // Collectibles on start island
   collectibles.push(
@@ -795,8 +821,11 @@ export function buildCozyParkourWorld(
     victoryPortal,
     enemyManager,
     companionShowcasePos: new THREE.Vector3(18.0, summitY + 9.5, 123.0),
+    easterEgg: { position: easterEggPos, radius: 0.85 },
     levelUpdate: (dt, time) => {
       victoryPortal.update(dt, time);
+      easterHeart.rotation.y = time * 0.9;
+      easterHeart.position.y = easterEggPos.y + Math.sin(time * 2.2) * 0.08;
     },
     itemSpots: [
       // Magic berries (feed your companion)
