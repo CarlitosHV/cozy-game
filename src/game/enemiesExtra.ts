@@ -7,6 +7,15 @@
  *  shooter        Seta Lanzaesporas   Torreta Láser      Planta Carnívora    Torre de Spam
  *  diver          Cuervo Travieso     Mini Meteoro       Murciélago          Cursor Maldito
  *
+ *  Behaviour      Jardín Gigante          Castillo Embrujado
+ *  walker         Gnomo Jardinero         Vampiro
+ *  flyer          Gnomo Paracaidista      Gárgola Voladora
+ *  chaser         Gnomo Corredor          Hombre Lobo
+ *  hopper         Gnomo Saltarín          Lobo Saltarín
+ *  shooter        Gnomo Lanzabellotas     Vampiro Conde (lanza murciélagos)
+ *  diver          Gnomo Planeador         Gárgola en Picada
+ *  (walker/flyer are the basic patrols of these two worlds: spawnThemedWalker / spawnThemedFlyer)
+ *
  *  - chaser: spots you, flashes, then charges along its ledge and bumps you off.
  *  - hopper: hops toward you and releases a shockwave when it lands.
  *  - shooter: stationary turret that aims and fires slow projectiles.
@@ -19,13 +28,16 @@ import { soundManager } from '../audio/SoundtrackSynthesizer';
 import { CozyEnemy, EnemyManager, KnockFn } from './enemies';
 
 export type ExtraKind = 'chaser' | 'hopper' | 'shooter' | 'diver';
-export type EnemyTheme = 'cozy' | 'cosmic' | 'swamp' | 'aero';
+type SkinKind = ExtraKind | 'walker' | 'flyer';
+export type EnemyTheme = 'cozy' | 'cosmic' | 'swamp' | 'aero' | 'garden' | 'castle';
 
 export const EXTRA_ENEMY_NAMES: Record<EnemyTheme, Record<ExtraKind, string>> = {
   cozy: { chaser: 'Erizo Castaño', hopper: 'Rana Saltarina', shooter: 'Seta Lanzaesporas', diver: 'Cuervo Travieso' },
   cosmic: { chaser: 'Robot Centinela', hopper: 'Conejo Lunar', shooter: 'Torreta Láser', diver: 'Mini Meteoro' },
   swamp: { chaser: 'Esqueleto', hopper: 'Sapo Venenoso', shooter: 'Planta Carnívora', diver: 'Murciélago' },
   aero: { chaser: 'Gusano Malware', hopper: 'Bloque 404', shooter: 'Torre de Spam', diver: 'Cursor Maldito' },
+  garden: { chaser: 'Gnomo Corredor', hopper: 'Gnomo Saltarín', shooter: 'Gnomo Lanzabellotas', diver: 'Gnomo Planeador' },
+  castle: { chaser: 'Hombre Lobo', hopper: 'Lobo Saltarín', shooter: 'Vampiro Conde', diver: 'Gárgola en Picada' },
 };
 
 type SkinState = 'idle' | 'alert' | 'act';
@@ -72,10 +84,14 @@ function glowBall(color: number, r: number): THREE.Object3D {
 // ---------------------------------------------------------------------------
 // Skins (4 worlds × 4 behaviours)
 // ---------------------------------------------------------------------------
-function makeSkin(theme: EnemyTheme, kind: ExtraKind): Skin {
+function makeSkin(theme: EnemyTheme, kind: SkinKind): Skin {
   const root = new THREE.Group();
   const alert = basic(0xffffff);
   const skin: Skin = { root, alertMats: [alert] };
+  if (theme === 'garden' || theme === 'castle') {
+    makeWorldSkin(theme, kind, skin, alert);
+    return skin;
+  }
 
   // ======================= COZY =======================
   if (theme === 'cozy' && kind === 'chaser') {
@@ -506,7 +522,7 @@ export function spawnExtraEnemy(
   let enemy: CozyEnemy;
 
   if (kind === 'chaser') {
-    enemy = baseEnemy('chaser', id, group, spawnPos, axis, range, 0.45, kind === 'chaser' && theme === 'swamp' ? 1.2 : 0.85);
+    enemy = baseEnemy('chaser', id, group, spawnPos, axis, range, 0.45, theme === 'swamp' || theme === 'castle' ? 1.2 : 0.85);
     let alertT = 0;
     enemy.update = function (this: CozyEnemy, dt, t, playerPos) {
       time = t;
@@ -740,6 +756,511 @@ export function spawnExtraEnemy(
     };
   }
   void time;
+  mgr.registerEnemy(enemy);
+  return enemy;
+}
+
+// ===========================================================================
+// JARDÍN GIGANTE (gnomes) & CASTILLO EMBRUJADO (vampires, werewolves, gargoyles)
+// ===========================================================================
+
+/** A garden gnome ~1m tall facing +z. Returns the parts used by animations. */
+function gnome(root: THREE.Object3D, alert: THREE.Material, hatColor: number, tunicColor: number) {
+  const skinM = std(0xf2c9a0, 0.7);
+  const tunic = std(tunicColor, 0.6);
+  const bootM = std(0x5b3a1f, 0.8);
+  const feet: THREE.Mesh[] = [];
+  for (const s of [1, -1]) {
+    const f = mesh(new THREE.SphereGeometry(0.09, 8, 6), bootM, 0.11 * s, 0.06, 0.03);
+    f.scale.set(1, 0.65, 1.45);
+    root.add(f);
+    feet.push(f);
+  }
+  const body = mesh(new THREE.CylinderGeometry(0.2, 0.3, 0.45, 12), tunic, 0, 0.32, 0);
+  root.add(body);
+  root.add(mesh(new THREE.CylinderGeometry(0.255, 0.265, 0.06, 12), std(0x1f1a17, 0.6), 0, 0.33, 0));
+  root.add(mesh(new THREE.BoxGeometry(0.09, 0.07, 0.03), std(0xfacc15, 0.3, { metalness: 0.7 }), 0, 0.33, 0.265));
+  const arms: THREE.Mesh[] = [];
+  for (const s of [1, -1]) {
+    const arm = mesh(new THREE.CapsuleGeometry(0.06, 0.18, 4, 8), tunic, 0.27 * s, 0.38, 0.02);
+    arm.rotation.z = 0.45 * s;
+    root.add(arm);
+    arms.push(arm);
+    root.add(mesh(new THREE.SphereGeometry(0.055, 8, 6), skinM, 0.34 * s, 0.24, 0.06));
+  }
+  const head = mesh(new THREE.SphereGeometry(0.19, 14, 12), skinM, 0, 0.66, 0);
+  root.add(head);
+  const beard = mesh(new THREE.ConeGeometry(0.17, 0.34, 10), std(0xf8fafc, 0.9), 0, 0.5, 0.1);
+  beard.rotation.x = Math.PI;
+  beard.scale.z = 0.6;
+  root.add(beard);
+  root.add(mesh(new THREE.SphereGeometry(0.06, 8, 8), std(0xf49b9b, 0.6), 0, 0.65, 0.19));
+  eyes(root, alert, 0.73, 0.15, 0.07, 0.03);
+  const hat = mesh(new THREE.ConeGeometry(0.21, 0.58, 12), std(hatColor, 0.6), 0, 0.98, -0.02);
+  hat.rotation.x = -0.18;
+  root.add(hat);
+  return { feet, arms, body, hat };
+}
+
+/** A vampire ~1.25m tall with a cape. */
+function vampire(root: THREE.Object3D, alert: THREE.Material, capeColor: number, liningColor: number) {
+  const pale = std(0xe6e1ef, 0.6);
+  const black = std(0x15121c, 0.6);
+  for (const s of [1, -1]) root.add(mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.38, 8), black, 0.1 * s, 0.19, 0));
+  root.add(mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.48, 12), black, 0, 0.6, 0));
+  root.add(mesh(new THREE.BoxGeometry(0.16, 0.3, 0.02), std(0xf5f5f5, 0.7), 0, 0.66, 0.2));
+  root.add(mesh(new THREE.SphereGeometry(0.05, 8, 6), basic(0xb91c1c), 0, 0.78, 0.21));
+  const cape = mesh(
+    new THREE.ConeGeometry(0.46, 1.0, 16, 1, true, Math.PI * 0.62, Math.PI * 1.76),
+    [std(capeColor, 0.7, { side: THREE.DoubleSide })],
+    0,
+    0.55,
+    -0.02
+  );
+  root.add(cape);
+  const lining = mesh(new THREE.ConeGeometry(0.44, 0.98, 16, 1, true, Math.PI * 0.62, Math.PI * 1.76), std(liningColor, 0.8, { side: THREE.BackSide }), 0, 0.55, -0.02);
+  root.add(lining);
+  const collar = mesh(new THREE.CylinderGeometry(0.3, 0.18, 0.3, 12, 1, true, Math.PI * 0.7, Math.PI * 1.6), std(liningColor, 0.8, { side: THREE.DoubleSide }), 0, 0.98, -0.03);
+  root.add(collar);
+  const head = mesh(new THREE.SphereGeometry(0.2, 14, 12), pale, 0, 1.05, 0.02);
+  root.add(head);
+  const hair = mesh(new THREE.SphereGeometry(0.21, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), black, 0, 1.08, 0);
+  hair.scale.y = 0.75;
+  root.add(hair);
+  const peak = mesh(new THREE.ConeGeometry(0.05, 0.12, 4), black, 0, 1.15, 0.17);
+  peak.rotation.x = Math.PI;
+  root.add(peak);
+  for (const s of [1, -1]) {
+    const ear = mesh(new THREE.ConeGeometry(0.04, 0.14, 4), pale, 0.2 * s, 1.08, 0);
+    ear.rotation.z = -1.2 * s;
+    root.add(ear);
+    const fang = mesh(new THREE.ConeGeometry(0.018, 0.06, 4), basic(0xffffff), 0.035 * s, 0.95, 0.19);
+    fang.rotation.x = Math.PI;
+    root.add(fang);
+  }
+  eyes(root, alert, 1.07, 0.17, 0.075, 0.035);
+  return { cape, lining };
+}
+
+/** A werewolf ~1.35m tall, hunched forward. */
+function werewolf(root: THREE.Object3D, alert: THREE.Material, fur: number, belly: number) {
+  const furM = std(fur, 0.95, { flatShading: true });
+  const bellyM = std(belly, 0.95, { flatShading: true });
+  const legs: THREE.Mesh[] = [];
+  for (const s of [1, -1]) {
+    const leg = mesh(new THREE.CapsuleGeometry(0.1, 0.32, 4, 8), furM, 0.15 * s, 0.26, 0);
+    root.add(leg);
+    legs.push(leg);
+    const foot = mesh(new THREE.SphereGeometry(0.1, 8, 6), furM, 0.15 * s, 0.05, 0.08);
+    foot.scale.set(1, 0.5, 1.5);
+    root.add(foot);
+  }
+  root.add(mesh(new THREE.BoxGeometry(0.42, 0.18, 0.3), std(0x4c1d95, 0.9), 0, 0.5, 0));
+  const torso = mesh(new THREE.SphereGeometry(0.36, 14, 12), furM, 0, 0.8, 0.02);
+  torso.scale.set(1, 1.1, 0.85);
+  torso.rotation.x = 0.3;
+  root.add(torso);
+  const chest = mesh(new THREE.SphereGeometry(0.25, 12, 10), bellyM, 0, 0.78, 0.16);
+  chest.scale.set(1, 1.1, 0.6);
+  root.add(chest);
+  const arms: THREE.Group[] = [];
+  for (const s of [1, -1]) {
+    const arm = new THREE.Group();
+    arm.position.set(0.36 * s, 1.0, 0.08);
+    arm.add(mesh(new THREE.CapsuleGeometry(0.08, 0.45, 4, 8), furM, 0, -0.3, 0.05));
+    for (let k = -1; k <= 1; k++) {
+      const claw = mesh(new THREE.ConeGeometry(0.02, 0.09, 4), basic(0xf5f5f4), k * 0.04, -0.62, 0.1);
+      claw.rotation.x = Math.PI;
+      arm.add(claw);
+    }
+    root.add(arm);
+    arms.push(arm);
+  }
+  const head = new THREE.Group();
+  head.position.set(0, 1.18, 0.16);
+  head.add(mesh(new THREE.SphereGeometry(0.21, 12, 10), furM));
+  const snout = mesh(new THREE.ConeGeometry(0.11, 0.28, 8), bellyM, 0, -0.04, 0.24);
+  snout.rotation.x = Math.PI / 2;
+  head.add(snout);
+  head.add(mesh(new THREE.SphereGeometry(0.04, 6, 6), basic(0x111111), 0, -0.02, 0.38));
+  for (const s of [1, -1]) {
+    head.add(mesh(new THREE.ConeGeometry(0.07, 0.2, 4), furM, 0.12 * s, 0.2, -0.03));
+    head.add(mesh(new THREE.SphereGeometry(0.035, 8, 8), alert, 0.08 * s, 0.06, 0.16));
+    const tuft = mesh(new THREE.ConeGeometry(0.05, 0.16, 4), furM, 0.2 * s, -0.06, 0.02);
+    tuft.rotation.z = 1.4 * s;
+    head.add(tuft);
+  }
+  root.add(head);
+  return { legs, arms, head };
+}
+
+/** A stone gargoyle with bat wings, centered around its belly. */
+function gargoyle(root: THREE.Object3D, alert: THREE.Material, y0: number) {
+  const stone = std(0x7d7a85, 0.95, { flatShading: true });
+  const dark = std(0x55525c, 0.95, { flatShading: true });
+  const g = new THREE.Group();
+  g.position.y = y0;
+  root.add(g);
+  const body = mesh(new THREE.SphereGeometry(0.32, 10, 8), stone, 0, 0, 0);
+  body.scale.set(1, 0.95, 1.15);
+  g.add(body);
+  const head = new THREE.Group();
+  head.position.set(0, 0.3, 0.26);
+  head.add(mesh(new THREE.DodecahedronGeometry(0.2, 0), stone));
+  head.add(mesh(new THREE.BoxGeometry(0.2, 0.12, 0.16), dark, 0, -0.06, 0.15));
+  for (const s of [1, -1]) {
+    const horn = mesh(new THREE.ConeGeometry(0.045, 0.24, 5), dark, 0.12 * s, 0.2, -0.04);
+    horn.rotation.set(-0.5, 0, -0.5 * s);
+    head.add(horn);
+    head.add(mesh(new THREE.SphereGeometry(0.035, 8, 8), alert, 0.08 * s, 0.04, 0.16));
+    const fang = mesh(new THREE.ConeGeometry(0.015, 0.05, 4), basic(0xe7e5e4), 0.05 * s, -0.13, 0.22);
+    fang.rotation.x = Math.PI;
+    head.add(fang);
+  }
+  g.add(head);
+  const wings: THREE.Group[] = [];
+  for (const s of [1, -1]) {
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.lineTo(0.75, 0.35);
+    shape.lineTo(0.9, -0.05);
+    shape.lineTo(0.68, -0.02);
+    shape.lineTo(0.6, -0.25);
+    shape.lineTo(0.4, -0.08);
+    shape.lineTo(0.25, -0.28);
+    shape.closePath();
+    const geo = new THREE.ShapeGeometry(shape);
+    if (s < 0) geo.scale(-1, 1, 1);
+    const pivot = new THREE.Group();
+    pivot.position.set(0.15 * s, 0.15, -0.15);
+    const w = mesh(geo, std(0x67646f, 0.9, { side: THREE.DoubleSide, flatShading: true }));
+    w.rotation.x = -0.4;
+    pivot.add(w);
+    g.add(pivot);
+    wings.push(pivot);
+  }
+  for (const s of [1, -1]) {
+    const leg = mesh(new THREE.SphereGeometry(0.12, 8, 6), stone, 0.2 * s, -0.25, 0.08);
+    leg.scale.set(0.8, 1, 1.2);
+    g.add(leg);
+  }
+  const tail = mesh(new THREE.ConeGeometry(0.05, 0.6, 5), dark, 0, -0.15, -0.5);
+  tail.rotation.x = -1.2;
+  g.add(tail);
+  return { g, wings };
+}
+
+function makeWorldSkin(theme: 'garden' | 'castle', kind: SkinKind, skin: Skin, alert: THREE.MeshBasicMaterial) {
+  const root = skin.root;
+  if (theme === 'garden') {
+    if (kind === 'walker') {
+      // Gnomo Jardinero with a little shovel
+      const p = gnome(root, alert, 0xdc2626, 0x2563eb);
+      const tool = new THREE.Group();
+      tool.position.set(-0.34, 0.24, 0.08);
+      tool.add(mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.6, 6), std(0x8b5a2b), 0, 0.12, 0));
+      tool.add(mesh(new THREE.BoxGeometry(0.16, 0.2, 0.03), std(0x9ca3af, 0.3, { metalness: 0.8 }), 0, -0.25, 0));
+      root.add(tool);
+      Object.assign(skin, {
+        normalColor: 0x111111,
+        alertColor: 0xff2a2a,
+        anim: (t: number, st: SkinState) => {
+          const sp = st === 'idle' ? 8 : 14;
+          p.feet[0].position.z = 0.03 + Math.sin(t * sp) * 0.06;
+          p.feet[1].position.z = 0.03 - Math.sin(t * sp) * 0.06;
+          p.hat.rotation.z = Math.sin(t * sp) * 0.06;
+          tool.rotation.x = Math.sin(t * sp) * 0.3;
+        },
+      });
+    } else if (kind === 'flyer') {
+      // Gnomo Paracaidista hanging from a dandelion puff
+      const body = new THREE.Group();
+      body.position.y = -0.9;
+      root.add(body);
+      const p = gnome(body, alert, 0xf97316, 0x0d9488);
+      p.arms.forEach((a, i) => (a.rotation.z = (i ? -1 : 1) * 2.6));
+      const puff = new THREE.Group();
+      puff.position.y = 0.55;
+      root.add(puff);
+      const stick = mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.95, 4), std(0x65a30d), 0, -0.47, 0);
+      puff.add(stick);
+      puff.add(mesh(new THREE.SphereGeometry(0.07, 8, 6), std(0xd6d3d1), 0, 0, 0));
+      const fluff = std(0xffffff, 0.9, { transparent: true, opacity: 0.9 });
+      for (let i = 0; i < 26; i++) {
+        const a = i * 2.39996;
+        const yv = 1 - (i / 25) * 1.3;
+        const r = Math.sqrt(Math.max(0, 1 - yv * yv));
+        const dir = new THREE.Vector3(Math.cos(a) * r, yv, Math.sin(a) * r).normalize();
+        const strand = mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.42, 3), fluff, dir.x * 0.21, dir.y * 0.21, dir.z * 0.21);
+        strand.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        puff.add(strand);
+        puff.add(mesh(new THREE.SphereGeometry(0.04, 5, 4), fluff, dir.x * 0.43, dir.y * 0.43, dir.z * 0.43));
+      }
+      Object.assign(skin, {
+        normalColor: 0x111111,
+        alertColor: 0xff2a2a,
+        anim: (t: number) => {
+          root.rotation.z = Math.sin(t * 1.6) * 0.15;
+          puff.rotation.y = t * 0.6;
+          p.feet.forEach((f, i) => (f.position.z = 0.03 + Math.sin(t * 5 + i * Math.PI) * 0.05));
+        },
+      });
+    } else if (kind === 'chaser') {
+      // Gnomo Corredor with a rake
+      const p = gnome(root, alert, 0x1d4ed8, 0xb91c1c);
+      const rake = new THREE.Group();
+      rake.position.set(0.32, 0.3, 0.12);
+      rake.add(mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.9, 6), std(0x8b5a2b), 0, 0.15, 0));
+      rake.add(mesh(new THREE.BoxGeometry(0.3, 0.03, 0.03), std(0x6b7280, 0.3, { metalness: 0.8 }), 0, 0.6, 0));
+      for (let i = -2; i <= 2; i++) rake.add(mesh(new THREE.BoxGeometry(0.015, 0.08, 0.015), std(0x6b7280, 0.3, { metalness: 0.8 }), i * 0.065, 0.65, 0));
+      root.add(rake);
+      Object.assign(skin, {
+        normalColor: 0x111111,
+        alertColor: 0xff2a2a,
+        anim: (t: number, st: SkinState) => {
+          const sp = st === 'act' ? 22 : 9;
+          p.feet[0].position.z = 0.03 + Math.sin(t * sp) * 0.08;
+          p.feet[1].position.z = 0.03 - Math.sin(t * sp) * 0.08;
+          root.rotation.x = st === 'act' ? 0.25 : 0;
+          rake.rotation.x = st === 'act' ? -0.9 : 0;
+        },
+      });
+    } else if (kind === 'hopper') {
+      // Gnomo Saltarín on a pogo spring
+      const body = new THREE.Group();
+      body.position.y = 0.3;
+      root.add(body);
+      gnome(body, alert, 0xeab308, 0x16a34a);
+      const metal = std(0x9ca3af, 0.3, { metalness: 0.8 });
+      for (let i = 0; i < 4; i++) {
+        const coil = mesh(new THREE.TorusGeometry(0.12, 0.025, 6, 16), metal, 0, 0.05 + i * 0.065, 0.02);
+        coil.rotation.x = Math.PI / 2;
+        root.add(coil);
+      }
+      root.add(mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.04, 12), std(0x1f2937), 0, 0.3, 0.02));
+      Object.assign(skin, { normalColor: 0x111111, alertColor: 0xffd400 });
+    } else if (kind === 'shooter') {
+      // Gnomo Lanzabellotas with a slingshot
+      gnome(root, alert, 0x7c3aed, 0xea580c);
+      const sling = new THREE.Group();
+      sling.position.set(0, 0.4, 0.32);
+      const wood = std(0x8b5a2b);
+      sling.add(mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.22, 6), wood, 0, -0.08, 0));
+      for (const s of [1, -1]) {
+        const prong = mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.18, 6), wood, 0.06 * s, 0.1, 0);
+        prong.rotation.z = -0.4 * s;
+        sling.add(prong);
+      }
+      sling.add(mesh(new THREE.BoxGeometry(0.2, 0.015, 0.015), std(0x92400e), 0, 0.17, -0.02));
+      root.add(sling);
+      const muzzle = new THREE.Object3D();
+      muzzle.position.set(0, 0.6, 0.45);
+      root.add(muzzle);
+      Object.assign(skin, {
+        muzzle,
+        normalColor: 0x111111,
+        alertColor: 0xfde047,
+        projectile: () => {
+          const acorn = new THREE.Group();
+          const nut = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), std(0xb45309, 0.5));
+          nut.scale.set(1, 1.25, 1);
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), std(0x713f12, 0.9));
+          cap.position.y = 0.08;
+          acorn.add(nut, cap);
+          return acorn;
+        },
+        anim: (t: number, st: SkinState) => (sling.rotation.x = st === 'alert' ? -0.5 + Math.sin(t * 30) * 0.05 : 0),
+      });
+    } else {
+      // diver: Gnomo Planeador riding a leaf
+      const leaf = mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 20), std(0x65a30d, 0.5, { side: THREE.DoubleSide }), 0, -0.1, 0);
+      leaf.scale.set(0.7, 1, 1.3);
+      root.add(leaf);
+      root.add(mesh(new THREE.BoxGeometry(0.03, 0.05, 1.3), std(0xbef264), 0, -0.07, 0));
+      const body = new THREE.Group();
+      body.position.y = -0.08;
+      body.scale.setScalar(0.75);
+      root.add(body);
+      gnome(body, alert, 0x16a34a, 0x92400e);
+      Object.assign(skin, {
+        normalColor: 0x111111,
+        alertColor: 0xff2222,
+        anim: (t: number, st: SkinState) => {
+          root.rotation.z = st === 'act' ? 0 : Math.sin(t * 1.5) * 0.25;
+          root.rotation.x = st === 'act' ? 0.5 : 0;
+        },
+      });
+    }
+    return;
+  }
+
+  // ======================= CASTLE =======================
+  if (kind === 'walker') {
+    const v = vampire(root, alert, 0x111018, 0xb91c1c);
+    Object.assign(skin, {
+      normalColor: 0xb91c1c,
+      alertColor: 0xff3355,
+      anim: (t: number, st: SkinState) => {
+        const sway = Math.sin(t * (st === 'idle' ? 3 : 7)) * 0.08;
+        v.cape.rotation.x = -0.1 + sway;
+        v.lining.rotation.x = -0.1 + sway;
+        root.position.y = Math.abs(Math.sin(t * 6)) * 0.04;
+      },
+    });
+  } else if (kind === 'shooter') {
+    // Vampiro Conde: throws bats
+    const v = vampire(root, alert, 0x3b0764, 0x7e22ce);
+    root.add(mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 12), std(0xd4a72c, 0.3, { metalness: 0.9 }), 0, 0.82, 0.22).rotateX(Math.PI / 2));
+    const arm = new THREE.Group();
+    arm.position.set(0.22, 0.85, 0.05);
+    arm.add(mesh(new THREE.CapsuleGeometry(0.05, 0.3, 4, 8), std(0x15121c), 0, 0.15, 0));
+    root.add(arm);
+    const muzzle = new THREE.Object3D();
+    muzzle.position.set(0.25, 1.2, 0.35);
+    root.add(muzzle);
+    Object.assign(skin, {
+      muzzle,
+      normalColor: 0xb91c1c,
+      alertColor: 0xff3355,
+      projectile: () => {
+        const bat = new THREE.Group();
+        const black = basic(0x120e18);
+        bat.add(new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), black));
+        for (const s of [1, -1]) {
+          const wg = new THREE.PlaneGeometry(0.34, 0.18);
+          wg.translate(0.17 * s, 0, 0);
+          const w = new THREE.Mesh(wg, new THREE.MeshBasicMaterial({ color: 0x120e18, side: THREE.DoubleSide }));
+          w.rotation.x = -Math.PI / 2;
+          bat.add(w);
+          const e = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 6), basic(0xff2244));
+          e.position.set(0.04 * s, 0.04, 0.1);
+          bat.add(e);
+        }
+        return bat;
+      },
+      anim: (t: number, st: SkinState) => {
+        arm.rotation.x = st === 'alert' ? -2.2 : st === 'act' ? -1.2 : -0.2;
+        v.cape.rotation.x = -0.1 + Math.sin(t * 3) * 0.06;
+      },
+    });
+  } else if (kind === 'chaser' || kind === 'hopper') {
+    const grey = kind === 'hopper';
+    const w = werewolf(root, alert, grey ? 0x8a8f99 : 0x6b4a2f, grey ? 0xcbd5e1 : 0xa47a52);
+    Object.assign(skin, {
+      normalColor: 0xfacc15,
+      alertColor: 0xff2a2a,
+      anim: (t: number, st: SkinState) => {
+        const sp = st === 'act' ? 16 : 6;
+        w.legs[0].rotation.x = Math.sin(t * sp) * 0.5;
+        w.legs[1].rotation.x = -Math.sin(t * sp) * 0.5;
+        w.arms[0].rotation.x = st === 'act' ? -1.2 : Math.sin(t * sp) * 0.4;
+        w.arms[1].rotation.x = st === 'act' ? -1.2 : -Math.sin(t * sp) * 0.4;
+        w.head.rotation.x = st === 'alert' ? -0.5 : 0;
+      },
+    });
+  } else {
+    // flyer (Gárgola Voladora) / diver (Gárgola en Picada)
+    const gg = gargoyle(root, alert, 0);
+    const fast = kind === 'diver';
+    Object.assign(skin, {
+      normalColor: 0xf97316,
+      alertColor: 0xff2222,
+      anim: (t: number, st: SkinState) => {
+        const flap = st === 'act' && fast ? 0.15 : Math.sin(t * (fast ? 14 : 8)) * 0.6;
+        gg.wings[0].rotation.y = -flap;
+        gg.wings[1].rotation.y = flap;
+        gg.g.rotation.x = st === 'act' && fast ? 0.7 : 0;
+      },
+    });
+  }
+}
+
+/** Basic patrol of the garden & castle worlds (Gnomo Jardinero / Vampiro). */
+export function spawnThemedWalker(mgr: EnemyManager, theme: EnemyTheme, id: string, spawnPos: THREE.Vector3, axis: 'x' | 'z', range: number): CozyEnemy {
+  const group = new THREE.Group();
+  group.position.copy(spawnPos);
+  const skin = makeSkin(theme, 'walker');
+  applyAlert(skin, false);
+  group.add(skin.root);
+  const sh = new THREE.Mesh(new THREE.CircleGeometry(0.42, 16), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false }));
+  sh.rotation.x = -Math.PI / 2;
+  sh.position.y = 0.02;
+  group.add(sh);
+  mgr.addObject(group);
+  const enemy = baseEnemy('walker', id, group, spawnPos, axis, Math.max(0.6, range), 0.42, theme === 'castle' ? 1.15 : 0.95);
+  enemy.update = function (this: CozyEnemy, dt, t, playerPos) {
+    if (handleSquash(this, dt)) return;
+    const h = mgr.hostility;
+    const a = this.patrolAxis;
+    const dx = playerPos.x - this.position.x;
+    const dz = playerPos.z - this.position.z;
+    const sees = Math.hypot(dx, dz) < 3 + 3 * h && Math.abs(playerPos.y - this.position.y) < 1.6;
+    let speed = 1.1 * (1 + 0.7 * h);
+    if (sees) {
+      // Walks toward you (never leaving its ledge)
+      speed *= 1.6;
+      const target = THREE.MathUtils.clamp(playerPos[a], this.minBound, this.maxBound);
+      const delta = target - this.position[a];
+      if (Math.abs(delta) > 0.05) this.direction = Math.sign(delta);
+      this.position[a] += THREE.MathUtils.clamp(delta, -speed * dt, speed * dt);
+    } else {
+      this.position[a] += this.direction * speed * dt;
+      if (this.position[a] > this.maxBound) {
+        this.position[a] = this.maxBound;
+        this.direction = -1;
+      } else if (this.position[a] < this.minBound) {
+        this.position[a] = this.minBound;
+        this.direction = 1;
+      }
+    }
+    const yaw = sees ? Math.atan2(dx, dz) : a === 'x' ? (this.direction > 0 ? Math.PI / 2 : -Math.PI / 2) : this.direction > 0 ? 0 : Math.PI;
+    faceYaw(this, yaw, dt, 8);
+    this.group.position.copy(this.position);
+    const st: SkinState = sees ? 'alert' : 'idle';
+    applyAlert(skin, sees);
+    skin.anim?.(t, st, dt);
+  };
+  mgr.registerEnemy(enemy);
+  return enemy;
+}
+
+/** Basic flyer of the garden & castle worlds (Gnomo Paracaidista / Gárgola Voladora): hovers back and forth over a gap. */
+export function spawnThemedFlyer(mgr: EnemyManager, theme: EnemyTheme, id: string, spawnPos: THREE.Vector3, axis: 'x' | 'z', range: number): CozyEnemy {
+  const group = new THREE.Group();
+  group.position.copy(spawnPos);
+  const skin = makeSkin(theme, 'flyer');
+  applyAlert(skin, false);
+  group.add(skin.root);
+  mgr.addObject(group);
+  const enemy = baseEnemy('flyer', id, group, spawnPos, axis, range, 0.5, 0.7);
+  const home = spawnPos.clone();
+  let phase = Math.random() * 10;
+  enemy.update = function (this: CozyEnemy, dt, t, playerPos) {
+    if (handleSquash(this, dt)) return;
+    const h = mgr.hostility;
+    phase += dt * 0.8 * (1 + 0.6 * h);
+    const a = this.patrolAxis;
+    const prev = this.position[a];
+    this.position.copy(home);
+    this.position[a] = home[a] + Math.sin(phase) * range;
+    this.position.y = home.y + Math.sin(t * 2.2 + home.x) * 0.3;
+    const vel = this.position[a] - prev;
+    if (Math.abs(vel) > 1e-4) this.direction = Math.sign(vel);
+    const near = this.position.distanceTo(playerPos) < 4 + 2 * h;
+    const yaw = near
+      ? Math.atan2(playerPos.x - this.position.x, playerPos.z - this.position.z)
+      : a === 'x'
+      ? this.direction > 0
+        ? Math.PI / 2
+        : -Math.PI / 2
+      : this.direction > 0
+      ? 0
+      : Math.PI;
+    faceYaw(this, yaw, dt, 6);
+    this.group.position.copy(this.position);
+    applyAlert(skin, near);
+    skin.anim?.(t, near ? 'alert' : 'idle', dt);
+  };
   mgr.registerEnemy(enemy);
   return enemy;
 }

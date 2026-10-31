@@ -891,6 +891,8 @@ export function createPlayerCharacter(
   companionSprite.position.set(0.42, 1.25, 0.15); // hovers near shoulder
   let companionSpinner: THREE.Object3D | null = null;
   const companionWings: THREE.Mesh[] = [];
+  /** Custom per-companion animation (fairy wings, serpent body…) */
+  let companionAnim: ((t: number, dt: number) => void) | null = null;
 
   if (look.companion === 'nube') {
     // "Nubi": tiny cloud sprite with halo
@@ -1051,6 +1053,132 @@ export function createPlayerCharacter(
       companionSprite.add(wing);
     }
     companionSprite.add(bodyBug, glow, aura, sEye1, sEye2);
+  } else if (look.companion === 'hada') {
+    // "Lila": tiny garden fairy with a pink petal dress, lilac hair, four shimmering wings and a star wand
+    const fairy = new THREE.Group();
+    const skinM = new THREE.MeshStandardMaterial({ color: 0xffe0cc, roughness: 0.6 });
+    const dressMat = new THREE.MeshStandardMaterial({ color: 0xf472b6, roughness: 0.5, emissive: 0x9d174d, emissiveIntensity: 0.15 });
+    const hairMat = new THREE.MeshStandardMaterial({ color: 0xc4b5fd, roughness: 0.5 });
+    const dress = new THREE.Mesh(new THREE.ConeGeometry(0.048, 0.1, 10), dressMat);
+    dress.position.y = -0.035;
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      const petal = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 4), dressMat);
+      petal.scale.set(1, 0.4, 1.6);
+      petal.position.set(Math.cos(a) * 0.04, -0.08, Math.sin(a) * 0.04);
+      petal.rotation.y = -a;
+      fairy.add(petal);
+    }
+    const headF = new THREE.Mesh(new THREE.SphereGeometry(0.033, 12, 10), skinM);
+    headF.position.y = 0.04;
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.036, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.6), hairMat);
+    hair.position.set(0, 0.044, -0.004);
+    const bun = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 8), hairMat);
+    bun.position.set(0, 0.082, -0.01);
+    const fEyeGeom = new THREE.SphereGeometry(0.0075, 6, 6);
+    const fEye1 = new THREE.Mesh(fEyeGeom, eyeMat);
+    fEye1.position.set(0.012, 0.043, 0.03);
+    const fEye2 = new THREE.Mesh(fEyeGeom, eyeMat);
+    fEye2.position.set(-0.012, 0.043, 0.03);
+    fairy.add(dress, headF, hair, bun, fEye1, fEye2);
+    // Wings: two pairs on pivots that flap
+    const wingPivots: THREE.Group[] = [];
+    const wingMatA = new THREE.MeshBasicMaterial({ color: 0xf9a8d4, transparent: true, opacity: 0.78, side: THREE.DoubleSide, depthWrite: false });
+    const wingMatB = new THREE.MeshBasicMaterial({ color: 0xc4b5fd, transparent: true, opacity: 0.78, side: THREE.DoubleSide, depthWrite: false });
+    for (const side of [1, -1]) {
+      for (const upper of [true, false]) {
+        const pivot = new THREE.Group();
+        pivot.position.set(0.006 * side, upper ? 0.012 : -0.012, -0.022);
+        const wg = new THREE.CircleGeometry(upper ? 0.05 : 0.034, 14);
+        wg.scale(1, upper ? 0.62 : 0.55, 1);
+        wg.translate((upper ? 0.05 : 0.034) * side, upper ? 0.02 : -0.012, 0);
+        const wing = new THREE.Mesh(wg, upper ? wingMatA : wingMatB);
+        pivot.add(wing);
+        fairy.add(pivot);
+        wingPivots.push(pivot);
+      }
+    }
+    // Star wand
+    const wand = new THREE.Group();
+    wand.position.set(0.045, -0.01, 0.02);
+    wand.rotation.z = -0.5;
+    const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.07, 4), new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.6, roughness: 0.3 }));
+    stick.position.y = 0.035;
+    const starTip = new THREE.Mesh(new THREE.OctahedronGeometry(0.014, 0), new THREE.MeshBasicMaterial({ color: 0xfde047 }));
+    starTip.position.y = 0.075;
+    wand.add(stick, starTip);
+    fairy.add(wand);
+    const fAura = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xf9a8d4, transparent: true, opacity: 0.14, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    fairy.add(fAura);
+    companionSprite.add(fairy);
+    companionAnim = (t) => {
+      const flap = 0.35 + Math.sin(t * 28) * 0.5;
+      wingPivots.forEach((p, i) => (p.rotation.y = (i < 2 ? -1 : 1) * flap));
+      fairy.rotation.y = Math.sin(t * 1.4) * 0.5;
+      fairy.position.y = Math.sin(t * 4) * 0.012;
+      starTip.rotation.y = t * 4;
+      (fAura.material as THREE.MeshBasicMaterial).opacity = 0.1 + Math.sin(t * 6) * 0.05;
+    };
+  } else if (look.companion === 'serpiente') {
+    // "Jade": a little flying jade serpent (eastern dragon style) whose body ripples through the air
+    const serpent = new THREE.Group();
+    const jadeA = new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.35, metalness: 0.1, emissive: 0x064e3b, emissiveIntensity: 0.25 });
+    const jadeB = new THREE.MeshStandardMaterial({ color: 0x34d399, roughness: 0.35, metalness: 0.1, emissive: 0x065f46, emissiveIntensity: 0.25 });
+    const goldM = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.3, metalness: 0.7 });
+    const segs: THREE.Mesh[] = [];
+    const N = 12;
+    for (let i = 0; i < N; i++) {
+      const r = 0.032 - i * 0.0019;
+      const sgm = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), i % 2 ? jadeB : jadeA);
+      if (i % 3 === 1) {
+        const fin = new THREE.Mesh(new THREE.ConeGeometry(r * 0.45, r * 1.4, 4), goldM);
+        fin.position.y = r * 0.9;
+        sgm.add(fin);
+      }
+      serpent.add(sgm);
+      segs.push(sgm);
+    }
+    const headS = new THREE.Group();
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 10), jadeA);
+    skull.scale.set(1, 0.85, 1.25);
+    const snout = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), jadeB);
+    snout.position.set(0, -0.008, 0.04);
+    snout.scale.set(1.1, 0.7, 1);
+    const sEye1 = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 6), eyeMat);
+    sEye1.position.set(0.022, 0.014, 0.03);
+    const sEye2 = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 6), eyeMat);
+    sEye2.position.set(-0.022, 0.014, 0.03);
+    headS.add(skull, snout, sEye1, sEye2);
+    for (const side of [1, -1]) {
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.007, 0.045, 5), goldM);
+      horn.position.set(0.018 * side, 0.04, -0.012);
+      horn.rotation.x = -0.6;
+      const whisker = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.001, 0.07, 3), goldM);
+      whisker.position.set(0.03 * side, -0.012, 0.05);
+      whisker.rotation.set(0.4, 0, -1.1 * side);
+      const wingS = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.06, 3), new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.4, transparent: true, opacity: 0.85 }));
+      wingS.position.set(0.035 * side, 0.01, -0.06);
+      wingS.rotation.z = -1.3 * side;
+      wingS.scale.z = 0.3;
+      headS.add(horn, whisker);
+      segs[2].add(wingS);
+    }
+    serpent.add(headS);
+    serpent.scale.setScalar(1.3);
+    companionSprite.add(serpent);
+    companionAnim = (t) => {
+      for (let i = 0; i < N; i++) {
+        const k = i * 0.55;
+        segs[i].position.set(Math.sin(t * 3.2 - k) * 0.045, Math.cos(t * 2.4 - k * 0.8) * 0.03 + i * 0.004, -0.03 - i * 0.026);
+      }
+      headS.position.set(Math.sin(t * 3.2 + 0.55) * 0.045, Math.cos(t * 2.4 + 0.44) * 0.03 - 0.004, 0.012);
+      headS.rotation.y = Math.cos(t * 3.2 + 0.55) * 0.5;
+      serpent.rotation.y = Math.sin(t * 0.8) * 0.6;
+    };
+    companionAnim(0, 0);
   }
   group.add(companionSprite);
   companionSprite.visible = look.companion !== 'ninguno';
@@ -1167,6 +1295,7 @@ export function createPlayerCharacter(
       const flap = Math.sin(windTime * 30) * 0.7;
       companionWings[i].rotation.x = flap;
     }
+    companionAnim?.(windTime, dt);
   };
 
   return {

@@ -3,7 +3,7 @@
  * 100% Web Audio API - Zero external MP3/audio files (Zero 404s).
  */
 
-export type WeatherType = 'golden_hour' | 'cozy_rain' | 'sakura_breeze' | 'starlit_night' | 'aero_day' | 'cosmic' | 'swamp_mist';
+export type WeatherType = 'golden_hour' | 'cozy_rain' | 'sakura_breeze' | 'starlit_night' | 'aero_day' | 'cosmic' | 'swamp_mist' | 'garden_day' | 'castle_night';
 
 class SoundtrackSynthesizer {
   private ctx: AudioContext | null = null;
@@ -283,7 +283,7 @@ class SoundtrackSynthesizer {
       if (this.nightGainNode) {
         this.nightGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
       }
-    } else if (this.currentWeather === 'starlit_night') {
+    } else if (this.currentWeather === 'starlit_night' || this.currentWeather === 'castle_night') {
       wGain.gain.setTargetAtTime(0.05, now, timeConstant);
       if (this.rainGainNode) {
         this.rainGainNode.gain.setTargetAtTime(0.0, now, timeConstant);

@@ -2,7 +2,8 @@
  * Theme packs for the procedural level generator.
  * Each pack knows how to dress every kind of platform, which trampoline and enemies
  * to use, decor props and the sky backdrop — for the 4 worlds:
- *   cozy (Archipiélago), cosmic (Ruta Cósmica), swamp (Pantano Sombrío), aero (Valle Aero).
+ *   cozy (Archipiélago), cosmic (Ruta Cósmica), swamp (Pantano Sombrío), aero (Valle Aero),
+ *   garden (Jardín Gigante, levelGarden.ts) and castle (Castillo Embrujado, levelCastle.ts).
  */
 import * as THREE from 'three';
 import { WeatherType } from '../audio/SoundtrackSynthesizer';
@@ -12,8 +13,10 @@ import { ProceduralTextures } from './textures';
 import { LevelKit, makeGlowTexture } from './levelKit';
 import { addCosmicBackdrop, createCosmicStyle } from './levelCosmic';
 import { addSwampBackdrop, createSwampStyle } from './levelSwamp';
+import { gardenPack } from './levelGarden';
+import { castlePack } from './levelCastle';
 
-export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero';
+export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero' | 'garden' | 'castle';
 export type Builder = (g: THREE.Group, w: number, d: number, h: number) => void;
 type Spawner = (em: EnemyManager, id: string, pos: THREE.Vector3, axis: 'x' | 'z', range: number) => void;
 
@@ -43,6 +46,8 @@ export const THEME_NAMES: Record<ThemeId, string> = {
   cosmic: 'Ruta Cósmica',
   swamp: 'Pantano Sombrío',
   aero: 'Valle Aero',
+  garden: 'Jardín Gigante',
+  castle: 'Castillo Embrujado',
 };
 
 export const THEME_ACCENTS: Record<ThemeId, string> = {
@@ -50,6 +55,8 @@ export const THEME_ACCENTS: Record<ThemeId, string> = {
   cosmic: '#a78bfa',
   swamp: '#84cc16',
   aero: '#38bdf8',
+  garden: '#f472b6',
+  castle: '#ef4444',
 };
 
 // ---------------------------------------------------------------------------
@@ -417,6 +424,10 @@ export function createThemePack(id: ThemeId, kit: LevelKit, textures: Procedural
       return swampPack(kit, textures);
     case 'aero':
       return aeroPack(kit);
+    case 'garden':
+      return gardenPack(kit);
+    case 'castle':
+      return castlePack(kit, textures);
     default:
       return cozyPack(kit, textures);
   }
