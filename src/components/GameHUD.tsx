@@ -1018,7 +1018,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     {orbs.summitOpen ? '¡Cima abierta!' : 'Orbes encontrados'}
                   </span>
                   <span className="font-semibold tabular-nums">
-                    {orbs.summitOpen ? 'Ve a la corriente del valle' : `${orbs.have} / ${orbs.total} · sigue los rayos de luz`}
+                    {orbs.summitOpen ? 'La fortaleza está abierta: ¡sube a la cima!' : `${orbs.have} / ${orbs.total} · sigue los rayos de luz`}
                   </span>
                 </div>
               </div>
@@ -2138,13 +2138,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-400/30 text-[11px] text-sky-100/90 leading-relaxed mb-3">
               <strong className="text-sky-300">🗺️ Mundos abiertos y puzzles (desde el nivel 5):</strong>
               <p className="mt-1">
-                Empiezas en un valle con varios caminos. Al final de cada uno hay un <strong>orbe 🔮</strong> (busca los rayos de luz) y un{' '}
-                <strong>portal 🌀</strong> para volver al valle. Con todos los orbes se rompe el escudo de la cima y se abre la corriente de viento del valle.
-                Algunos caminos empiezan cerrados: su llave está al final de otro camino.
+                Cada nivel es una zona para explorar libremente: colinas, mesetas, escaleras, fosos e islas en el cielo. Escondidos por la zona hay varios{' '}
+                <strong>orbes 🔮</strong> (busca los rayos de luz): en torres, islas flotantes, bóvedas con llave, sobre pilares o al final de rutas fuera del mapa
+                (con un <strong>portal 🌀</strong> para volver). Con todos los orbes se rompe el escudo de la <strong>fortaleza</strong> del centro: entra por la
+                puerta y sube su espiral, la parte más difícil del nivel, hasta la cima.
               </p>
               <ul className="list-disc list-inside mt-1 space-y-1">
-                <li><strong>Roca 🪨:</strong> camina contra ella para empujarla hasta el muro alto y súbete encima para trepar. Si cae al vacío, vuelve a su sitio.</li>
-                <li><strong>Puerta con candado 🚪:</strong> necesitas una llave 🔑. A veces está en una isla más abajo: baja por ella y regresa con el trampolín.</li>
+                <li><strong>Roca 🪨:</strong> camina contra ella para empujarla hasta el pilar alto y súbete encima para alcanzar el orbe. Si se cae, vuelve a su sitio.</li>
+                <li><strong>Bóveda con candado 🚪:</strong> el orbe está encerrado; necesitas una llave 🔑. Búscala en las islas del cielo (sube con un trampolín).</li>
                 <li><strong>Ladrón de llaves:</strong> si un enemigo lleva una llave sobre la cabeza, salta encima de él para quitársela.</li>
                 <li><strong>Vigía 👁️:</strong> si su luz te ve, vuelves a la entrada de la zona. Escóndete tras los muros y avanza cuando mire a otro lado.</li>
               </ul>

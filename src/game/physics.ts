@@ -98,6 +98,8 @@ export class ParkourPhysics {
       this.currentCheckpointIndex = index;
       this.position.copy(cp.spawnPos);
       this.lastSafePos.copy(cp.spawnPos);
+      // Keep the 3D model with the body (the title screen & character creator don't run physics)
+      this.playerModel.group.position.copy(cp.spawnPos);
       this.carryTimer = 0;
       this.velocity.set(0, 0, 0);
       this.isGrounded = true;

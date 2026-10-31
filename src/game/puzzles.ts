@@ -92,8 +92,10 @@ export interface Portal {
 }
 
 export interface SummitGate {
-  /** The wind current to the summit (only in world.platforms once every orb is found) */
-  updraft: PlatformItem;
+  /** Optional wind current to the summit (only in world.platforms once every orb is found) */
+  updraft?: PlatformItem;
+  /** Message shown when every orb is found */
+  openText?: string;
   /** Invisible wall around the summit while it is locked */
   shield: PlatformItem;
   shieldY: number;
@@ -416,9 +418,11 @@ export class PuzzleSystem {
     if (!s) return;
     s.active = false;
     s.fade = 0;
-    const i = this.platforms.indexOf(s.updraft);
-    if (i !== -1) this.platforms.splice(i, 1);
-    s.updraft.mesh.visible = false;
+    if (s.updraft) {
+      const i = this.platforms.indexOf(s.updraft);
+      if (i !== -1) this.platforms.splice(i, 1);
+      s.updraft.mesh.visible = false;
+    }
     s.beam.visible = false;
     s.shield.position.y = s.shieldY;
     s.shieldMesh.visible = true;
@@ -429,8 +433,10 @@ export class PuzzleSystem {
     const s = this.data.summit;
     if (!s || s.active) return;
     s.active = true;
-    if (!this.platforms.includes(s.updraft)) this.platforms.push(s.updraft);
-    s.updraft.mesh.visible = true;
+    if (s.updraft) {
+      if (!this.platforms.includes(s.updraft)) this.platforms.push(s.updraft);
+      s.updraft.mesh.visible = true;
+    }
     s.beam.visible = true;
     s.shield.position.y = -100;
   }
@@ -506,7 +512,7 @@ export class PuzzleSystem {
           if (have >= total) {
             this.openSummit();
             soundManager.playCheckpoint();
-            ctx.items.notify('¡Todos los orbes! 🔮 El escudo de la cima se rompió: ve a la corriente de viento del valle 🌪️');
+            ctx.items.notify(this.data.summit?.openText ?? '¡Todos los orbes! 🔮 El escudo de la cima se rompió: ve a la corriente de viento del valle 🌪️');
           } else {
             ctx.items.notify(`¡Orbe ${have}/${total}! 🔮 Usa el portal 🌀 para volver al valle`);
           }
@@ -702,7 +708,7 @@ export class PuzzleSystem {
         bp.y += b.vy * dt;
       }
     }
-    if (bp.y < b.start.y - 14) {
+    if (bp.y < b.start.y - 1.2) {
       b.respawnTimer = 0.8;
       b.plat.mesh.visible = false;
       ctx.items.notify('La roca cayó… vuelve a su lugar');

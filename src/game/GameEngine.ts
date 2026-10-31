@@ -1049,11 +1049,14 @@ export class GameEngine {
   private update(dt: number, time: number) {
     // 1. Title Screen live-world camera pan
     if (this.gameState === 'title') {
+      // The character waits at the level start (generated levels don't start at the center)
+      const sp = this.physics.position;
+      this.playerModel.group.position.copy(sp);
       this.cameraYaw = time * 0.15;
       const camX = Math.sin(this.cameraYaw) * 12.0;
       const camZ = Math.cos(this.cameraYaw) * 12.0;
-      this._orbitPos.set(camX, 4.0, camZ);
-      this._orbitLook.set(0, 1.2, 0);
+      this._orbitPos.set(sp.x + camX, sp.y + 4.0, sp.z + camZ);
+      this._orbitLook.set(sp.x, sp.y + 1.2, sp.z);
 
       // Character Creator: blend smoothly into a close-up turntable around the player
       this.previewBlend = THREE.MathUtils.damp(this.previewBlend, this.characterPreview ? 1 : 0, 4.0, dt);
