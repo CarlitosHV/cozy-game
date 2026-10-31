@@ -72,7 +72,7 @@ export const COMPANION_POWERS: Partial<Record<CompanionStyle, CompanionPowerInfo
     powerName: 'Doble Salto',
     desc: 'Polvo de hada: puedes saltar otra vez en el aire.',
     duration: 12,
-    activeText: '¡Lila te llena de polvo de hada! Salta otra vez en el aire ✨',
+    activeText: '¡Lila te llena de polvo de hada! Salta otra vez en el aire',
     color: '#f9a8d4',
   },
   serpiente: {
@@ -81,7 +81,7 @@ export const COMPANION_POWERS: Partial<Record<CompanionStyle, CompanionPowerInfo
     powerName: 'Guardiana',
     desc: 'Jade vuela a tu alrededor y derriba a los enemigos y proyectiles que se acercan.',
     duration: 10,
-    activeText: '¡Jade te protege! Los enemigos cercanos caen 🐉',
+    activeText: '¡Jade te protege! Los enemigos cercanos caen',
     color: '#34d399',
   },
 };
@@ -243,7 +243,7 @@ export class CompanionPowerSystem {
     }
     if (this.state === 'active') return false;
     if (this.state === 'hungry') {
-      this.emit(`${info.companionName} tiene hambre: dale una baya 🍇 de tu mochila`);
+      this.emit(`${info.companionName} tiene hambre: dale una baya mágica de tu mochila`);
       return false;
     }
 
@@ -292,7 +292,7 @@ export class CompanionPowerSystem {
       case 'catarina':
         physics.rescueGuard = true;
         physics.onRescue = () => {
-          this.emit('¡Catarina te rescató! 🐞');
+          this.emit('¡Catarina te rescató!');
           soundManager.playRespawnPuff();
           this.finish(physics, true);
         };
@@ -319,7 +319,7 @@ export class CompanionPowerSystem {
     this.timeLeft = 0;
     this.state = 'hungry';
     const info = this.info;
-    if (info && !silent) this.emit(`${info.companionName} tiene hambre: dale una baya 🍇 de tu mochila`);
+    if (info && !silent) this.emit(`${info.companionName} tiene hambre: dale una baya mágica de tu mochila`);
   }
 
   /**

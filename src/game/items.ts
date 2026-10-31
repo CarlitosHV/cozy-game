@@ -23,21 +23,21 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
   baya: {
     type: 'baya',
     name: 'Baya mágica',
-    emoji: '🍇',
+    emoji: '',
     desc: 'Alimenta a tu compañero y recarga su poder.',
     color: '#f9a8d4',
   },
   nuez: {
     type: 'nuez',
     name: 'Nuez energética',
-    emoji: '🌰',
+    emoji: '',
     desc: 'Súper salto: saltas mucho más alto durante 10 segundos.',
     color: '#fcd34d',
   },
   llave: {
     type: 'llave',
     name: 'Llave',
-    emoji: '🔑',
+    emoji: '',
     desc: 'Abre una puerta cerrada de este nivel. Se usa sola al llegar a la puerta.',
     color: '#facc15',
   },
@@ -295,13 +295,13 @@ export class ItemSystem {
         used = ctx.feedCompanion();
         break;
       case 'llave':
-        this.emit('La llave se usa sola: acércate a una puerta cerrada 🚪');
+        this.emit('La llave se usa sola: acércate a una puerta cerrada');
         return false;
       case 'nuez':
         this.superJumpLeft = SUPER_JUMP_SECONDS;
         ctx.setJumpMultiplier(1.4);
         soundManager.playTimeBonus();
-        this.emit('¡Súper salto activado! 🌰');
+        this.emit('¡Súper salto activado!');
         used = true;
         break;
     }
@@ -397,7 +397,7 @@ export class ItemSystem {
         p.respawnTimer = p.oneShot ? 1e9 : p.type === 'llave' ? 6 : RESPAWN_SECONDS;
         soundManager.playCollectible();
         const info = ITEM_INFO[p.type];
-        this.emit(`Guardaste: ${info.emoji} ${info.name} (tecla ${free + 1})`);
+        this.emit(`Guardaste: ${info.name} (tecla ${free + 1})`);
       }
     }
   }

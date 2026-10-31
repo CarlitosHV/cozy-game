@@ -623,7 +623,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
         kit.platforms.push(rk.plat);
         puzzles.blocks.push(rk.block);
         placeOrb(pc.x, t.y + 3.2, pc.z);
-        hint(new THREE.Vector3(rc.x, t.y, rc.z), 5, '🪨 ¡Hay un orbe sobre el pilar! Empuja la roca hasta él (camina hacia ella) y súbete encima');
+        hint(new THREE.Vector3(rc.x, t.y, rc.z), 5, '¡Hay un orbe sobre el pilar! Empuja la roca hasta él (camina hacia ella) y súbete encima');
         t.rects.push(path);
         t.used = true;
         routes.push({ name: `roca ${id}`, ids: [t.plat!.id, pillar.id] });
@@ -717,7 +717,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     puzzles.sentinels.push(sentinel);
     kit.registerCylinder(`${id}_sentinel`, sp.x, t.y, sp.z, 0.8, 2.8);
     placeOrb(sp.x - r.x * s * 2.3 + out.x * 0.4, t.y, sp.z - r.z * s * 2.3 + out.z * 0.4);
-    hint(entrance, 4, '👁️ ¡Un vigía cuida el orbe! Si su luz te ve, vuelves a la entrada. Escóndete tras los muros y avanza cuando mire a otro lado');
+    hint(entrance, 4, '¡Un vigía cuida el orbe! Si su luz te ve, vuelves a la entrada. Escóndete tras los muros y avanza cuando mire a otro lado');
     t.rects.push(tileR);
     t.used = true;
     routes.push({ name: `vigía ${id}`, ids: [t.plat!.id] });
@@ -760,8 +760,8 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
       if (kind === 'vault' || kind === 'thief') {
         const text =
           kind === 'vault'
-            ? '🔒 El orbe está encerrado en la bóveda. Busca la llave 🔑 en las islas del cielo (sube con un trampolín)'
-            : '🔒 El orbe está encerrado en la bóveda. ¡Un enemigo tiene la llave 🔑! Salta sobre él para quitársela';
+            ? 'El orbe está encerrado en la bóveda. Busca la llave en las islas del cielo (sube con un trampolín)'
+            : 'El orbe está encerrado en la bóveda. ¡Un enemigo tiene la llave! Salta sobre él para quitársela';
         if (!vault(t, text)) continue;
         // The key, somewhere else in the zone
         if (kind === 'vault') {
@@ -816,7 +816,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   arch.position.set(0, 4.2, -11.2);
   root.add(arch);
   kit.addCheckpoint(2, 'Puerta de la Fortaleza', new THREE.Vector3(1.5, 0, -9.0), new THREE.Vector3(-0.8, 0.2, -7.3));
-  hint(new THREE.Vector3(0, 0, -R), 3, '🏰 ¡La última parte! Sube por la espiral alrededor de la torre hasta la cima. Si caes, vuelves al último santuario');
+  hint(new THREE.Vector3(0, 0, -R), 3, '¡La última parte! Sube por la espiral alrededor de la torre hasta la cima. Si caes, vuelves al último santuario');
 
   const rounds = level >= 20 ? 3 : 2;
   const legsN = rounds * 4;
@@ -950,13 +950,13 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     beam: summitBeam,
     active: false,
     fade: 0,
-    openText: '¡Todos los orbes! 🔮 El escudo de la fortaleza se rompió: entra por la puerta y sube la espiral hasta la cima 🏰',
+    openText: '¡Todos los orbes reunidos! El escudo de la fortaleza se rompió: entra por la puerta y sube la espiral hasta la cima',
   };
 
   // ======================================================================
   // 5. LIFE IN THE ZONE: spawn, enemies, treats, props
   // ======================================================================
-  hint(spawn, 5, `🗺️ ¡Explora la zona! Encuentra los ${puzzles.orbs.length} orbes 🔮 (sigue los rayos de luz). Con todos, se rompe el escudo de la fortaleza del centro`);
+  hint(spawn, 5, `¡Explora la zona! Encuentra los ${puzzles.orbs.length} orbes (sigue los rayos de luz). Con todos, se rompe el escudo de la fortaleza del centro`);
 
   /** A free spot on a tile (away from stairs, features and the spawn path). */
   const freeSpot = (t: Tile, radius: number): THREE.Vector3 | null => {

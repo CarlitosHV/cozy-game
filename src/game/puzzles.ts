@@ -512,9 +512,9 @@ export class PuzzleSystem {
           if (have >= total) {
             this.openSummit();
             soundManager.playCheckpoint();
-            ctx.items.notify(this.data.summit?.openText ?? '¡Todos los orbes! 🔮 El escudo de la cima se rompió: ve a la corriente de viento del valle 🌪️');
+            ctx.items.notify(this.data.summit?.openText ?? '¡Todos los orbes reunidos! El escudo de la cima se rompió: ve a la corriente de viento del valle');
           } else {
-            ctx.items.notify(`¡Orbe ${have}/${total}! 🔮 Usa el portal 🌀 para volver al valle`);
+            ctx.items.notify(`¡Orbe ${have}/${total}! Usa el portal para volver al valle`);
           }
         }
       }
@@ -537,7 +537,7 @@ export class PuzzleSystem {
         this.portalCooldown = 1.5;
         soundManager.playRespawnPuff();
         ctx.teleport(pt.to);
-        ctx.items.notify('🌀 ¡De vuelta al valle!');
+        ctx.items.notify('¡De vuelta al valle!');
       }
     }
 
@@ -545,7 +545,7 @@ export class PuzzleSystem {
     while (this.data.pendingDrops.length) {
       const d = this.data.pendingDrops.shift()!;
       ctx.items.spawnDrop(d.type, d.pos);
-      ctx.items.notify('¡Le quitaste la llave! Recógela 🔑');
+      ctx.items.notify('¡Le quitaste la llave! Recógela');
     }
     for (const c of this.data.carriers) {
       c.mesh.rotation.y = time * 2;
@@ -577,10 +577,10 @@ export class PuzzleSystem {
         d.open = true;
         d.plat.position.y = -100; // collision gone
         soundManager.playCheckpoint();
-        ctx.items.notify('¡Puerta abierta! 🚪');
+        ctx.items.notify('¡Puerta abierta!');
       } else if (d.hintCooldown <= 0) {
         d.hintCooldown = 4;
-        ctx.items.notify('Puerta cerrada: necesitas una llave 🔑');
+        ctx.items.notify('Puerta cerrada: necesitas una llave');
       }
     }
 
@@ -618,7 +618,7 @@ export class PuzzleSystem {
         s.cooldown = 1.2;
         soundManager.playStalkerWarning();
         ctx.teleport(s.entrance);
-        ctx.items.notify('¡El vigía te descubrió! Escóndete tras los muros y avanza cuando mire a otro lado 👁️');
+        ctx.items.notify('¡El vigía te descubrió! Escóndete tras los muros y avanza cuando mire a otro lado');
       }
     }
   }

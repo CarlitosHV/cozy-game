@@ -26,7 +26,6 @@ import {
   X,
   ArrowUp,
   Zap,
-  Smartphone,
   Camera,
   Download,
   Eye,
@@ -98,35 +97,35 @@ export const PHOTO_FILTERS: {
   { id: 'natural', name: 'Natural', color: '#f8fafc', desc: 'Puro y nítido', css: 'none' },
   {
     id: 'golden_hour',
-    name: 'Hora Dorada',
+    name: 'Hora dorada',
     color: '#f59e0b',
     desc: 'Luz ámbar cálida',
     css: 'sepia(0.28) saturate(1.4) brightness(1.05) contrast(1.05)',
   },
   {
     id: 'dreamy_pastel',
-    name: 'Pastel Ensueño',
+    name: 'Pastel ensueño',
     color: '#a78bfa',
     desc: 'Etéreo y luminoso',
     css: 'brightness(1.12) saturate(1.15) hue-rotate(10deg) contrast(0.95)',
   },
   {
     id: 'cozy_sunset',
-    name: 'Atardecer Cozy',
+    name: 'Atardecer cálido',
     color: '#f43f5e',
-    desc: 'Melocotón y magenta',
+    desc: 'Tonos melocotón suaves',
     css: 'sepia(0.35) hue-rotate(-20deg) saturate(1.45) contrast(1.1)',
   },
   {
     id: 'starry_twilight',
-    name: 'Noche Estelar',
+    name: 'Noche estelar',
     color: '#38bdf8',
-    desc: 'Cielo índigo y cian',
+    desc: 'Cielo índigo apacible',
     css: 'brightness(0.9) contrast(1.2) hue-rotate(185deg) saturate(1.3)',
   },
   {
     id: 'vintage_sepia',
-    name: 'Película Vintage',
+    name: 'Película clásica',
     color: '#d97706',
     desc: 'Sepia nostálgico',
     css: 'sepia(0.65) contrast(1.15) brightness(0.95) saturate(0.85)',
@@ -141,11 +140,11 @@ const VICTORY_TEXT: Record<number, string> = {
 };
 
 export const PHOTO_FRAMES: { id: PhotoFrame; name: string; desc: string }[] = [
-  { id: 'none', name: 'Sin Marco', desc: 'Composición limpia' },
+  { id: 'none', name: 'Sin marco', desc: 'Composición limpia' },
   { id: 'polaroid', name: 'Polaroid', desc: 'Borde blanco clásico' },
-  { id: 'cinematic', name: 'Cinemático', desc: 'Barras 2.39:1 y tipografía oro' },
+  { id: 'cinematic', name: 'Cinemático', desc: 'Barras panorámicas' },
   { id: 'postcard', name: 'Postal', desc: 'Sello aéreo y matasellos' },
-  { id: 'grid', name: 'Guía 3x3', desc: 'Regla de los tercios' },
+  { id: 'grid', name: 'Guía 3×3', desc: 'Regla de los tercios' },
 ];
 
 interface GameHUDProps {
@@ -255,6 +254,26 @@ const VirtualJoystick: React.FC<{
       }
     }
   };
+
+  useEffect(() => {
+    const handleReset = () => {
+      touchIdRef.current = null;
+      setIsActive(false);
+      setKnobPos({ x: 0, y: 0 });
+      onMove(0, 0);
+    };
+
+    window.addEventListener('resize', handleReset);
+    window.addEventListener('blur', handleReset);
+    window.addEventListener('orientationchange', handleReset);
+
+    return () => {
+      window.removeEventListener('resize', handleReset);
+      window.removeEventListener('blur', handleReset);
+      window.removeEventListener('orientationchange', handleReset);
+      onMove(0, 0);
+    };
+  }, [onMove]);
 
   return (
     <div
@@ -408,6 +427,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 }) => {
   const [isMuted, setIsMuted] = useState(false);
   const [selectedMode, setSelectedMode] = useState<GameMode>('free');
+  type TitleStep = 'main' | 'select_level' | 'game_modes' | 'select_character';
+  const [titleStep, setTitleStep] = useState<TitleStep>('main');
+  const [pendingLevel, setPendingLevel] = useState<number>(() => maxPlayableLevel());
+  const [pendingMode, setPendingMode] = useState<GameMode>('free');
+  const [previousTitleStep, setPreviousTitleStep] = useState<'main' | 'select_level' | 'game_modes'>('main');
+
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isSprintActive, setIsSprintActive] = useState(false);
@@ -425,7 +450,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const closeCreator = () => {
     setShowCreator(false);
-    engine?.setCharacterPreview(false);
+    if (titleStep !== 'select_character') {
+      engine?.setCharacterPreview(false);
+    }
   };
 
   const handleAppearanceChange = (next: CharacterAppearance) => {
@@ -562,12 +589,34 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [photoActiveTab, setPhotoActiveTab] = useState<'camera' | 'filters' | 'frames'>('camera');
   const [isFlashing, setIsFlashing] = useState(false);
 
-  // Auto-detect mobile touch screen or allow explicit toggle
+  // Freeze and lock player movement when any modal, pause, or victory screen is active
+  const isAnyModalOpen =
+    showHelpModal ||
+    showBackpack ||
+    showCreator ||
+    Boolean(capturedPhotoUrl) ||
+    gameState === 'paused' ||
+    gameState === 'victory' ||
+    gameState === 'game_over' ||
+    gameState === 'photo_mode';
+
+  useEffect(() => {
+    if (engine) {
+      engine.setUIModalOpen(isAnyModalOpen);
+    }
+  }, [engine, isAnyModalOpen]);
+
+  // Auto-detect mobile touch screen based on touch capabilities (not window size)
   const [touchControlsEnabled, setTouchControlsEnabled] = useState(() => {
-    return typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0 || window.innerWidth < 850);
+    if (typeof window === 'undefined') return false;
+    return (
+      'ontouchstart' in window ||
+      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
+      (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches)
+    );
   });
 
-  // Auto-switch between Keyboard and Touch controls
+  // Switch dynamically if user uses touch or keyboard
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const gameKeys = [
@@ -577,7 +626,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         'KeyQ', 'KeyE', 'KeyR', 'KeyC', 'KeyG', 'KeyI', 'Escape'
       ];
       if (gameKeys.includes(e.code)) {
-        setTouchControlsEnabled(false);
+        if (typeof window.matchMedia === 'function' && !window.matchMedia('(pointer: coarse)').matches) {
+          setTouchControlsEnabled(false);
+        }
       }
     };
 
@@ -673,9 +724,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     soundManager.setMuted(next);
   };
 
-  const handleStartGame = (modeToStart?: GameMode) => {
-    const targetMode = modeToStart ?? selectedMode;
-    if (engine) engine.startGame(targetMode, selectedLevel);
+  const handleStartGame = (modeToStart?: GameMode, levelToStart?: number) => {
+    const targetMode = modeToStart ?? pendingMode;
+    const targetLevel = levelToStart ?? pendingLevel;
+    if (engine) {
+      engine.setCharacterPreview(false);
+      engine.startGame(targetMode, targetLevel);
+    }
   };
 
   const handleRestart = (modeToRestart?: GameMode) => {
@@ -686,7 +741,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const handleReturnToTitle = () => {
     setElapsedTime(0);
-    if (engine) engine.returnToTitle();
+    setTitleStep('main');
+    if (engine) {
+      engine.setCharacterPreview(false);
+      engine.returnToTitle();
+    }
   };
 
   const handleWeatherSelect = (w: WeatherType) => {
@@ -697,11 +756,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     if (engine) engine.warpToCheckpoint(idx);
   };
 
-  const handleJoystickMove = (forward: number, right: number) => {
+  const handleJoystickMove = React.useCallback((forward: number, right: number) => {
     if (engine) {
       engine.setVirtualInput({ forward, right });
     }
-  };
+  }, [engine]);
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none z-10 overflow-hidden font-['Outfit',sans-serif]">
@@ -719,270 +778,381 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {gameState === 'title' && !showCreator && (
-        <div className="absolute inset-0 flex flex-col items-center justify-between pointer-events-auto bg-stone-900/40 text-stone-100 p-6 sm:p-12 transition-opacity duration-700">
-          {/* Top subtle badge */}
-          <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-stone-900/75 border border-stone-700/60 text-xs tracking-widest text-amber-300 font-medium uppercase mt-2">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>Cozy Floating Archipelago</span>
-          </div>
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-gradient-to-t from-stone-950/85 via-stone-950/45 to-stone-950/20 text-stone-100 p-3 sm:p-6 transition-opacity duration-500 overflow-y-auto font-['Outfit',sans-serif]">
+          {/* Card container: mobile-first, centered, clean max-w-sm */}
+          <div className="w-full max-w-sm rounded-3xl bg-stone-950/90 border border-stone-800/90 p-5 sm:p-6 shadow-2xl backdrop-blur-xl flex flex-col my-auto transition-all animate-in fade-in zoom-in-95">
 
-          {/* Central bespoke inline SVG Title Lockup */}
-          <div className="flex flex-col items-center text-center max-w-xl">
-            <svg
-              className="w-full max-w-md h-auto drop-shadow-md mb-2"
-              viewBox="0 0 500 120"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M100,75 C90,75 80,68 80,55 C80,42 92,35 105,37 C115,22 140,15 160,28 C175,18 200,20 210,32 C225,24 245,28 250,42 C265,38 280,48 280,60 C290,62 300,70 295,80 C275,85 120,85 100,75 Z"
-                fill="rgba(255, 255, 255, 0.12)"
-              />
-              <text
-                x="250"
-                y="58"
-                textAnchor="middle"
-                className="font-serif font-bold text-4xl sm:text-5xl"
-                fill="#fffbf0"
-                style={{
-                  fontFamily: "'Playfair Display', serif",
-                  letterSpacing: '0.08em',
-                  filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.4))',
-                }}
-              >
-                AETHER LEAP
-              </text>
-              <text
-                x="250"
-                y="88"
-                textAnchor="middle"
-                className="text-xs sm:text-sm font-light tracking-[0.3em] uppercase"
-                fill="#ffd166"
-              >
-                Parkour Aéreo en las Nubes
-              </text>
-            </svg>
-
-            <p className="text-stone-300 text-xs sm:text-sm max-w-md font-light leading-relaxed mb-4 px-4">
-              Salta por plataformas flotantes, rebota en hongos elásticos y supera obstáculos hacia el Mirador Celestial.
-            </p>
-
-            {/* Endless Level Selector */}
-            {(() => {
-              const info = levelInfo(selectedLevel);
-              const maxLvl = maxPlayableLevel();
-              const done = isLevelCompleted(selectedLevel);
-              const themeComp = THEME_COMPANION[info.theme];
-              const nextC = nextCompanionUnlock();
-              const nextInfo = nextC ? COMPANION_POWERS[nextC.companion] : undefined;
-              const prevMilestone = nextC ? nextC.level - 10 : 0;
-              const pct = nextC ? Math.min(100, ((highestCompleted() - prevMilestone) / 10) * 100) : 100;
-              return (
-                <div className="w-full max-w-xl flex flex-col gap-2 mb-4 px-2">
-                  <span className="text-[11px] text-sky-300 font-bold uppercase tracking-wider text-center">Elige tu Nivel:</span>
-                  <div
-                    className="flex items-center gap-2 p-2 rounded-2xl border bg-stone-900/85 shadow-lg"
-                    style={{ borderColor: info.accent, boxShadow: `0 0 0 1px ${info.accent}55` }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => pickLevel(Math.max(1, selectedLevel - 1))}
-                      disabled={selectedLevel <= 1}
-                      aria-label="Nivel anterior"
-                      className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                    <span
-                      className="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center text-stone-900"
-                      style={{ backgroundColor: info.accent }}
-                    >
-                      {COMPANION_ICONS[themeComp]}
-                    </span>
-                    <div className="flex-1 min-w-0 flex flex-col text-left">
-                      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: info.accent }}>
-                        Nivel {selectedLevel} {info.generated ? '· Generado' : '· Clásico'}
-                      </span>
-                      <span className="text-sm sm:text-base font-bold text-stone-100 truncate">{info.name}</span>
-                      <span className={`text-[10px] ${done ? 'text-emerald-300' : 'text-amber-300'}`}>
-                        {done ? '✓ Completado' : selectedLevel === maxLvl ? '★ Tu siguiente nivel' : ''}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => pickLevel(Math.min(maxLvl, selectedLevel + 1))}
-                      disabled={selectedLevel >= maxLvl}
-                      aria-label="Nivel siguiente"
-                      title={selectedLevel >= maxLvl ? `Completa el nivel ${maxLvl} para seguir` : ''}
-                      className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
-                    >
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {selectedLevel !== maxLvl && (
-                      <button
-                        type="button"
-                        onClick={() => pickLevel(maxLvl)}
-                        className="shrink-0 px-3 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[11px] font-bold text-amber-300 cursor-pointer"
-                      >
-                        Continuar: Nivel {maxLvl} ⏩
-                      </button>
-                    )}
-                    <div className="flex-1 min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-900/70 border border-stone-800">
-                      {nextC && nextInfo ? (
-                        <>
-                          <span className="shrink-0 text-stone-300">{COMPANION_ICONS[nextC.companion]}</span>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-[10px] text-stone-300 truncate">
-                              Próximo compañero: <strong>{nextInfo.companionName}</strong> al completar el nivel {nextC.level}
-                            </div>
-                            <div className="h-1.5 rounded-full bg-stone-800 overflow-hidden mt-0.5">
-                              <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: nextInfo.color }} />
-                            </div>
-                          </div>
-                        </>
-                      ) : (
-                        <span className="text-[10px] text-emerald-300">✓ ¡Todos los compañeros desbloqueados!</span>
-                      )}
-                    </div>
-                  </div>
+            {/* ======================================================== */}
+            {/* STEP 1: MENÚ PRINCIPAL (Limpio, Mobile-First)             */}
+            {/* ======================================================== */}
+            {titleStep === 'main' && (
+              <div className="flex flex-col items-center text-center">
+                {/* Header Lockup */}
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900/80 border border-amber-600/30 text-[10px] text-amber-200 font-semibold tracking-wider mb-2">
+                  <Sparkles className="w-3 h-3 text-amber-400" />
+                  <span>Aether Leap</span>
                 </div>
-              );
-            })()}
 
-            {/* Game Mode Selector */}
-            <div className="w-full max-w-xl flex flex-col gap-2 mb-6 px-2">
-              <span className="text-[11px] text-amber-300 font-bold uppercase tracking-wider text-center">
-                Elige tu Modo de Juego:
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {/* 1. Modo Libre */}
+                <h1
+                  className="font-serif font-black text-3xl sm:text-4xl text-amber-100 tracking-wide drop-shadow-md mb-1"
+                  style={{ fontFamily: "'Playfair Display', serif" }}
+                >
+                  Aether Leap
+                </h1>
+                <p className="text-xs text-stone-400 font-light tracking-wide mb-6">
+                  Parkour en las nubes
+                </p>
+
+                {/* Main Action Buttons */}
+                <div className="w-full flex flex-col gap-2.5">
+                  {/* 1. Continuar aventura (Sólo si tiene más de 1 nivel desbloqueado) */}
+                  {maxPlayableLevel() > 1 && (
+                    <button
+                      onClick={() => {
+                        const lvl = maxPlayableLevel();
+                        setPendingLevel(lvl);
+                        setPendingMode('free');
+                        engine?.loadLevel(lvl);
+                        engine?.setCharacterPreview(true);
+                        setPreviousTitleStep('main');
+                        setTitleStep('select_character');
+                      }}
+                      className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/40 to-stone-900/90 hover:from-emerald-900/50 hover:to-stone-850 border border-emerald-700/50 shadow-lg text-left transition-all active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-emerald-900/50 border border-emerald-600/40 flex items-center justify-center text-emerald-300 shrink-0">
+                          <Play className="w-5 h-5 fill-emerald-300" />
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-sm font-bold text-emerald-100">Continuar aventura</span>
+                          <span className="text-[10px] text-stone-300 truncate font-medium">
+                            Nivel {maxPlayableLevel()} · {levelInfo(maxPlayableLevel()).name}
+                          </span>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-emerald-300 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                    </button>
+                  )}
+
+                  {/* 2. Nueva partida / Comenzar aventura */}
+                  <button
+                    onClick={() => {
+                      setPendingLevel(1);
+                      setPendingMode('free');
+                      engine?.loadLevel(1);
+                      engine?.setCharacterPreview(true);
+                      setPreviousTitleStep('main');
+                      setTitleStep('select_character');
+                    }}
+                    className={`w-full flex items-center justify-between p-3.5 rounded-2xl transition-all active:scale-[0.98] shadow-lg cursor-pointer group ${
+                      maxPlayableLevel() > 1
+                        ? 'bg-stone-900/90 hover:bg-stone-850 border border-stone-800 hover:border-amber-500/40'
+                        : 'bg-amber-600 hover:bg-amber-500 text-stone-950 shadow-amber-950/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                          maxPlayableLevel() > 1 ? 'bg-amber-500/20 border border-amber-500/30 text-amber-300' : 'bg-stone-950/20 text-stone-950'
+                        }`}
+                      >
+                        <Sparkles className="w-5 h-5" />
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className={`text-sm font-bold ${maxPlayableLevel() > 1 ? 'text-stone-100' : 'text-stone-950 font-extrabold'}`}>
+                          {maxPlayableLevel() > 1 ? 'Nueva aventura' : 'Comenzar aventura'}
+                        </span>
+                        <span className={`text-[10px] ${maxPlayableLevel() > 1 ? 'text-stone-400' : 'text-stone-900/80 font-medium'}`}>
+                          Nivel 1: Archipiélago Acogedor
+                        </span>
+                      </div>
+                    </div>
+                    <ArrowRight className={`w-4 h-4 shrink-0 group-hover:translate-x-0.5 transition-transform ${maxPlayableLevel() > 1 ? 'text-stone-400' : 'text-stone-950'}`} />
+                  </button>
+
+                  {/* 3. Seleccionar nivel */}
+                  <button
+                    onClick={() => setTitleStep('select_level')}
+                    className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-stone-900/90 hover:bg-stone-850 border border-stone-800 hover:border-amber-600/40 transition-all active:scale-[0.98] cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-900/20 border border-amber-700/30 flex items-center justify-center text-amber-300 shrink-0">
+                        <MapPin className="w-5 h-5" />
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className="text-sm font-bold text-stone-100">Seleccionar nivel</span>
+                        <span className="text-[10px] text-stone-400">{maxPlayableLevel()} {maxPlayableLevel() === 1 ? 'nivel desbloqueado' : 'niveles desbloqueados'}</span>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-stone-400 group-hover:translate-x-0.5 transition-transform" />
+                  </button>
+
+                  {/* 4. Modos de juego */}
+                  <button
+                    onClick={() => setTitleStep('game_modes')}
+                    className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-stone-900/90 hover:bg-stone-850 border border-stone-800 hover:border-amber-600/40 transition-all active:scale-[0.98] cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-orange-950/40 border border-orange-800/40 flex items-center justify-center text-orange-400 shrink-0">
+                        <Flame className="w-5 h-5" />
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className="text-sm font-bold text-stone-100">Modos de juego</span>
+                        <span className="text-[10px] text-stone-400">Contrarreloj y persecución</span>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-stone-400 group-hover:translate-x-0.5 transition-transform" />
+                  </button>
+                </div>
+
+                {/* Subtle mobile hint */}
+                <p className="text-[10px] text-stone-500 mt-5">
+                  Toca para explorar · Compatible con control táctil y teclado
+                </p>
+              </div>
+            )}
+
+            {/* ======================================================== */}
+            {/* STEP 2: SELECCIONAR NIVEL                                */}
+            {/* ======================================================== */}
+            {titleStep === 'select_level' && (
+              <div className="flex flex-col">
+                {/* Step Header */}
+                <div className="flex items-center justify-between border-b border-stone-800 pb-3 mb-3">
+                  <button
+                    onClick={() => setTitleStep('main')}
+                    className="flex items-center gap-1 text-xs font-semibold text-amber-300 hover:text-amber-200 cursor-pointer"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Volver</span>
+                  </button>
+                  <span className="text-sm font-bold text-stone-100 font-serif">Seleccionar nivel</span>
+                  <span className="text-[10px] text-stone-400 font-mono">{maxPlayableLevel()} disp.</span>
+                </div>
+
+                {/* Level Cards List */}
+                <div className="flex flex-col gap-2 max-h-[56vh] overflow-y-auto pr-1">
+                  {Array.from({ length: maxPlayableLevel() }, (_, i) => i + 1).map((lvl) => {
+                    const info = levelInfo(lvl);
+                    const completed = isLevelCompleted(lvl);
+                    return (
+                      <button
+                        key={lvl}
+                        onClick={() => {
+                          setPendingLevel(lvl);
+                          setPendingMode('free');
+                          engine?.loadLevel(lvl);
+                          engine?.setCharacterPreview(true);
+                          setPreviousTitleStep('select_level');
+                          setTitleStep('select_character');
+                        }}
+                        className="flex items-center gap-3 p-3 rounded-2xl bg-stone-900/85 hover:bg-stone-850 border border-stone-800 hover:border-amber-500/40 transition-all text-left cursor-pointer active:scale-[0.98] group"
+                      >
+                        <span
+                          className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shrink-0"
+                          style={{ backgroundColor: `${info.accent}25`, color: info.accent }}
+                        >
+                          {lvl}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-bold text-stone-100 truncate">{info.name}</div>
+                          <div className="text-[10px] text-stone-400 truncate">{info.desc}</div>
+                        </div>
+                        {completed ? (
+                          <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-700/40 shrink-0">
+                            ✓ Hecho
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-full border border-amber-600/40 shrink-0">
+                            Jugar →
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ======================================================== */}
+            {/* STEP 3: MODOS DE JUEGO                                   */}
+            {/* ======================================================== */}
+            {titleStep === 'game_modes' && (
+              <div className="flex flex-col">
+                {/* Step Header */}
+                <div className="flex items-center justify-between border-b border-stone-800 pb-3 mb-3">
+                  <button
+                    onClick={() => setTitleStep('main')}
+                    className="flex items-center gap-1 text-xs font-semibold text-amber-300 hover:text-amber-200 cursor-pointer"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Volver</span>
+                  </button>
+                  <span className="text-sm font-bold text-stone-100 font-serif">Modos de juego</span>
+                  <span className="w-10" />
+                </div>
+
+                <p className="text-[11px] text-stone-400 text-center mb-3">
+                  Elige el desafío que deseas conquistar
+                </p>
+
+                <div className="flex flex-col gap-3">
+                  {/* Mode 1: Contrarreloj */}
+                  <button
+                    onClick={() => {
+                      setPendingMode('time_trial');
+                      setPendingLevel(maxPlayableLevel());
+                      engine?.loadLevel(maxPlayableLevel());
+                      engine?.setCharacterPreview(true);
+                      setPreviousTitleStep('game_modes');
+                      setTitleStep('select_character');
+                    }}
+                    className="flex flex-col p-3.5 rounded-2xl bg-stone-900/90 hover:bg-stone-850 border border-stone-800 hover:border-amber-500/40 transition-all text-left cursor-pointer active:scale-[0.98] group"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2 text-amber-400">
+                        <Clock className="w-5 h-5" />
+                        <span className="text-sm font-bold text-stone-100">Contrarreloj</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-amber-300 bg-amber-950/70 border border-amber-600/40 px-2 py-0.5 rounded-full">
+                        90s
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-stone-300 leading-snug">
+                      Empiezas con 90s. Consigue +8s por reliquia y +15s por punto de control. ¿Llegarás a la cima antes de que el reloj marque 0?
+                    </p>
+                  </button>
+
+                  {/* Mode 2: Persecución */}
+                  <button
+                    onClick={() => {
+                      setPendingMode('chase');
+                      setPendingLevel(maxPlayableLevel());
+                      engine?.loadLevel(maxPlayableLevel());
+                      engine?.setCharacterPreview(true);
+                      setPreviousTitleStep('game_modes');
+                      setTitleStep('select_character');
+                    }}
+                    className="flex flex-col p-3.5 rounded-2xl bg-stone-900/90 hover:bg-stone-850 border border-stone-800 hover:border-orange-600/40 transition-all text-left cursor-pointer active:scale-[0.98] group"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2 text-orange-400">
+                        <Ghost className="w-5 h-5" />
+                        <span className="text-sm font-bold text-stone-100">Persecución</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-orange-300 bg-stone-950/70 border border-orange-700/40 px-2 py-0.5 rounded-full">
+                        Acechador
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-stone-300 leading-snug">
+                      Un Acechador Sombrío te persigue por todo el archipiélago. Si te alcanza, te expulsará de la plataforma.
+                    </p>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ======================================================== */}
+            {/* STEP 4: SELECCIONAR PERSONAJE (Procedural)               */}
+            {/* ======================================================== */}
+            {titleStep === 'select_character' && (
+              <div className="flex flex-col text-center">
+                {/* Step Header */}
+                <div className="flex items-center justify-between border-b border-stone-800 pb-3 mb-3">
+                  <button
+                    onClick={() => {
+                      engine?.setCharacterPreview(false);
+                      setTitleStep(previousTitleStep);
+                    }}
+                    className="flex items-center gap-1 text-xs font-semibold text-amber-300 hover:text-amber-200 cursor-pointer"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Atrás</span>
+                  </button>
+                  <span className="text-xs font-semibold text-stone-300 truncate max-w-[11rem]">
+                    {pendingMode === 'time_trial'
+                      ? '⏱️ Contrarreloj'
+                      : pendingMode === 'chase'
+                      ? '👁️ Persecución'
+                      : `Nivel ${pendingLevel}`}
+                  </span>
+                </div>
+
+                <h2 className="text-xl font-serif font-bold text-amber-200 mb-1">Elige a tu personaje</h2>
+                <p className="text-[11px] text-stone-400 mb-4">
+                  Selecciona a tu viajero antes de saltar al mundo
+                </p>
+
+                {/* 1-Tap Body Switcher (Chico / Chica) */}
+                <div className="grid grid-cols-2 gap-2 p-1 bg-stone-900 rounded-2xl border border-stone-800 mb-4">
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchBody('chico')}
+                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                      appearance.bodyType === 'chico'
+                        ? 'bg-amber-600 text-stone-950 shadow-md'
+                        : 'text-stone-300 hover:text-white'
+                    }`}
+                  >
+                    <span>👦 Chico</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchBody('chica')}
+                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                      appearance.bodyType === 'chica'
+                        ? 'bg-amber-600 text-stone-950 shadow-md'
+                        : 'text-stone-300 hover:text-white'
+                    }`}
+                  >
+                    <span>👧 Chica</span>
+                  </button>
+                </div>
+
+                {/* Character Snapshot & Details Button */}
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-stone-900/90 border border-stone-800 mb-5">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span
+                      className="w-10 h-10 rounded-xl flex items-center justify-center border border-stone-950/40 shadow-inner shrink-0"
+                      style={{ background: `linear-gradient(135deg, ${appearance.sweaterColor}, ${appearance.scarfColor})` }}
+                    >
+                      <UserRound className="w-5 h-5 text-stone-950" />
+                    </span>
+                    <div className="flex flex-col text-left min-w-0">
+                      <span className="text-xs font-bold text-stone-100 truncate">
+                        {appearance.name || (appearance.bodyType === 'chico' ? 'Viajero' : 'Viajera')}
+                      </span>
+                      <span className="text-[10px] text-amber-300 font-medium capitalize truncate">
+                        {appearance.companion !== 'ninguno' ? `Compañero: ${appearance.companion}` : 'Sin compañero'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openCreator}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-300 text-xs font-semibold cursor-pointer transition-colors border border-stone-700 shrink-0"
+                  >
+                    <Palette className="w-3.5 h-3.5" />
+                    <span>Editar aspecto</span>
+                  </button>
+                </div>
+
+                {/* Big Final Start CTA */}
                 <button
                   type="button"
-                  onClick={() => setSelectedMode('free')}
-                  className={`flex flex-col text-left p-3 rounded-2xl border transition-all cursor-pointer ${
-                    selectedMode === 'free'
-                      ? 'bg-emerald-950/50 border-emerald-400 shadow-lg shadow-emerald-900/30 ring-1 ring-emerald-400/50'
-                      : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
-                  }`}
+                  onClick={() => handleStartGame(pendingMode, pendingLevel)}
+                  className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm sm:text-base transition-all active:scale-[0.98] shadow-xl shadow-amber-950/50 cursor-pointer"
                 >
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-1.5 text-emerald-400">
-                      <Sparkles className="w-4 h-4" />
-                      <span className="text-xs font-bold text-stone-100">Modo Libre</span>
-                    </div>
-                    {selectedMode === 'free' && (
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    )}
-                  </div>
-                  <p className="text-[10px] text-stone-300 leading-snug">
-                    Explora a tu ritmo sin prisas ni enemigos. Clima dinámico por hitos.
-                  </p>
-                </button>
-
-                {/* 2. Modo Contrarreloj */}
-                <button
-                  type="button"
-                  onClick={() => setSelectedMode('time_trial')}
-                  className={`flex flex-col text-left p-3 rounded-2xl border transition-all cursor-pointer ${
-                    selectedMode === 'time_trial'
-                      ? 'bg-amber-950/50 border-amber-400 shadow-lg shadow-amber-900/30 ring-1 ring-amber-400/50'
-                      : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-1.5 text-amber-400">
-                      <Clock className="w-4 h-4" />
-                      <span className="text-xs font-bold text-stone-100">Contrarreloj</span>
-                    </div>
-                    {selectedMode === 'time_trial' && (
-                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-                    )}
-                  </div>
-                  <p className="text-[10px] text-stone-300 leading-snug">
-                    90s al iniciar. +8s por reliquia, +15s por checkpoint. ¡Corre!
-                  </p>
-                </button>
-
-                {/* 3. Modo Persecución / Acechador */}
-                <button
-                  type="button"
-                  onClick={() => setSelectedMode('chase')}
-                  className={`flex flex-col text-left p-3 rounded-2xl border transition-all cursor-pointer ${
-                    selectedMode === 'chase'
-                      ? 'bg-rose-950/50 border-rose-400 shadow-lg shadow-rose-900/30 ring-1 ring-rose-400/50'
-                      : 'bg-stone-900/70 border-stone-800 hover:border-stone-700 hover:bg-stone-800/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-1.5 text-rose-400">
-                      <Ghost className="w-4 h-4" />
-                      <span className="text-xs font-bold text-stone-100">Persecución</span>
-                    </div>
-                    {selectedMode === 'chase' && (
-                      <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse" />
-                    )}
-                  </div>
-                  <p className="text-[10px] text-stone-300 leading-snug">
-                    Un Acechador te persigue por todo el mapa. Si te alcanza, te expulsará.
-                  </p>
+                  <Play className="w-5 h-5 fill-stone-950" />
+                  <span>
+                    {previousTitleStep === 'main' && maxPlayableLevel() > 1 && pendingLevel === maxPlayableLevel()
+                      ? '¡Continuar viaje!'
+                      : '¡Comenzar viaje!'}
+                  </span>
                 </button>
               </div>
-            </div>
+            )}
 
-            {/* Character Generator entry point */}
-            <button
-              type="button"
-              onClick={openCreator}
-              className="group flex items-center gap-3 pl-2 pr-4 py-2 mb-3 rounded-2xl bg-stone-900/80 border border-stone-700 hover:border-amber-400/70 text-left transition-all cursor-pointer active:scale-95"
-            >
-              <span
-                className="w-9 h-9 rounded-xl flex items-center justify-center border border-stone-950/30"
-                style={{ background: `linear-gradient(135deg, ${appearance.sweaterColor}, ${appearance.scarfColor})` }}
-              >
-                <UserRound className="w-5 h-5 text-stone-950/80" />
-              </span>
-              <span className="flex flex-col">
-                <span className="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Tu personaje</span>
-                <span className="text-sm font-semibold text-stone-100 max-w-[12rem] truncate">{appearance.name || 'Sin nombre'}</span>
-              </span>
-              <span className="ml-2 flex items-center gap-1 text-xs text-stone-300 group-hover:text-amber-300">
-                <Palette className="w-4 h-4" />
-                Personalizar
-              </span>
-            </button>
-
-            {/* Start CTA Button */}
-            <button
-              onClick={() => handleStartGame(selectedMode)}
-              className="group flex items-center gap-3 px-8 py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-base transition-all transform active:scale-95 shadow-lg shadow-amber-950/40 cursor-pointer"
-            >
-              <Play className="w-5 h-5 fill-stone-950" />
-              <span>
-                {selectedMode === 'free' && 'Comenzar Modo Libre'}
-                {selectedMode === 'time_trial' && 'Comenzar Contrarreloj'}
-                {selectedMode === 'chase' && 'Comenzar Persecución'}
-              </span>
-              <span className="hidden sm:inline-block text-xs px-2 py-0.5 rounded bg-amber-600/40 text-stone-900 border border-amber-600/60 font-mono">
-                Space / Enter
-              </span>
-            </button>
-          </div>
-
-          {/* Bottom Flat Control Hint Line */}
-          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-6 text-xs text-stone-400 border-t border-stone-800/80 pt-3 px-4 text-center">
-            <span className="text-stone-300">WASD / Stick <span className="text-stone-500">Mover</span></span>
-            <span className="text-stone-600">·</span>
-            <span className="text-stone-300">Espacio / Botón A <span className="text-stone-500">Saltar</span></span>
-            <span className="text-stone-600">·</span>
-            <span className="text-stone-300">Shift / Botón <span className="text-stone-500">Correr</span></span>
-            <span className="text-stone-600">·</span>
-            <span className="text-stone-300">Arrastrar / Q-E <span className="text-stone-500">Girar Cámara</span></span>
-            <span className="text-stone-600">·</span>
-            <span className="text-stone-300">R <span className="text-stone-500">Reiniciar</span></span>
-            <span className="text-stone-600">·</span>
-            <span className="text-stone-300">G <span className="text-stone-500">Poder del compañero</span></span>
           </div>
         </div>
       )}
@@ -1068,9 +1238,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <div className="flex flex-col">
                   <span className="text-[9px] font-bold uppercase tracking-wider">
                     {stalkerWarningLevel === 'danger'
-                      ? '🚨 ¡ACECHADOR CERCA!'
+                      ? '🚨 ¡Acechador cerca!'
                       : stalkerWarningLevel === 'caution'
-                      ? '⚠️ Acechador Próximo'
+                      ? '⚠️ Acechador próximo'
                       : 'Acechador Sombrío'}
                   </span>
                   <span className="font-mono text-xs font-semibold">
@@ -1149,46 +1319,26 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             )}
           </div>
 
-          {/* Top-Right Cluster: Quick Actions (Photo Mode, Mute, Mobile Touch Toggle, Help, Reset) */}
+          {/* Top-Right Cluster: Quick Actions (Photo Mode, Help, Reset) */}
           <div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-auto">
             {/* Photo Mode Trigger */}
             <button
               onClick={() => engine?.enterPhotoMode()}
-              title="Entrar al Modo Foto (Tecla P)"
-              className="flex items-center gap-1.5 px-3 py-2 sm:py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 transition-all shadow-md cursor-pointer text-xs font-semibold"
-            >
-              <Camera className="w-4 h-4 text-amber-300" />
-              <span className="hidden sm:inline">Modo Foto (P)</span>
-            </button>
-
-            <button
-              onClick={() => setTouchControlsEnabled(!touchControlsEnabled)}
-              title={touchControlsEnabled ? 'Ocultar Controles Táctiles' : 'Mostrar Controles Táctiles'}
-              className={`p-2 sm:p-2.5 rounded-xl border transition-colors shadow-md cursor-pointer ${
-                touchControlsEnabled
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
-                  : 'bg-stone-900/80 text-stone-300 border-stone-800 hover:bg-stone-800'
-              }`}
-            >
-              <Smartphone className="w-4 h-4" />
-            </button>
-            <button
-              onClick={toggleMute}
-              title={isMuted ? 'Activar Sonido' : 'Silenciar (M)'}
+              title="Modo foto (tecla P)"
               className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-stone-200 transition-colors shadow-md cursor-pointer"
             >
-              {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-amber-400" />}
+              <Camera className="w-4 h-4 text-amber-400" />
             </button>
             <button
               onClick={() => setShowHelpModal(true)}
-              title="Guía y Controles"
-              className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-sky-400 transition-colors shadow-md cursor-pointer"
+              title="Guía y controles"
+              className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-amber-300 transition-colors shadow-md cursor-pointer"
             >
               <HelpCircle className="w-4 h-4" />
             </button>
             <button
               onClick={() => engine?.physics.respawnAtCheckpoint()}
-              title="Reiniciar en Punto de Control (R)"
+              title="Reiniciar en punto de control (R)"
               className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-stone-300 transition-colors shadow-md cursor-pointer"
             >
               <RotateCcw className="w-4 h-4" />
@@ -1311,7 +1461,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
           {/* 3. MOBILE ON-SCREEN TOUCH CONTROLS                       */}
           {/* ======================================================== */}
-          {touchControlsEnabled && (
+          {touchControlsEnabled && !isAnyModalOpen && (
             <>
               {/* Bottom-Left 360° Analog Joystick */}
               <div className="absolute bottom-6 left-6 pointer-events-auto z-20">
@@ -1330,16 +1480,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     onClick={() => engine?.activateCompanionPower()}
                     className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none border-2 ${
                       power.state === 'ready'
-                        ? 'text-stone-950 border-white/70'
+                        ? 'text-stone-950 border-amber-200'
                         : 'bg-stone-900/80 text-stone-400 border-stone-700/80'
                     }`}
                     style={{ touchAction: 'none', backgroundColor: power.state === 'ready' ? powerInfo.color : undefined }}
                   >
                     {COMPANION_ICONS[power.companion]}
                     <span>
-                      {power.state === 'ready' && 'PODER'}
+                      {power.state === 'ready' && 'Poder'}
                       {power.state === 'active' && `${Math.ceil(power.timeLeft)}s`}
-                      {power.state === 'hungry' && 'HAMBRE'}
+                      {power.state === 'hungry' && 'Hambre'}
                     </span>
                   </button>
                 )}
@@ -1359,13 +1509,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   }}
                   className={`flex items-center gap-1.5 px-4 py-2.5 rounded-2xl text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none ${
                     isSprintActive
-                      ? 'bg-amber-400 text-stone-950 border-2 border-amber-200'
-                      : 'bg-stone-900/80 text-stone-200 border border-stone-700/80'
+                      ? 'bg-amber-500 text-stone-950 border-2 border-amber-300'
+                      : 'bg-stone-900/85 text-stone-200 border border-stone-700/80'
                   }`}
                   style={{ touchAction: 'none' }}
                 >
                   <Zap className={`w-4 h-4 ${isSprintActive ? 'fill-stone-950' : 'text-amber-400'}`} />
-                  <span>{isSprintActive ? 'CORRIENDO' : 'CORRER'}</span>
+                  <span>{isSprintActive ? 'Corriendo' : 'Correr'}</span>
                 </button>
 
                 {/* Big Round Jump Button */}
@@ -1380,12 +1530,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   }}
                   onMouseDown={() => engine?.setVirtualInput({ jump: true })}
                   onMouseUp={() => engine?.setVirtualInput({ jump: false })}
-                  className="w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 active:from-amber-500 active:to-amber-700 text-stone-950 font-extrabold flex flex-col items-center justify-center shadow-xl shadow-amber-950/50 border-2 border-amber-200 active:scale-90 transition-transform cursor-pointer touch-none select-none"
+                  className="w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-gradient-to-br from-amber-500 to-amber-600 active:from-amber-600 active:to-amber-700 text-stone-950 font-bold flex flex-col items-center justify-center shadow-xl shadow-amber-950/40 border-2 border-amber-300 active:scale-90 transition-transform cursor-pointer touch-none select-none"
                   style={{ touchAction: 'none' }}
-                  title="Saltar / Jump"
+                  title="Saltar"
                 >
                   <ArrowUp className="w-7 h-7 stroke-[3]" />
-                  <span className="text-[10px] tracking-wider uppercase -mt-0.5">SALTAR</span>
+                  <span className="text-[10px] tracking-wider uppercase -mt-0.5">Saltar</span>
                 </button>
               </div>
             </>
@@ -1741,11 +1891,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {/* Captured Photo Lightbox Modal */}
           {capturedPhotoUrl && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-stone-950/85 p-4 sm:p-6 z-50 backdrop-blur-sm">
-              <div className="w-full max-w-lg rounded-3xl bg-stone-900 border border-amber-500/40 p-5 sm:p-6 text-stone-100 shadow-2xl flex flex-col items-center text-center max-h-[95vh] overflow-y-auto">
+              <div className="w-full max-w-lg rounded-3xl bg-stone-900 border border-amber-600/40 p-5 sm:p-6 text-stone-100 shadow-2xl flex flex-col items-center text-center max-h-[95vh] overflow-y-auto">
                 <div className="w-full flex items-center justify-between mb-3 border-b border-stone-800 pb-2">
                   <div className="flex items-center gap-2">
                     <Camera className="w-4 h-4 text-amber-400" />
-                    <span className="text-sm font-bold text-amber-200">¡Foto Capturada!</span>
+                    <span className="text-sm font-bold text-amber-200">¡Foto capturada!</span>
                   </div>
                   <button
                     onClick={() => setCapturedPhotoUrl(null)}
@@ -1759,7 +1909,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <div className="w-full rounded-2xl overflow-hidden border border-stone-800 shadow-xl bg-stone-950 flex items-center justify-center mb-4">
                   <img
                     src={capturedPhotoUrl}
-                    alt="Captured Scene"
+                    alt="Foto capturada"
                     className="w-full h-auto max-h-[55vh] object-contain rounded-xl"
                   />
                 </div>
@@ -1769,16 +1919,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <a
                     href={capturedPhotoUrl}
                     download={`aether-leap-${checkpointName.toLowerCase().replace(/\s+/g, '-')}.png`}
-                    className="w-full sm:flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg cursor-pointer"
+                    className="w-full sm:flex-1 py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg cursor-pointer"
                   >
                     <Download className="w-4 h-4 stroke-[2.5]" />
-                    <span>Descargar Foto (PNG)</span>
+                    <span>Descargar foto (PNG)</span>
                   </a>
                   <button
                     onClick={() => setCapturedPhotoUrl(null)}
                     className="w-full sm:w-auto py-3 px-5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-medium transition-colors cursor-pointer"
                   >
-                    Tomar Otra
+                    Tomar otra
                   </button>
                 </div>
               </div>
@@ -1791,17 +1941,33 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* 5. PAUSE MODAL                                           */}
       {/* ======================================================== */}
       {gameState === 'paused' && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-stone-950/70 p-6 z-30">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-stone-950/75 p-6 z-30 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl bg-stone-900 border border-stone-800 p-6 text-stone-100 shadow-2xl flex flex-col items-center text-center">
             <h2 className="text-2xl font-serif font-bold text-amber-200 mb-1">Pausa</h2>
             <p className="text-xs text-stone-400 mb-4">Tómate un respiro y disfruta la melodía.</p>
 
-            <div className="w-full flex flex-col gap-2.5 mb-6">
+            {/* Control de sonido y volumen */}
+            <div className="w-full flex items-center justify-between px-4 py-2.5 mb-4 rounded-2xl bg-stone-950/60 border border-stone-800">
+              <span className="text-xs text-stone-300 font-medium">Sonido y música</span>
+              <button
+                onClick={toggleMute}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                  isMuted
+                    ? 'bg-stone-800 text-stone-400 hover:bg-stone-700'
+                    : 'bg-amber-600/30 text-amber-300 border border-amber-600/50 hover:bg-amber-600/40'
+                }`}
+              >
+                {isMuted ? <VolumeX className="w-4 h-4 text-stone-400" /> : <Volume2 className="w-4 h-4 text-amber-400" />}
+                <span>{isMuted ? 'Silenciado' : 'Activado'}</span>
+              </button>
+            </div>
+
+            <div className="w-full flex flex-col gap-2.5 mb-5">
               <button
                 onClick={() => engine?.setPaused(false)}
-                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm transition-colors cursor-pointer shadow-md"
+                className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm transition-colors cursor-pointer shadow-md"
               >
-                Reanudar / Resume
+                Reanudar
               </button>
               <button
                 onClick={() => {
@@ -1810,45 +1976,29 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 }}
                 className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-medium transition-colors cursor-pointer"
               >
-                Reiniciar en Punto de Control
-              </button>
-              <button
-                onClick={() => {
-                  handleRestart(gameMode);
-                  engine?.setPaused(false);
-                }}
-                className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-medium transition-colors cursor-pointer"
-              >
-                Reiniciar desde el Inicio
+                Reiniciar
               </button>
               <button
                 onClick={handleReturnToTitle}
                 className="w-full py-2.5 rounded-xl bg-stone-800/80 hover:bg-stone-700/80 border border-stone-700/60 text-amber-300 text-sm font-semibold transition-colors cursor-pointer"
               >
-                Volver al Menú Principal
+                Volver al menú principal
               </button>
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-stone-400">
-              <button onClick={toggleMute} className="flex items-center gap-1.5 hover:text-stone-200 cursor-pointer">
-                {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-amber-400" />}
-                <span>{isMuted ? 'Silenciado' : 'Sonido'}</span>
-              </button>
               {toggleFullscreen && (
-                <>
-                  <span>·</span>
-                  <button onClick={toggleFullscreen} className="flex items-center gap-1.5 hover:text-stone-200 cursor-pointer">
-                    {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-amber-400" /> : <Maximize className="w-3.5 h-3.5 text-amber-400" />}
-                    <span>{isFullscreen ? 'Ventana' : 'Fullscreen'}</span>
-                  </button>
-                </>
+                <button onClick={toggleFullscreen} className="flex items-center gap-1.5 hover:text-stone-200 cursor-pointer">
+                  {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-amber-400" /> : <Maximize className="w-3.5 h-3.5 text-amber-400" />}
+                  <span>{isFullscreen ? 'Ventana' : 'Pantalla completa'}</span>
+                </button>
               )}
               {toggleOrientation && (
                 <>
-                  <span>·</span>
+                  {toggleFullscreen && <span>·</span>}
                   <button onClick={toggleOrientation} className="flex items-center gap-1.5 hover:text-stone-200 cursor-pointer">
                     <RotateCw className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Rotar</span>
+                    <span>Girar pantalla</span>
                   </button>
                 </>
               )}
@@ -1862,20 +2012,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* ======================================================== */}
       {gameState === 'game_over' && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-stone-950/85 p-6 z-30">
-          <div className="w-full max-w-sm rounded-3xl bg-stone-900 border border-red-500/50 p-6 text-stone-100 shadow-2xl flex flex-col items-center text-center animate-in fade-in zoom-in-95">
-            <div className="w-14 h-14 rounded-2xl bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400 mb-3 animate-pulse">
+          <div className="w-full max-w-sm rounded-3xl bg-stone-900 border border-orange-800/60 p-6 text-stone-100 shadow-2xl flex flex-col items-center text-center animate-in fade-in zoom-in-95">
+            <div className="w-14 h-14 rounded-2xl bg-orange-950/40 border border-orange-700/50 flex items-center justify-center text-orange-400 mb-3 animate-pulse">
               <Clock className="w-8 h-8" />
             </div>
 
-            <h2 className="text-2xl font-serif font-bold text-red-300 mb-1">¡Tiempo Agotado!</h2>
+            <h2 className="text-2xl font-serif font-bold text-orange-200 mb-1">¡Tiempo agotado!</h2>
             <p className="text-xs text-stone-300 mb-5">
-              El reloj llegó a cero antes de conquistar la cúspide.
+              El reloj llegó a cero antes de conquistar la cima.
             </p>
 
             {/* Run Stats */}
             <div className="w-full grid grid-cols-2 gap-2 mb-5 p-3 rounded-xl bg-stone-950/70 border border-stone-800 text-xs">
               <div className="flex flex-col items-center">
-                <span className="text-[10px] text-stone-400 uppercase font-medium">Punto Alcanzado</span>
+                <span className="text-[10px] text-stone-400 uppercase font-medium">Punto alcanzado</span>
                 <span className="text-base font-bold font-mono text-amber-300">{checkpointIndex} / 3</span>
               </div>
               <div className="flex flex-col items-center">
@@ -1889,9 +2039,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <div className="w-full flex flex-col gap-2">
               <button
                 onClick={() => handleRestart('time_trial')}
-                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm transition-colors cursor-pointer"
+                className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm transition-colors cursor-pointer"
               >
-                Reintentar Contrarreloj (90s)
+                Reintentar contrarreloj (90s)
               </button>
               <button
                 onClick={() => {
@@ -1900,15 +2050,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     engine.gameState = 'playing';
                   }
                 }}
-                className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors cursor-pointer"
+                className="w-full py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-semibold text-xs transition-colors cursor-pointer"
               >
-                Continuar con +30s Extra
+                Continuar con +30s extra
               </button>
               <button
                 onClick={() => handleRestart('free')}
                 className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-medium transition-colors cursor-pointer"
               >
-                Cambiar a Modo Libre
+                Cambiar a modo libre
               </button>
             </div>
           </div>
@@ -1916,130 +2066,113 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {/* ======================================================== */}
-      {/* 6. VICTORY MODAL (Summit Gazebo Reached)                  */}
+      {/* 6. VICTORY / LEVEL COMPLETE MODAL (Clean & Clear)        */}
       {/* ======================================================== */}
       {gameState === 'victory' && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-stone-950/75 p-6 z-30">
-          <div className="w-full max-w-md rounded-3xl bg-stone-900 border border-amber-500/40 p-8 text-stone-100 shadow-2xl flex flex-col items-center text-center">
-            <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400 mb-4">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-stone-950/80 backdrop-blur-md p-4 sm:p-6 z-30 animate-in fade-in duration-300">
+          <div className="w-full max-w-sm rounded-3xl bg-stone-900/95 border border-amber-600/40 p-6 text-stone-100 shadow-2xl flex flex-col items-center text-center">
+            {/* Header Icon */}
+            <div className="w-14 h-14 rounded-2xl bg-amber-600/20 border border-amber-500/40 flex items-center justify-center text-amber-300 mb-3 shadow-lg shadow-amber-950/20">
               <Award className="w-8 h-8" />
             </div>
 
-            <h2 className="text-3xl font-serif font-bold text-amber-200 mb-1">¡Cúspide Alcanzada!</h2>
-            {appearance.name && (
-              <p className="text-sm text-stone-300 mb-2">¡Bien hecho, {appearance.name}!</p>
-            )}
+            {/* Title & Level Name */}
+            <h2 className="text-2xl sm:text-3xl font-serif font-bold text-amber-200 mb-1">
+              ¡Nivel completado!
+            </h2>
+            <p className="text-xs text-stone-400 font-medium mb-3">
+              Nivel {engine?.currentLevel ?? 1} · {levelInfo(engine?.currentLevel ?? 1).name}
+            </p>
 
-            {/* Mode Victory Badge */}
+            {/* Mode Badge */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold mb-4 bg-stone-800 border border-stone-700">
               {gameMode === 'time_trial' && (
                 <>
                   <Clock className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="text-amber-300">¡Contrarreloj Superado! (Restaron {timeRemaining}s)</span>
+                  <span className="text-amber-300">Contrarreloj · {timeRemaining}s restantes</span>
                 </>
               )}
               {gameMode === 'chase' && (
                 <>
-                  <Ghost className="w-3.5 h-3.5 text-rose-400" />
-                  <span className="text-rose-300">¡Escapaste del Acechador con éxito!</span>
+                  <Ghost className="w-3.5 h-3.5 text-orange-400" />
+                  <span className="text-orange-300">¡Escapaste del Acechador!</span>
                 </>
               )}
               {gameMode === 'free' && (
                 <>
                   <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-emerald-300">¡Travesía en Modo Libre Completada!</span>
+                  <span className="text-emerald-300">Aventura completada</span>
                 </>
               )}
             </div>
 
-            <p className="text-sm text-stone-300 font-light max-w-xs mb-6">
-              {VICTORY_TEXT[engine?.currentLevel ?? 1] ??
-                `¡Superaste el nivel ${engine?.currentLevel} (${levelInfo(engine?.currentLevel ?? 5).name})! Cada nivel nuevo es un poco más difícil.`}
-              {(() => {
-                const n = nextCompanionUnlock();
-                const info = n ? COMPANION_POWERS[n.companion] : undefined;
-                return n && info ? (
-                  <span className="block mt-1 text-xs text-stone-400">
-                    Próximo compañero: {info.companionName} en el nivel {n.level} (faltan {n.level - highestCompleted()}).
-                  </span>
-                ) : null;
-              })()}
-            </p>
-
-            {/* Run Statistics */}
-            <div className="w-full grid grid-cols-2 gap-3 mb-6 p-4 rounded-2xl bg-stone-950/60 border border-stone-800">
+            {/* Compact Statistics */}
+            <div className="w-full grid grid-cols-2 gap-2.5 mb-4 p-3 rounded-2xl bg-stone-950/70 border border-stone-800">
               <div className="flex flex-col items-center">
-                <span className="text-[11px] text-stone-400 uppercase font-medium">Tiempo Transcurrido</span>
-                <span className="text-xl font-bold font-mono text-amber-300">{formatTime(elapsedTime)}</span>
+                <span className="text-[10px] text-stone-400 uppercase font-semibold">Tiempo</span>
+                <span className="text-lg font-bold font-mono text-amber-300">{formatTime(elapsedTime)}</span>
               </div>
               <div className="flex flex-col items-center">
-                <span className="text-[11px] text-stone-400 uppercase font-medium">Reliquias Halladas</span>
-                <span className="text-xl font-bold font-mono text-emerald-400">
+                <span className="text-[10px] text-stone-400 uppercase font-semibold">Reliquias</span>
+                <span className="text-lg font-bold font-mono text-emerald-400">
                   {collectedCount} / {totalCollectibles}
                 </span>
               </div>
             </div>
 
-            {/* Companion unlocked by this level */}
+            {/* Companion unlock (if newly unlocked on this level) */}
             {engine?.lastUnlocked && COMPANION_POWERS[engine.lastUnlocked] && (
-              <div
-                className="w-full mb-4 p-3 rounded-2xl border flex items-center gap-3 text-left"
-                style={{ borderColor: COMPANION_POWERS[engine.lastUnlocked]!.color, background: 'rgba(255,255,255,0.04)' }}
-              >
+              <div className="w-full mb-4 p-2.5 rounded-2xl bg-emerald-950/40 border border-emerald-600/40 flex items-center gap-2.5 text-left">
                 <span
-                  className="w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-stone-900 animate-bounce"
+                  className="w-8 h-8 shrink-0 rounded-xl flex items-center justify-center text-stone-900 text-sm font-bold"
                   style={{ backgroundColor: COMPANION_POWERS[engine.lastUnlocked]!.color }}
                 >
                   {COMPANION_ICONS[engine.lastUnlocked]}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-bold text-stone-100">
-                    ¡Desbloqueaste a {COMPANION_POWERS[engine.lastUnlocked]!.companionName}!
+                  <div className="text-xs font-bold text-emerald-200 truncate">
+                    ¡Compañero {COMPANION_POWERS[engine.lastUnlocked]!.companionName} desbloqueado!
                   </div>
-                  <div className="text-[11px] text-stone-400 leading-snug">
-                    Poder (G): {COMPANION_POWERS[engine.lastUnlocked]!.powerName}. {COMPANION_POWERS[engine.lastUnlocked]!.desc}
+                  <div className="text-[10px] text-stone-300 truncate">
+                    Poder: {COMPANION_POWERS[engine.lastUnlocked]!.powerName}
                   </div>
                 </div>
-                {appearance.companion !== engine.lastUnlocked && (
-                  <button
-                    onClick={() => handleAppearanceChange({ ...appearance, companion: engine.lastUnlocked! })}
-                    className="px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-xs font-bold cursor-pointer shrink-0"
-                  >
-                    Llevarlo
-                  </button>
-                )}
               </div>
             )}
 
+            {/* Strictly the 2 requested buttons: Siguiente nivel & Jugar de nuevo */}
             <div className="w-full flex flex-col gap-2.5">
-              {engine && isLevelUnlocked(engine.currentLevel + 1) && (
+              {engine && isLevelUnlocked(engine.currentLevel + 1) ? (
                 <button
+                  type="button"
                   onClick={() => {
                     setElapsedTime(0);
                     setSelectedLevel(engine.currentLevel + 1);
                     engine.goToNextLevel();
                   }}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-sky-400 to-emerald-400 hover:from-sky-300 hover:to-emerald-300 text-stone-950 font-bold text-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-stone-950 font-bold text-sm sm:text-base transition-all active:scale-[0.98] shadow-lg shadow-amber-950/40 cursor-pointer flex items-center justify-center gap-2"
                 >
-                  Siguiente: Nivel {engine.currentLevel + 1} · {levelInfo(engine.currentLevel + 1).name}
-                  <ArrowRight className="w-4 h-4" />
+                  <span>Siguiente nivel</span>
+                  <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleReturnToTitle}
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-stone-950 font-bold text-sm sm:text-base transition-all active:scale-[0.98] shadow-lg shadow-amber-950/40 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>Volver al menú principal</span>
+                  <ArrowRight className="w-4 h-4 stroke-[2.5]" />
                 </button>
               )}
+
               <button
-                onClick={() => {
-                  if (engine) {
-                    engine.gameState = 'playing';
-                  }
-                }}
-                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm transition-colors cursor-pointer"
-              >
-                Explorar Libremente
-              </button>
-              <button
+                type="button"
                 onClick={() => handleRestart(gameMode)}
-                className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-medium transition-colors cursor-pointer"
+                className="w-full py-3 rounded-2xl bg-stone-800 hover:bg-stone-700 active:scale-[0.98] text-stone-200 text-sm font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 border border-stone-700/80"
               >
-                Jugar de Nuevo
+                <RotateCcw className="w-4 h-4 text-stone-400" />
+                <span>Jugar de nuevo</span>
               </button>
             </div>
           </div>
@@ -2061,49 +2194,49 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
             <h3 className="text-xl font-serif font-bold text-amber-200 mb-4 flex items-center gap-2">
               <Compass className="w-5 h-5 text-amber-400" />
-              <span>Guía de Controles y Físicas</span>
+              <span>Guía de controles y físicas</span>
             </h3>
 
             {/* Keyboard Section */}
             <div className="mb-4">
               <span className="text-[11px] text-amber-300 font-bold uppercase tracking-wider block mb-2">
-                🎮 Controles en Teclado
+                🎮 Controles con teclado
               </span>
               <div className="space-y-2 text-xs text-stone-300">
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Moverse (Snappy / Ágil)</span>
+                  <span className="text-stone-400">Moverse con agilidad</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">W A S D / Flechas</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Saltar (Variable / Súper Salto)</span>
+                  <span className="text-stone-400">Saltar y rebotar</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">Espacio</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Correr / Sprint</span>
+                  <span className="text-stone-400">Correr (sprint)</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">Shift</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Girar Cámara</span>
-                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">Arrastrar Ratón / Q, E</span>
+                  <span className="text-stone-400">Girar cámara</span>
+                  <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">Arrastrar ratón / Q, E</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Pantalla Completa</span>
+                  <span className="text-stone-400">Pantalla completa</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">F</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Rotar Pantalla / Orientación</span>
+                  <span className="text-stone-400">Rotar pantalla</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">O</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Modo Foto (Estudio)</span>
+                  <span className="text-stone-400">Modo foto</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">P</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Reiniciar en Punto de Control</span>
+                  <span className="text-stone-400">Reiniciar en punto de control</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">R</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Poder del Compañero</span>
+                  <span className="text-stone-400">Poder del compañero</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">G</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
@@ -2111,15 +2244,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">1 – 5</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Abrir / cerrar mochila</span>
+                  <span className="text-stone-400">Abrir o cerrar mochila</span>
                   <span className="font-mono bg-stone-800 px-2 py-0.5 rounded text-amber-300">I</span>
                 </div>
               </div>
             </div>
 
             {/* Companion powers guide */}
-            <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-400/30 text-[11px] text-rose-100/90 leading-relaxed mb-3">
-              <strong className="text-rose-300">🐾 Poderes de tu Compañero (tecla G):</strong>
+            <div className="p-3 rounded-2xl bg-amber-950/30 border border-amber-700/40 text-[11px] text-amber-100/90 leading-relaxed mb-3">
+              <strong className="text-amber-300">🐾 Poderes de tu compañero (tecla G):</strong>
               <ul className="list-disc list-inside mt-1 space-y-1">
                 {Object.values(COMPANION_POWERS).map((p) =>
                   p ? (
@@ -2135,8 +2268,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             {/* Puzzles guide (generated levels) */}
-            <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-400/30 text-[11px] text-sky-100/90 leading-relaxed mb-3">
-              <strong className="text-sky-300">🗺️ Mundos abiertos y puzzles (desde el nivel 5):</strong>
+            <div className="p-3 rounded-2xl bg-stone-900 border border-stone-700/60 text-[11px] text-stone-200 leading-relaxed mb-3">
+              <strong className="text-amber-300">🗺️ Mundos abiertos y acertijos (desde el nivel 5):</strong>
               <p className="mt-1">
                 Cada nivel es una zona para explorar libremente: colinas, mesetas, escaleras, fosos e islas en el cielo. Escondidos por la zona hay varios{' '}
                 <strong>orbes 🔮</strong> (busca los rayos de luz): en torres, islas flotantes, bóvedas con llave, sobre pilares o al final de rutas fuera del mapa
@@ -2152,93 +2285,89 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             {/* Game Modes Guide */}
-            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200/90 leading-relaxed mb-3">
-              <strong className="text-amber-300">🏆 Modos de Juego Disponibles:</strong>
+            <div className="p-3 rounded-2xl bg-amber-950/30 border border-amber-600/30 text-[11px] text-amber-200/90 leading-relaxed mb-3">
+              <strong className="text-amber-300">🏆 Modos de juego disponibles:</strong>
               <ul className="list-disc list-inside mt-1 space-y-1">
                 <li>
-                  <strong>Modo Libre (Free Mode):</strong> Parkour sin prisa. Sin cuenta regresiva ni enemigos hostiles. El clima cambia fluidamente según los hitos alcanzados (Prado Soleado → Niebla y Lluvia → Brisa de Pétalos → Noche Estelar).
+                  <strong>Modo libre:</strong> Parkour apacible sin prisa. Sin cuenta regresiva ni enemigos hostiles. El clima cambia fluidamente según los hitos alcanzados.
                 </li>
                 <li>
-                  <strong>Modo Contrarreloj (Time Trial):</strong> Empiezas con 90 segundos. Cada reliquia/bellota otorga <strong>+8 segundos</strong> y cada campana de checkpoint te da <strong>+15 segundos</strong>. Si el reloj llega a cero, ¡fin de la partida!
+                  <strong>Modo contrarreloj:</strong> Empiezas con 90 segundos. Cada reliquia o bellota otorga <strong>+8 segundos</strong> y cada campana de punto de control te da <strong>+15 segundos</strong>.
                 </li>
                 <li>
-                  <strong>Modo Persecución (Stalker Mode):</strong> Un <em>Acechador Sombrío</em> de éter aparece detrás de ti y te persigue por todo el archipiélago. Su velocidad aumenta en cada isla. Si te alcanza, desatará una onda de choque que te expulsará de la plataforma. ¡Mantente en movimiento!
+                  <strong>Modo persecución:</strong> Un <em>Acechador Sombrío</em> aparece detrás de ti y te persigue por todo el archipiélago. Si te alcanza, te expulsará de la plataforma. ¡Mantente en movimiento!
                 </li>
               </ul>
             </div>
 
             {/* Mobile Touch Section */}
             <div className="mb-4">
-              <span className="text-[11px] text-sky-300 font-bold uppercase tracking-wider block mb-2">
-                📱 Controles Móviles (Pantalla Táctil)
+              <span className="text-[11px] text-amber-300 font-bold uppercase tracking-wider block mb-2">
+                📱 Controles móviles (pantalla táctil)
               </span>
               <div className="space-y-2 text-xs text-stone-300">
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Botón Rotar Pantalla</span>
+                  <span className="text-stone-400">Botón rotar pantalla</span>
                   <span className="text-stone-200">Gira entre horizontal y vertical al instante</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Botón Pantalla Completa</span>
-                  <span className="text-stone-200">Oculta barras del navegador para vista inmersiva</span>
+                  <span className="text-stone-400">Botón pantalla completa</span>
+                  <span className="text-stone-200">Vista inmersiva sin barras del navegador</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Botones Giro Rápido (↺ / ↻)</span>
-                  <span className="text-stone-200">Gira la cámara 45° con un solo toque</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Joystick 360° (Abajo a la Izquierda)</span>
+                  <span className="text-stone-400">Joystick 360° (abajo a la izquierda)</span>
                   <span className="text-stone-200">Mueve en cualquier dirección</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Botón Saltar (Abajo a la Derecha)</span>
-                  <span className="text-stone-200">Salto y rebotes altos</span>
+                  <span className="text-stone-400">Botón saltar (abajo a la derecha)</span>
+                  <span className="text-stone-200">Salto y rebote</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Botón Correr (Sprint)</span>
+                  <span className="text-stone-400">Botón correr (sprint)</span>
                   <span className="text-stone-200">Acelera el paso</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Girar Cámara / Zoom</span>
-                  <span className="text-stone-200">Deslizar con 1 dedo / Pellizcar con 2</span>
+                  <span className="text-stone-400">Girar cámara y zoom</span>
+                  <span className="text-stone-200">Deslizar con 1 dedo o pellizcar con 2</span>
                 </div>
               </div>
             </div>
 
             {/* Enhanced Object Physics & Varied Obstacles Section */}
-            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-200/90 leading-relaxed mb-3">
-              <strong className="text-amber-300">🎪 Obstáculos y Físicas del Mundo:</strong>
+            <div className="p-3 rounded-2xl bg-amber-950/20 border border-amber-700/30 text-[11px] text-amber-200/90 leading-relaxed mb-3">
+              <strong className="text-amber-300">🎪 Obstáculos y elementos del mundo:</strong>
               <ul className="list-disc list-inside mt-1 space-y-1">
-                <li><strong>Levitador Térmico (+16m):</strong> Columnas de aire ascendente súper altas que te elevan hacia las nubes con planeador asistido para alcanzar las siguientes plataformas sin esfuerzo.</li>
-                <li><strong>Molinos Florales Giratorios (Pinwheels):</strong> Aspas de madera pastel que rotan sobre puentes; sincroniza tu paso o esquívalas.</li>
-                <li><strong>Troncos Rodantes de Equilibrio (Balance Logs):</strong> Troncos cubiertos de musgo que giran sobre su eje, requiriendo equilibrio ágil o sprint veloz.</li>
-                <li><strong>Géiseres de Esporas Cálidas:</strong> Calderas volcánicas que erupcionan ráfagas rítmicas de vapor para impulsarte en el aire.</li>
-                <li><strong>Hongos Elásticos:</strong> Pulsa Saltar justo al caer sobre ellos para activar un <em>Súper Rebote</em> vertical.</li>
-                <li><strong>Pelotas de Lana Rodantes:</strong> Rebotan dinámicamente con inercia rotacional y transfieren masa al chocar.</li>
-                <li><strong>Plataformas Quebradizas:</strong> Tiemblan y se hunden bajo tu peso, cayendo tras 1.6s y regenerándose después.</li>
+                <li><strong>Hongos elásticos:</strong> Al tocarlos o rozarlos te lanzan de inmediato por los cielos con un salto vertical potente hacia las nubes.</li>
+                <li><strong>Levitador térmico (+16m):</strong> Columnas de aire ascendente que te elevan hacia las nubes para alcanzar plataformas lejanas.</li>
+                <li><strong>Molinos florales giratorios:</strong> Aspas de madera suave que rotan sobre puentes; sincroniza tu paso para cruzarlos.</li>
+                <li><strong>Troncos rodantes de equilibrio:</strong> Troncos cubiertos de musgo que giran sobre su eje, requiriendo paso ágil.</li>
+                <li><strong>Géiseres de esporas cálidas:</strong> Calderas que erupcionan ráfagas rítmicas de vapor para impulsarte en el aire.</li>
+                <li><strong>Pelotas de lana rodantes:</strong> Rebotan dinámicamente con inercia rotacional y transfieren masa al chocar.</li>
+                <li><strong>Plataformas quebradizas:</strong> Tiemblan bajo tu peso, cayendo tras un breve instante y regenerándose después.</li>
               </ul>
             </div>
 
             {/* Photo Mode Guide */}
-            <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-500/20 text-[11px] text-sky-200/90 leading-relaxed mb-3">
-              <strong className="text-sky-300">📸 Modo Foto (Tecla P / Botón Cámara):</strong>
+            <div className="p-3 rounded-2xl bg-stone-900 border border-stone-700/60 text-[11px] text-stone-200 leading-relaxed mb-3">
+              <strong className="text-amber-300">📸 Modo foto (tecla P o botón de cámara):</strong>
               <ul className="list-disc list-inside mt-1 space-y-1">
-                <li><strong>Cámara Libre:</strong> Ajusta zoom, altura, ángulo de lente (FOV) e inclinación (Roll) con vista en 360°.</li>
-                <li><strong>Pausar Acción:</strong> Congela el tiempo para capturar poses en el aire o deja correr la brisa.</li>
-                <li><strong>6 Filtros Artísticos:</strong> Hora Dorada, Pastel Ensueño, Atardecer Cozy, Noche Estelar, Vintage Sepia y Natural.</li>
-                <li><strong>Marcos Estilizados:</strong> Polaroid con texto, Cinemático 2.39:1 con barras negras, Tarjeta Postal aérea y Guía 3x3.</li>
-                <li><strong>Descarga en Alta Resolución:</strong> Captura y descarga instantáneamente tu fotografía en formato PNG.</li>
+                <li><strong>Cámara libre:</strong> Ajusta zoom, distancia, altura, ángulo de lente (FOV) e inclinación (Roll) en 360°.</li>
+                <li><strong>Pausar acción:</strong> Congela el tiempo para capturar poses en el aire.</li>
+                <li><strong>Filtros artísticos:</strong> Hora dorada, pastel ensueño, atardecer cálido, noche estelar, película clásica y natural.</li>
+                <li><strong>Marcos estilizados:</strong> Polaroid, cinemático con barras panorámicas, tarjeta postal y guía 3×3.</li>
+                <li><strong>Descarga en alta resolución:</strong> Guarda instantáneamente tu fotografía en formato PNG.</li>
               </ul>
             </div>
 
             {/* Cozy Enemies Guide */}
-            <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-200/90 leading-relaxed mb-4">
-              <strong className="text-emerald-300">🌿 Criaturas y Enemigos Cozy:</strong>
+            <div className="p-3 rounded-2xl bg-emerald-950/30 border border-emerald-700/30 text-[11px] text-emerald-200/90 leading-relaxed mb-4">
+              <strong className="text-emerald-300">🌿 Criaturas pacíficas y desafíos:</strong>
               <ul className="list-disc list-inside mt-1 space-y-1">
                 <li>
-                  <strong>Sproutlings (Duendes Bellota):</strong> Pequeños seres de musgo con casco de bellota, mejillas sonrojadas y hélices de hoja. Patrullan sobre las islas. ¡Salta sobre su cabeza para usarlos de trampolín hacia saltos gigantes! Si chocas de lado, te darán un suave empujoncito.
+                  <strong>Duendes bellota (Sproutlings):</strong> Pequeños seres de musgo con casco de bellota que patrullan sobre las islas. ¡Salta sobre su cabeza para impulsarte hacia saltos gigantes!
                 </li>
                 <li>
-                  <strong>Zephyr Puffs (Nubes Sopladoras):</strong> Nubes flotantes con alas doradas y trompeta de latón. Inflan sus mejillas y soplan ráfagas de brisa con anillos de viento que ponen a prueba tu equilibrio en los saltos.
+                  <strong>Nubes sopladoras (Zephyr Puffs):</strong> Nubes flotantes con alas suaves que inflan sus mejillas y soplan brisas rítmicas poniendo a prueba tu equilibrio.
                 </li>
               </ul>
             </div>
@@ -2247,7 +2376,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               onClick={() => setShowHelpModal(false)}
               className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold cursor-pointer"
             >
-              Entendido / Got it
+              Entendido
             </button>
           </div>
         </div>

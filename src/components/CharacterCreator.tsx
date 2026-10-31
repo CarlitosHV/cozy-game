@@ -286,9 +286,9 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
           portrait ? 'top-4 inset-x-4 items-center text-center' : 'top-6 left-6 max-w-[40%]'
         }`}
       >
-        <span className={`inline-flex items-center gap-1.5 ${portrait ? 'self-center' : 'self-start'} px-3 py-1 rounded-full bg-stone-900/75 border border-stone-700/60 text-[10px] tracking-widest text-amber-300 font-semibold uppercase`}>
-          <Sparkles className="w-3 h-3" />
-          Generador de Personajes
+        <span className={`inline-flex items-center gap-1.5 ${portrait ? 'self-center' : 'self-start'} px-3 py-1 rounded-full bg-stone-900/75 border border-stone-700/60 text-[10px] tracking-wider text-amber-200 font-semibold`}>
+          <Sparkles className="w-3 h-3 text-amber-400" />
+          <span>Generador de personajes</span>
         </span>
         <h2
           className="text-2xl sm:text-3xl font-bold text-amber-50 drop-shadow-[0_2px_8px_rgba(0,0,0,0.55)] truncate max-w-full"
@@ -519,7 +519,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
                         </span>
                         <span className="text-xs font-bold text-stone-300">{c.name}</span>
                         <span className="text-[10px] text-amber-300/90 leading-snug">
-                          🔒 Completa el nivel {lvl} para desbloquearlo
+                          Completa el nivel {lvl} para desbloquearlo
                         </span>
                         {COMPANION_POWERS[c.id] && (
                           <span className="text-[10px] leading-snug text-stone-500">
@@ -580,7 +580,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-bold text-sm cursor-pointer active:scale-95 shadow-lg shadow-emerald-950/30"
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm cursor-pointer active:scale-95 shadow-lg shadow-amber-950/30"
           >
             <Check className="w-4 h-4" />
             ¡Listo!

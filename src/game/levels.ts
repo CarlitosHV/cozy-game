@@ -15,17 +15,18 @@ import {
   createCollectible,
   createCozyTree,
   createRollingWoolBall,
-  createRotatingBalanceLog,
   createRotatingPinwheel,
   createSporeSteamVent,
   createSwingingObstacle,
   createUpdraftVortex,
+  createVictoryPortal,
   RollingWoolBallModel,
   RotatingBalanceLogModel,
   RotatingPinwheelModel,
   SporeSteamVentModel,
   SwingingObstacleModel,
   UpdraftVortexModel,
+  VictoryPortalModel,
 } from './models';
 import { ProceduralTextures } from './textures';
 import { ItemSpot } from './items';
@@ -83,6 +84,7 @@ export interface WorldBuildResult {
   solidObstacles: SolidObstacleCollider[];
   decorativeMeshes: THREE.Object3D[];
   summitPosition: THREE.Vector3;
+  victoryPortal?: VictoryPortalModel;
   enemyManager: EnemyManager;
   /** Where backpack items (berries, walnuts…) can be picked up */
   itemSpots: ItemSpot[];
@@ -406,20 +408,8 @@ export function buildCozyParkourWorld(
 
   collectibles.push(createCollectible('c5', 'golden_acorn', new THREE.Vector3(8.0, 8.4, 43.0)));
 
-  // Rotating Balance Log bridge connecting towards moving clouds
-  // Seated securely on the island edge and bridging out towards the clouds
-  const balanceLog1 = createRotatingBalanceLog(5.2, 0.55, 1.15, 'x', new THREE.Vector3(8.5, 7.4, 49.5), textures);
-  scene.add(balanceLog1.group);
-  balanceLogs.push(balanceLog1);
-
-  // Register physical walkable platform so the player NEVER falls through the balance log!
-  platforms.push({
-    id: 'balance_log_1_plat',
-    type: 'static',
-    position: new THREE.Vector3(8.5, 7.4 + 0.55, 49.5),
-    size: new THREE.Vector3(5.2, 1.1, 1.4),
-    mesh: balanceLog1.group,
-  });
+  // Stepping stone connecting Checkpoint 2 island towards moving cloud 1
+  createIsland('step_cp2_cloud', 9.2, 7.5, 49.5, 3.4, 3.4, 1.0, 'stone');
 
   // Moving Cloud 1 (horizontal sway left-right with gentle amplitude)
   const cloud1 = createIsland('moving_cloud_1', 13.5, 7.8, 53.5, 4.5, 4.5, 1.2, 'cloud');
@@ -686,9 +676,65 @@ export function buildCozyParkourWorld(
   scene.add(gazeboGroup);
   decorativeMeshes.push(gazeboGroup);
 
-  // Master Sun Crystal atop the gazebo
+  // Gazebo physical platforms (deck floor, table top, and stepped pagoda roof)
+  platforms.push({
+    id: 'gazebo_deck_plat',
+    type: 'static',
+    position: new THREE.Vector3(18.0, summitY + 0.4, 123.0),
+    size: new THREE.Vector3(10.0, 0.4, 10.0),
+    mesh: deck,
+  });
+  platforms.push({
+    id: 'summit_table_top',
+    type: 'static',
+    position: new THREE.Vector3(18.0, summitY + 0.9, 123.0),
+    size: new THREE.Vector3(2.4, 0.3, 2.4),
+    mesh: table,
+  });
+  // Stepped pagoda roof platform tiers so the player can stand and walk on the roof!
+  platforms.push({
+    id: 'gazebo_roof_eaves',
+    type: 'static',
+    position: new THREE.Vector3(18.0, summitY + 4.2, 123.0),
+    size: new THREE.Vector3(9.2, 0.5, 9.2),
+    mesh: roof,
+  });
+  platforms.push({
+    id: 'gazebo_roof_mid',
+    type: 'static',
+    position: new THREE.Vector3(18.0, summitY + 5.1, 123.0),
+    size: new THREE.Vector3(6.4, 0.5, 6.4),
+    mesh: roof,
+  });
+  platforms.push({
+    id: 'gazebo_roof_top',
+    type: 'static',
+    position: new THREE.Vector3(18.0, summitY + 5.75, 123.0),
+    size: new THREE.Vector3(3.2, 0.5, 3.2),
+    mesh: roof,
+  });
+
+  // Bouncy mushroom right beside the gazebo to launch player up onto the pagoda roof
+  const roofMush = createBouncyMushroom(1.2, textures);
+  roofMush.group.position.set(13.0, summitY, 123.0);
+  scene.add(roofMush.group);
+  platforms.push({
+    id: 'roof_mush_plat',
+    type: 'bouncy',
+    position: new THREE.Vector3(13.0, summitY + 1.1, 123.0),
+    size: new THREE.Vector3(2.5, 0.8, 2.5),
+    mesh: roofMush.group,
+    bouncyModel: roofMush,
+  });
+
+  // Stepping wooden shelves around back pillar as alternative walking climb to the roof
+  createIsland('gazebo_step_1', 14.2, summitY + 1.4, 119.5, 2.2, 2.2, 0.6, 'wood');
+  createIsland('gazebo_step_2', 15.5, summitY + 2.7, 118.5, 2.2, 2.2, 0.6, 'wood');
+  createIsland('gazebo_step_3', 17.0, summitY + 4.0, 118.2, 2.2, 2.2, 0.6, 'wood');
+
+  // Master Sun Crystal atop the gazebo (stands firmly on the apex platform)
   collectibles.push(
-    createCollectible('c_master', 'sun_crystal', new THREE.Vector3(18.0, summitY + 6.2, 123.0))
+    createCollectible('c_master', 'sun_crystal', new THREE.Vector3(18.0, summitY + 6.35, 123.0))
   );
 
   // Twin Pine and Sakura trees at the summit garden
@@ -700,6 +746,16 @@ export function buildCozyParkourWorld(
   decorativeMeshes.push(summitTree1, summitTree2);
   registerCylinderCollider('tree_summit_sakura', 12.5, summitY, 117.0, 0.45, 4.0);
   registerCylinderCollider('tree_summit_autumn', 23.5, summitY, 129.0, 0.42, 3.8);
+
+  // Victory Portal on the summit garden (crossing through it completes the level!)
+  const portalPos = new THREE.Vector3(24.2, summitY, 123.0);
+  const victoryPortal = createVictoryPortal(textures, portalPos, 0x38bdf8);
+  victoryPortal.group.rotation.y = -Math.PI / 2; // oriented towards gazebo
+  scene.add(victoryPortal.group);
+
+  // Stepping stones path from gazebo to portal
+  createIsland('path_to_portal_1', 20.8, summitY + 0.05, 123.0, 1.8, 1.8, 0.2, 'stone');
+  createIsland('path_to_portal_2', 22.5, summitY + 0.08, 123.0, 1.8, 1.8, 0.2, 'stone');
 
   // Add all collectibles to scene
   collectibles.forEach((c) => scene.add(c.group));
@@ -735,9 +791,13 @@ export function buildCozyParkourWorld(
     steamVents,
     solidObstacles,
     decorativeMeshes,
-    summitPosition: summitPos,
+    summitPosition: portalPos,
+    victoryPortal,
     enemyManager,
     companionShowcasePos: new THREE.Vector3(18.0, summitY + 9.5, 123.0),
+    levelUpdate: (dt, time) => {
+      victoryPortal.update(dt, time);
+    },
     itemSpots: [
       // Magic berries (feed your companion)
       { type: 'baya', pos: new THREE.Vector3(-2.5, 0.95, 5.0) },

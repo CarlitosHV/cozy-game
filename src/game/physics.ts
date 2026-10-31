@@ -58,6 +58,7 @@ export class ParkourPhysics {
   private wasJumpPressed: boolean = false;
   private footstepTimer: number = 0;
   private isRespawning: boolean = false;
+  public isMovementLocked: boolean = false;
 
   // Attached moving platform
   private currentPlatform: PlatformItem | null = null;
@@ -119,6 +120,14 @@ export class ParkourPhysics {
     onVictory?: () => void
   ) {
     if (this.isRespawning) return;
+
+    if (this.isMovementLocked) {
+      this.velocity.x = 0;
+      this.velocity.z = 0;
+      this.playerModel.group.position.copy(this.position);
+      this.playerModel.updateAnimation(0, this.isGrounded, dt, performance.now() * 0.001);
+      return;
+    }
 
     // Catarina rescue flight: gently carried along an arc back to solid ground
     if (this.carryTimer > 0) {
@@ -225,6 +234,38 @@ export class ParkourPhysics {
       this.jumpBufferTimer = 0;
       soundManager.playJump();
       this.onAirJump?.();
+    }
+
+    // 3b. Bouncy Mushroom Touch Trigger (Any touch immediately propels player skyward!)
+    for (const plat of this.world.platforms) {
+      if (plat.type === 'bouncy' && plat.bouncyModel) {
+        const halfW = plat.size.x * 0.5 + 0.35;
+        const halfD = plat.size.z * 0.5 + 0.35;
+        const topY = plat.position.y;
+        const bottomY = plat.position.y - plat.size.y - 0.8;
+
+        const touchingXZ =
+          Math.abs(this.position.x - plat.position.x) < halfW + this.playerRadius &&
+          Math.abs(this.position.z - plat.position.z) < halfD + this.playerRadius;
+        const touchingY =
+          this.position.y + this.playerHeight >= bottomY &&
+          this.position.y <= topY + 0.9;
+
+        if (touchingXZ && touchingY) {
+          const isSuper = input.jump || this.jumpBufferTimer > 0;
+          const bounceForce = (isSuper ? 24.5 : 20.0) * this.jumpMultiplier;
+
+          plat.bouncyModel.triggerBounce(isSuper);
+          this.velocity.y = bounceForce;
+          this.position.y = Math.max(this.position.y, topY + 0.25);
+          this.isGrounded = false;
+          this.coyoteTimer = 0;
+          this.jumpBufferTimer = 0;
+          this.currentPlatform = null;
+          soundManager.playMushroomBounce();
+          break;
+        }
+      }
     }
 
     // 4. Updraft Geyser check
@@ -451,10 +492,18 @@ export class ParkourPhysics {
       }
     }
 
-    // 13. Summit Reached Check
+    // 13. Victory Portal Check (Level finishes ONLY when crossing through the portal!)
     if (!this.hasReachedSummit) {
-      const distToSummit = this.position.distanceTo(this.world.summitPosition);
-      if (distToSummit < 5.0 && (this.isGrounded || !this.world.summitRequiresLanding)) {
+      let triggerVictory = false;
+      if (this.world.victoryPortal) {
+        triggerVictory = this.world.victoryPortal.isInside(this.position);
+      } else {
+        // Fallback for levels without an explicit portal: player must step directly within 1.4m
+        const distToSummit = this.position.distanceTo(this.world.summitPosition);
+        triggerVictory = distToSummit < 1.4 && (this.isGrounded || !this.world.summitRequiresLanding);
+      }
+
+      if (triggerVictory) {
         this.hasReachedSummit = true;
         soundManager.playVictory();
         if (onVictory) {
@@ -525,7 +574,7 @@ export class ParkourPhysics {
     const headY = this.position.y + this.playerHeight;
 
     for (const plat of this.world.platforms) {
-      if (plat.type === 'updraft') continue;
+      if (plat.type === 'updraft' || plat.type === 'bouncy') continue;
       // Skip platforms that are temporarily fallen
       if (plat.type === 'crumbling' && plat.crumbleTimer !== undefined && plat.crumbleTimer <= 0) {
         continue;
@@ -562,21 +611,6 @@ export class ParkourPhysics {
           feetY <= topY + 0.35 &&
           this.velocity.y <= 0.05
         ) {
-          // Check for Bouncy Mushroom trampoline
-          if (plat.type === 'bouncy' && plat.bouncyModel) {
-            // Super Bounce check: if player hits Jump right at contact, super launch!
-            const isSuper = input.jump || this.jumpBufferTimer > 0;
-            const bounceForce = isSuper ? 23.5 : 18.0;
-
-            plat.bouncyModel.triggerBounce(isSuper);
-            this.velocity.y = bounceForce;
-            this.position.y = topY + 0.15;
-            wasOnGround = false;
-            this.jumpBufferTimer = 0;
-            soundManager.playMushroomBounce();
-            return;
-          }
-
           // Trigger crumbling on fragile lilypad platforms
           if (plat.type === 'crumbling') {
             plat.isCrumbling = true;

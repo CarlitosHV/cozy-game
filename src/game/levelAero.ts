@@ -18,6 +18,7 @@ import {
   createCheckpointShrine,
   createCollectible,
   createUpdraftVortex,
+  createVictoryPortal,
 } from './models';
 import { ProceduralTextures } from './textures';
 import { CheckpointItem, PlatformItem, SolidObstacleCollider, WorldBuildResult } from './levels';
@@ -759,6 +760,11 @@ export function buildAeroWorld(root: THREE.Object3D, textures: ProceduralTexture
   enemyManager.spawnErrorPopup('error_2', new THREE.Vector3(6.5, 23.6, 121.5), 'x', 2.0);
   enemyManager.spawnGlitchCube('glitch_3', new THREE.Vector3(-7, summitY, 147.5), 'x', 3.0);
 
+  // Victory Portal at the far end of the summit plaza
+  const portalPos = new THREE.Vector3(-7, summitY, 150.5);
+  const victoryPortal = createVictoryPortal(textures, portalPos, 0x38bdf8);
+  root.add(victoryPortal.group);
+
   return {
     platforms,
     checkpoints,
@@ -770,7 +776,8 @@ export function buildAeroWorld(root: THREE.Object3D, textures: ProceduralTexture
     steamVents: [],
     solidObstacles,
     decorativeMeshes,
-    summitPosition: summitPos,
+    summitPosition: portalPos,
+    victoryPortal,
     enemyManager,
     itemSpots: [
       { type: 'baya', pos: new THREE.Vector3(-4, 0.95, 6) },
@@ -781,6 +788,7 @@ export function buildAeroWorld(root: THREE.Object3D, textures: ProceduralTexture
       { type: 'baya', pos: new THREE.Vector3(11.5, 22.55, 118.5) },
     ],
     levelUpdate: (dt, time) => {
+      victoryPortal.update(dt, time);
       for (const a of animators) a(dt, time);
     },
   };

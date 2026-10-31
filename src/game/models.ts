@@ -1546,8 +1546,10 @@ export function createCheckpointShrine(textures: ProceduralTextures): Checkpoint
 
   const bellMat = new THREE.MeshStandardMaterial({
     color: 0xdfb15b,
-    roughness: 0.2,
+    roughness: 0.25,
     metalness: 0.85,
+    emissive: 0x3d2805,
+    emissiveIntensity: 0.2,
   });
 
   // Plinth base (two-tiered stone steps)
@@ -1587,15 +1589,77 @@ export function createCheckpointShrine(textures: ProceduralTextures): Checkpoint
   roof.position.set(0, 2.45, 0);
   group.add(roof);
 
-  // Hanging sacred bell (floats & spins gently)
-  const bellGeom = new THREE.CylinderGeometry(0.12, 0.18, 0.28, 12);
-  const bell = new THREE.Mesh(bellGeom, bellMat);
-  bell.position.set(0, 1.6, 0);
-  bell.castShadow = true;
-  group.add(bell);
+  // --- Dynamic Hanging Bell Assembly (Pivoted from the crossbeam) ---
+  const bellPivot = new THREE.Group();
+  bellPivot.position.set(0, 2.32, 0);
+  group.add(bellPivot);
 
-  // Soft glowing aura torus
-  const auraGeom = new THREE.TorusGeometry(0.7, 0.04, 8, 24);
+  // Suspension ring & chain
+  const hook = new THREE.Mesh(new THREE.TorusGeometry(0.038, 0.01, 6, 14), bellMat);
+  hook.position.set(0, -0.04, 0);
+  const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.28, 6), bellMat);
+  chain.position.set(0, -0.18, 0);
+  bellPivot.add(hook, chain);
+
+  // Sacred Temple Bell (Composite: cap, flared body, and rim)
+  const bellBodyGroup = new THREE.Group();
+  bellBodyGroup.position.set(0, -0.32, 0);
+
+  const bellDome = new THREE.Mesh(
+    new THREE.SphereGeometry(0.13, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.5),
+    bellMat
+  );
+  bellDome.position.set(0, -0.05, 0);
+
+  const bellSkirt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.13, 0.22, 0.28, 16, 1, false),
+    bellMat
+  );
+  bellSkirt.position.set(0, -0.19, 0);
+
+  const bellRim = new THREE.Mesh(
+    new THREE.TorusGeometry(0.22, 0.025, 8, 20),
+    bellMat
+  );
+  bellRim.rotation.x = Math.PI / 2;
+  bellRim.position.set(0, -0.33, 0);
+
+  bellBodyGroup.add(bellDome, bellSkirt, bellRim);
+  bellPivot.add(bellBodyGroup);
+
+  // Internal Clapper with hanging paper talisman
+  const clapperPivot = new THREE.Group();
+  clapperPivot.position.set(0, -0.32, 0);
+
+  const clapperRod = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.007, 0.007, 0.35, 4),
+    bellMat
+  );
+  clapperRod.position.set(0, -0.18, 0);
+
+  const clapperBall = new THREE.Mesh(
+    new THREE.SphereGeometry(0.038, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.3, metalness: 0.8 })
+  );
+  clapperBall.position.set(0, -0.35, 0);
+
+  // Dangling talisman / ribbon beneath the bell
+  const ribbonMat = new THREE.MeshStandardMaterial({
+    color: 0xd97706,
+    roughness: 0.6,
+    side: THREE.DoubleSide,
+  });
+  const ribbon = new THREE.Mesh(
+    new THREE.BoxGeometry(0.05, 0.22, 0.004),
+    ribbonMat
+  );
+  ribbon.position.set(0, -0.48, 0);
+
+  clapperPivot.add(clapperRod, clapperBall, ribbon);
+  bellPivot.add(clapperPivot);
+
+  // Soft glowing aura torus on ground
+  const auraGeom = new THREE.TorusGeometry(0.75, 0.045, 8, 24);
   const auraMat = new THREE.MeshBasicMaterial({
     color: 0x64dfdf,
     transparent: true,
@@ -1606,37 +1670,425 @@ export function createCheckpointShrine(textures: ProceduralTextures): Checkpoint
   glowAura.position.y = 0.5;
   group.add(glowAura);
 
+  // Expanding shockwave ring when activated
+  const shockwaveGeom = new THREE.RingGeometry(0.2, 0.35, 32);
+  const shockwaveMat = new THREE.MeshBasicMaterial({
+    color: 0xfbbf24,
+    transparent: true,
+    opacity: 0,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const shockwave = new THREE.Mesh(shockwaveGeom, shockwaveMat);
+  shockwave.rotation.x = -Math.PI / 2;
+  shockwave.position.y = 0.48;
+  group.add(shockwave);
+
+  // Celestial upward beacon column that appears on activation
+  const beaconGeom = new THREE.CylinderGeometry(0.35, 0.6, 7.0, 16, 1, true);
+  const beaconMat = new THREE.MeshBasicMaterial({
+    color: 0xfef08a,
+    transparent: true,
+    opacity: 0,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const beacon = new THREE.Mesh(beaconGeom, beaconMat);
+  beacon.position.set(0, 3.8, 0);
+  group.add(beacon);
+
+  // --- Celebratory Burst Particles System ---
+  const PARTICLE_COUNT = 55;
+  const particleGeo = new THREE.BufferGeometry();
+  const positions = new Float32Array(PARTICLE_COUNT * 3);
+  const colors = new Float32Array(PARTICLE_COUNT * 3);
+  const velocities: { x: number; y: number; z: number }[] = [];
+  const particleLife = new Float32Array(PARTICLE_COUNT);
+
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    positions[i * 3 + 0] = 0;
+    positions[i * 3 + 1] = 1.7;
+    positions[i * 3 + 2] = 0;
+    particleLife[i] = 0;
+    velocities.push({ x: 0, y: 0, z: 0 });
+    colors[i * 3 + 0] = 1.0;
+    colors[i * 3 + 1] = 0.85;
+    colors[i * 3 + 2] = 0.3;
+  }
+
+  particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  particleGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const particleMat = new THREE.PointsMaterial({
+    size: 0.16,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const particleSystem = new THREE.Points(particleGeo, particleMat);
+  group.add(particleSystem);
+
   let isActivated = false;
   let animTime = 0;
+  let ringTimer = 0;
+  let shockwaveTimer = 0;
 
   const activate = () => {
+    if (isActivated) return;
     isActivated = true;
-    (auraMat as THREE.MeshBasicMaterial).color.setHex(0xffd166);
-    (auraMat as THREE.MeshBasicMaterial).opacity = 0.75;
+    ringTimer = 2.8; // Trigger ringing oscillation
+    shockwaveTimer = 1.4; // Trigger ground shockwave
+
+    // Transition ground aura
+    (auraMat as THREE.MeshBasicMaterial).color.setHex(0xf59e0b);
+    (auraMat as THREE.MeshBasicMaterial).opacity = 0.85;
+    (bellMat as THREE.MeshStandardMaterial).emissive.setHex(0xb45309);
+    (bellMat as THREE.MeshStandardMaterial).emissiveIntensity = 0.55;
+
+    // Launch celebratory particle fountain from the bell
+    const posAttr = particleGeo.getAttribute('position') as THREE.BufferAttribute;
+    const colAttr = particleGeo.getAttribute('color') as THREE.BufferAttribute;
+    const posArray = posAttr.array as Float32Array;
+    const colArray = colAttr.array as Float32Array;
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const angle = (i / PARTICLE_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
+      const speed = 1.8 + Math.random() * 3.2;
+      const verticalSpeed = 2.2 + Math.random() * 3.8;
+
+      velocities[i].x = Math.cos(angle) * speed;
+      velocities[i].y = verticalSpeed;
+      velocities[i].z = Math.sin(angle) * speed;
+
+      posArray[i * 3 + 0] = (Math.random() - 0.5) * 0.25;
+      posArray[i * 3 + 1] = 1.7 + (Math.random() - 0.5) * 0.25;
+      posArray[i * 3 + 2] = (Math.random() - 0.5) * 0.25;
+
+      particleLife[i] = 1.5 + Math.random() * 0.8;
+
+      // Color variation: golden, amber, and celestial white
+      const r = Math.random();
+      if (r < 0.6) {
+        colArray[i * 3 + 0] = 1.0;
+        colArray[i * 3 + 1] = 0.84;
+        colArray[i * 3 + 2] = 0.2;
+      } else if (r < 0.85) {
+        colArray[i * 3 + 0] = 0.98;
+        colArray[i * 3 + 1] = 0.55;
+        colArray[i * 3 + 2] = 0.15;
+      } else {
+        colArray[i * 3 + 0] = 1.0;
+        colArray[i * 3 + 1] = 1.0;
+        colArray[i * 3 + 2] = 0.9;
+      }
+    }
+    posAttr.needsUpdate = true;
+    colAttr.needsUpdate = true;
+    particleMat.opacity = 1.0;
   };
 
   const update = (dt: number) => {
     animTime += dt;
-    bell.rotation.y += dt * 0.8;
+
+    // 1. Dynamic Bell Chiming & Pendulum Motion
+    if (ringTimer > 0) {
+      ringTimer = Math.max(0, ringTimer - dt);
+      const progress = 1 - ringTimer / 2.8;
+      // Vigorous swinging chime with natural exponential damping
+      const chimeStrength = Math.sin(progress * Math.PI * 14) * Math.exp(-progress * 2.5) * 0.65;
+      bellPivot.rotation.z = chimeStrength;
+      bellPivot.rotation.x = Math.sin(progress * Math.PI * 8) * Math.exp(-progress * 2.5) * 0.2;
+      // Clapper counter-rotates with momentum
+      clapperPivot.rotation.z = -chimeStrength * 1.35;
+      clapperPivot.rotation.x = -Math.cos(progress * Math.PI * 8) * Math.exp(-progress * 2.5) * 0.3;
+      ribbon.rotation.z = chimeStrength * 1.8;
+    } else if (isActivated) {
+      // Harmonic resonance after activation: gentle swinging chime
+      bellPivot.rotation.z = Math.sin(animTime * 2.4) * 0.14;
+      bellPivot.rotation.x = Math.cos(animTime * 1.8) * 0.06;
+      clapperPivot.rotation.z = -Math.sin(animTime * 2.4) * 0.18;
+      ribbon.rotation.z = Math.sin(animTime * 3.6) * 0.25;
+    } else {
+      // Peaceful idle breeze sway
+      bellPivot.rotation.z = Math.sin(animTime * 1.5) * 0.05;
+      bellPivot.rotation.x = Math.cos(animTime * 1.2) * 0.03;
+      clapperPivot.rotation.z = -Math.sin(animTime * 1.5) * 0.06;
+      ribbon.rotation.z = Math.sin(animTime * 2.2) * 0.12;
+    }
+
+    // 2. Shockwave Expansion
+    if (shockwaveTimer > 0) {
+      shockwaveTimer = Math.max(0, shockwaveTimer - dt);
+      const sp = 1 - shockwaveTimer / 1.4;
+      const radiusScale = 0.5 + sp * 3.2;
+      shockwave.scale.set(radiusScale, radiusScale, radiusScale);
+      shockwaveMat.opacity = Math.max(0, (1 - sp) * 0.85);
+      shockwave.rotation.z += dt * 1.2;
+    } else {
+      shockwaveMat.opacity = 0;
+    }
+
+    // 3. Aura & Sacred Light Beacon
     if (isActivated) {
-      glowAura.position.y = 0.55 + Math.sin(animTime * 3) * 0.12;
-      glowAura.rotation.z += dt * 0.5;
-      (auraMat as THREE.MeshBasicMaterial).opacity = 0.6 + Math.sin(animTime * 4) * 0.2;
+      glowAura.position.y = 0.52 + Math.sin(animTime * 3.2) * 0.1;
+      glowAura.rotation.z += dt * 0.6;
+      (auraMat as THREE.MeshBasicMaterial).opacity = 0.65 + Math.sin(animTime * 4.0) * 0.18;
+      // Light beacon column breathing
+      beaconMat.opacity = THREE.MathUtils.damp(beaconMat.opacity, 0.22 + Math.sin(animTime * 3.0) * 0.06, 3.0, dt);
+      beacon.rotation.y += dt * 0.3;
     } else {
       glowAura.position.y = 0.5;
-      (auraMat as THREE.MeshBasicMaterial).opacity = 0.25 + Math.sin(animTime * 2) * 0.1;
+      (auraMat as THREE.MeshBasicMaterial).opacity = 0.25 + Math.sin(animTime * 2) * 0.08;
+      beaconMat.opacity = 0;
+    }
+
+    // 4. Update Burst Particles
+    let hasLiveParticles = false;
+    const posAttr = particleGeo.getAttribute('position') as THREE.BufferAttribute;
+    const posArray = posAttr.array as Float32Array;
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      if (particleLife[i] > 0) {
+        particleLife[i] -= dt;
+        hasLiveParticles = true;
+
+        // Gravity and air drag
+        velocities[i].x *= Math.pow(0.55, dt);
+        velocities[i].z *= Math.pow(0.55, dt);
+        velocities[i].y -= 4.8 * dt;
+
+        posArray[i * 3 + 0] += velocities[i].x * dt;
+        posArray[i * 3 + 1] += velocities[i].y * dt;
+        posArray[i * 3 + 2] += velocities[i].z * dt;
+      }
+    }
+
+    if (hasLiveParticles) {
+      posAttr.needsUpdate = true;
+      particleMat.opacity = THREE.MathUtils.damp(particleMat.opacity, 0.9, 5.0, dt);
+    } else {
+      particleMat.opacity = 0;
     }
   };
 
   return {
     group,
-    bell,
+    bell: bellRim,
     glowAura,
     get activated() {
       return isActivated;
     },
     activate,
     update,
+  };
+}
+
+// --- Victory Portal (Summit Goal Gateway) ---
+export interface VictoryPortalModel {
+  group: THREE.Group;
+  position: THREE.Vector3;
+  radius: number;
+  height: number;
+  update: (dt: number, time?: number) => void;
+  isInside: (pos: THREE.Vector3) => boolean;
+}
+
+export function createVictoryPortal(
+  textures: ProceduralTextures,
+  position: THREE.Vector3,
+  themeColor: number = 0x38bdf8
+): VictoryPortalModel {
+  const group = new THREE.Group();
+  group.position.copy(position);
+
+  // 1. Stone threshold plinth on ground
+  const plinthGeom = new THREE.CylinderGeometry(1.6, 1.8, 0.28, 16);
+  plinthGeom.translate(0, 0.14, 0);
+  const stoneMat = new THREE.MeshStandardMaterial({
+    map: textures.stone,
+    roughness: 0.85,
+    metalness: 0.1,
+  });
+  const plinth = new THREE.Mesh(plinthGeom, stoneMat);
+  plinth.receiveShadow = true;
+  group.add(plinth);
+
+  // Ground runic energy ring
+  const runeRingGeom = new THREE.RingGeometry(0.5, 1.35, 24);
+  const runeMat = new THREE.MeshBasicMaterial({
+    color: themeColor,
+    transparent: true,
+    opacity: 0.7,
+    side: THREE.DoubleSide,
+  });
+  const runeRing = new THREE.Mesh(runeRingGeom, runeMat);
+  runeRing.rotation.x = -Math.PI / 2;
+  runeRing.position.y = 0.29;
+  group.add(runeRing);
+
+  // 2. Pillars (Left & Right)
+  const pillarMat = new THREE.MeshStandardMaterial({
+    map: textures.stone,
+    roughness: 0.75,
+    metalness: 0.15,
+  });
+  const pillarGeom = new THREE.CylinderGeometry(0.18, 0.22, 3.4, 10);
+  pillarGeom.translate(0, 1.7 + 0.28, 0);
+
+  const leftPillar = new THREE.Mesh(pillarGeom, pillarMat);
+  leftPillar.position.x = -1.15;
+  leftPillar.castShadow = true;
+
+  const rightPillar = new THREE.Mesh(pillarGeom, pillarMat);
+  rightPillar.position.x = 1.15;
+  rightPillar.castShadow = true;
+
+  // Brass / Gold rings around pillars
+  const brassMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
+    roughness: 0.3,
+    metalness: 0.8,
+  });
+  const ringGeom = new THREE.TorusGeometry(0.22, 0.04, 6, 16);
+  for (const p of [leftPillar, rightPillar]) {
+    for (const yOff of [1.2, 2.4, 3.3]) {
+      const ring = new THREE.Mesh(ringGeom, brassMat);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = yOff;
+      p.add(ring);
+    }
+  }
+  group.add(leftPillar, rightPillar);
+
+  // 3. Top Arch / Lintel
+  const archGeom = new THREE.BoxGeometry(2.9, 0.35, 0.45);
+  archGeom.translate(0, 3.4 + 0.28, 0);
+  const arch = new THREE.Mesh(archGeom, pillarMat);
+  arch.castShadow = true;
+  group.add(arch);
+
+  // Top Pagoda / Crest trim
+  const crestGeom = new THREE.ConeGeometry(0.55, 0.4, 4);
+  crestGeom.translate(0, 3.8 + 0.28, 0);
+  crestGeom.rotateY(Math.PI / 4);
+  const crest = new THREE.Mesh(crestGeom, brassMat);
+  group.add(crest);
+
+  // Floating rotating Keystone Star / Crystal atop arch
+  const gemGeom = new THREE.OctahedronGeometry(0.3, 0);
+  const gemMat = new THREE.MeshStandardMaterial({
+    color: 0xffd166,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 0.9,
+    roughness: 0.1,
+    metalness: 0.2,
+  });
+  const gem = new THREE.Mesh(gemGeom, gemMat);
+  gem.position.set(0, 4.3 + 0.28, 0);
+  group.add(gem);
+
+  // 4. Swirling Portal Energy Plane in Center
+  const portalPlaneGeom = new THREE.PlaneGeometry(1.9, 2.8, 1, 1);
+  const portalMat = new THREE.MeshBasicMaterial({
+    color: themeColor,
+    transparent: true,
+    opacity: 0.58,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const portalPlane = new THREE.Mesh(portalPlaneGeom, portalMat);
+  portalPlane.position.set(0, 1.8 + 0.28, 0);
+  group.add(portalPlane);
+
+  // Rotating outer swirling ring
+  const vortexGeom = new THREE.TorusGeometry(0.9, 0.05, 8, 24);
+  const vortexMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.65,
+    depthWrite: false,
+  });
+  const vortexRing1 = new THREE.Mesh(vortexGeom, vortexMat);
+  vortexRing1.position.set(0, 1.8 + 0.28, 0);
+  const vortexRing2 = new THREE.Mesh(vortexGeom, vortexMat.clone());
+  vortexRing2.scale.setScalar(0.65);
+  vortexRing2.position.set(0, 1.8 + 0.28, 0);
+  group.add(vortexRing1, vortexRing2);
+
+  // Floating energy sparkle motes inside portal
+  const moteCount = 6;
+  const motes: THREE.Mesh[] = [];
+  const moteGeom = new THREE.SphereGeometry(0.06, 6, 6);
+  const moteMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+  for (let i = 0; i < moteCount; i++) {
+    const m = new THREE.Mesh(moteGeom, moteMat);
+    m.position.set((Math.random() - 0.5) * 1.4, 0.6 + Math.random() * 2.2, (Math.random() - 0.5) * 0.3);
+    group.add(m);
+    motes.push(m);
+  }
+
+  // Vertical light beacon beam (soft translucent cylinder rising upward)
+  const beamGeom = new THREE.CylinderGeometry(0.85, 0.85, 14, 16, 1, true);
+  beamGeom.translate(0, 7 + 0.28, 0);
+  const beamMat = new THREE.MeshBasicMaterial({
+    color: themeColor,
+    transparent: true,
+    opacity: 0.18,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const beam = new THREE.Mesh(beamGeom, beamMat);
+  group.add(beam);
+
+  let animTime = 0;
+  const update = (dt: number, time?: number) => {
+    animTime += dt;
+    const t = time ?? animTime;
+
+    // Gem rotating & floating
+    gem.rotation.y = t * 1.6;
+    gem.position.y = 4.3 + 0.28 + Math.sin(t * 3.0) * 0.08;
+
+    // Ground runes breathing
+    runeRing.rotation.z = -t * 0.6;
+    runeMat.opacity = 0.55 + Math.sin(t * 3.2) * 0.2;
+
+    // Swirling rings
+    vortexRing1.rotation.z = t * 2.2;
+    vortexRing2.rotation.z = -t * 3.0;
+    portalMat.opacity = 0.5 + Math.sin(t * 4.0) * 0.18;
+
+    // Sparkle motes rising
+    for (let i = 0; i < motes.length; i++) {
+      const m = motes[i];
+      m.position.y += dt * (0.8 + (i % 3) * 0.4);
+      if (m.position.y > 3.2) {
+        m.position.y = 0.4;
+        m.position.x = (((i * 0.37) % 1) - 0.5) * 1.4;
+      }
+      m.position.z = Math.sin(t * 3 + i) * 0.15;
+    }
+  };
+
+  const isInside = (pos: THREE.Vector3): boolean => {
+    const dx = pos.x - position.x;
+    const dz = pos.z - position.z;
+    const distXZ = Math.hypot(dx, dz);
+    const dy = pos.y - position.y;
+    return distXZ < 1.35 && dy >= -0.3 && dy <= 3.4;
+  };
+
+  return {
+    group,
+    position,
+    radius: 1.35,
+    height: 3.4,
+    update,
+    isInside,
   };
 }
 

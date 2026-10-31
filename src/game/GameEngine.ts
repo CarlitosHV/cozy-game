@@ -111,6 +111,12 @@ export class GameEngine {
   private lastMouseX: number = 0;
   private lastMouseY: number = 0;
 
+  // Mobile / Touchscreen Auto-Follow Camera
+  public isTouchDevice: boolean = false;
+  public autoChaseCamera: boolean = true;
+  public isUIModalOpen: boolean = false;
+  private reverseRunTimer: number = 0;
+
   // Character Creator preview (close-up turntable camera on the title screen)
   public playerAppearance: CharacterAppearance = loadAppearance();
   public characterPreview: boolean = false;
@@ -157,6 +163,10 @@ export class GameEngine {
   }
 
   private init() {
+    if (typeof window !== 'undefined') {
+      this.isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0 || window.innerWidth < 850;
+    }
+
     // 1. Detect Software WebGL
     this.isSoftwareGl = (() => {
       try {
@@ -541,7 +551,35 @@ export class GameEngine {
   public setPaused(paused: boolean) {
     if (this.gameState === 'title' || this.gameState === 'victory' || this.gameState === 'game_over') return;
     this.gameState = paused ? 'paused' : 'playing';
+    this.physics.isMovementLocked = paused || this.isUIModalOpen;
+    if (paused) {
+      this.currentInput.forward = 0;
+      this.currentInput.right = 0;
+      this.currentInput.jump = false;
+      this.currentInput.sprint = false;
+      this.currentInput.crouch = false;
+      this.virtualInput.forward = 0;
+      this.virtualInput.right = 0;
+      this.physics.velocity.x = 0;
+      this.physics.velocity.z = 0;
+    }
     this.callbacks.onStateChange(this.gameState);
+  }
+
+  public setUIModalOpen(open: boolean) {
+    this.isUIModalOpen = open;
+    this.physics.isMovementLocked = open || this.gameState === 'paused' || this.gameState === 'victory';
+    if (open) {
+      this.currentInput.forward = 0;
+      this.currentInput.right = 0;
+      this.currentInput.jump = false;
+      this.currentInput.sprint = false;
+      this.currentInput.crouch = false;
+      this.virtualInput.forward = 0;
+      this.virtualInput.right = 0;
+      this.physics.velocity.x = 0;
+      this.physics.velocity.z = 0;
+    }
   }
 
   public returnToTitle() {
@@ -762,6 +800,8 @@ export class GameEngine {
     window.addEventListener('blur', this.handleBlur);
     window.addEventListener('resize', this.handleResize);
 
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
+
     const dom = this.renderer.domElement;
     dom.addEventListener('mousedown', this.handleMouseDown);
     window.addEventListener('mousemove', this.handleMouseMove);
@@ -772,6 +812,26 @@ export class GameEngine {
     dom.addEventListener('touchstart', this.handleTouchStart, { passive: true });
     window.addEventListener('touchmove', this.handleTouchMove, { passive: true });
     window.addEventListener('touchend', this.handleTouchEnd);
+  }
+
+  private resetAllInputs() {
+    this.rawKeys = {};
+    this.currentInput.forward = 0;
+    this.currentInput.right = 0;
+    this.currentInput.jump = false;
+    this.currentInput.sprint = false;
+    this.currentInput.crouch = false;
+    this.virtualInput.forward = 0;
+    this.virtualInput.right = 0;
+    this.virtualInput.jump = false;
+    this.virtualInput.sprint = false;
+    this.virtualInput.crouch = false;
+    this.isMouseDragging = false;
+    this.touchId = null;
+    if (this.physics) {
+      this.physics.velocity.x = 0;
+      this.physics.velocity.z = 0;
+    }
   }
 
   private handleKeyDown = (e: KeyboardEvent) => {
@@ -827,11 +887,19 @@ export class GameEngine {
   };
 
   private handleBlur = () => {
-    this.rawKeys = {};
+    this.resetAllInputs();
+  };
+
+  private handleVisibilityChange = () => {
+    if (document.hidden) {
+      this.resetAllInputs();
+    }
   };
 
   public handleResize = () => {
     if (!this.container || this.isDisposed) return;
+    this.resetAllInputs();
+
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     this.camera.aspect = w / h;
@@ -901,6 +969,7 @@ export class GameEngine {
   private initialPinchDist = 0;
 
   private handleTouchStart = (e: TouchEvent) => {
+    this.isTouchDevice = true;
     if (e.touches.length === 2) {
       // Two-finger pinch to zoom camera
       const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -974,6 +1043,7 @@ export class GameEngine {
 
   // Allow virtual joystick or HUD buttons to feed input smoothly
   public setVirtualInput(input: Partial<PlayerInput>) {
+    this.isTouchDevice = true;
     Object.assign(this.virtualInput, input);
   }
 
@@ -1102,7 +1172,20 @@ export class GameEngine {
       return;
     }
 
-    if (this.gameState === 'paused') {
+    if (this.gameState === 'paused' || this.gameState === 'victory' || this.isUIModalOpen) {
+      this.currentInput.forward = 0;
+      this.currentInput.right = 0;
+      this.currentInput.jump = false;
+      this.currentInput.sprint = false;
+      this.currentInput.crouch = false;
+      this.virtualInput.forward = 0;
+      this.virtualInput.right = 0;
+      this.physics.velocity.x = 0;
+      this.physics.velocity.z = 0;
+      this.physics.isMovementLocked = true;
+      this.playerModel.updateAnimation(0, true, dt, time);
+      this.weatherSystem.update(dt, this.physics.position, time);
+      this.world.levelUpdate?.(dt, time);
       return;
     }
 
@@ -1346,6 +1429,33 @@ export class GameEngine {
     // 7. Update Weather & Background Clouds
     this.weatherSystem.update(dt, this.physics.position, time);
 
+    // 7b. Mobile / Touchscreen: Camera automatically follows where the character is facing
+    const isVirtualMove = Math.hypot(this.virtualInput.forward, this.virtualInput.right) > 0.05;
+    const isTouchActive = (this.isTouchDevice || isVirtualMove) && this.autoChaseCamera;
+    const horizSpeed = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
+
+    if (isTouchActive && !this.isMouseDragging && horizSpeed > 0.35) {
+      // The player's mesh rotation represents the direction the character is facing
+      const playerFacing = this.playerModel.group.rotation.y;
+      const angleDiff = Math.atan2(
+        Math.sin(playerFacing - this.cameraYaw),
+        Math.cos(playerFacing - this.cameraYaw)
+      );
+
+      if (Math.abs(angleDiff) < Math.PI * 0.72) {
+        // Forward and steering arc: smooth responsive follow behind the character's facing direction
+        this.reverseRunTimer = 0;
+        const followSpeed = THREE.MathUtils.lerp(2.8, 5.0, Math.min(1.0, horizSpeed / 5.5));
+        this.cameraYaw += angleDiff * Math.min(1.0, followSpeed * dt);
+      } else {
+        // Running backwards toward screen: don't jerk immediately, only rotate if running in reverse persistently
+        this.reverseRunTimer += dt;
+        if (this.reverseRunTimer > 0.45) {
+          this.cameraYaw += angleDiff * Math.min(1.0, 2.4 * dt);
+        }
+      }
+    }
+
     // 8. Damped Third-Person Camera Follow
     const playerPos = this.physics.position;
     this.targetLookAt.set(playerPos.x, playerPos.y + 1.1, playerPos.z);
@@ -1385,6 +1495,7 @@ export class GameEngine {
     window.removeEventListener('keyup', this.handleKeyUp);
     window.removeEventListener('blur', this.handleBlur);
     window.removeEventListener('resize', this.handleResize);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
 
     const dom = this.renderer.domElement;
     dom.removeEventListener('mousedown', this.handleMouseDown);

@@ -11,6 +11,8 @@ import {
   createCheckpointShrine,
   createCollectible,
   createUpdraftVortex,
+  createVictoryPortal,
+  VictoryPortalModel,
 } from './models';
 import { ProceduralTextures } from './textures';
 import { CheckpointItem, PlatformItem, SolidObstacleCollider, WorldBuildResult } from './levels';
@@ -151,6 +153,9 @@ export function createLevelKit(root: THREE.Object3D, textures: ProceduralTexture
   }
 
   function finish(summitPosition: THREE.Vector3, enemyManager: EnemyManager, itemSpots: ItemSpot[], showcasePos?: THREE.Vector3): WorldBuildResult {
+    const portal = createVictoryPortal(textures, summitPosition.clone(), 0x38bdf8);
+    root.add(portal.group);
+
     return {
       platforms,
       checkpoints,
@@ -163,10 +168,12 @@ export function createLevelKit(root: THREE.Object3D, textures: ProceduralTexture
       solidObstacles,
       decorativeMeshes,
       summitPosition,
+      victoryPortal: portal,
       enemyManager,
       itemSpots,
       companionShowcasePos: showcasePos,
       levelUpdate: (dt, time) => {
+        portal.update(dt, time);
         for (const a of animators) a(dt, time);
       },
     };
