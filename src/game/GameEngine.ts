@@ -32,6 +32,8 @@ const THEME_ATMOS: Record<ThemeId, { weather: WeatherType; title: string; victor
   cosmic: { weather: 'cosmic', title: 'Ruta Cósmica', victoryWeather: 'starlit_night', victoryTitle: 'Lluvia de Estrellas', victoryDesc: '¡Llegaste al Observatorio Estelar!' },
   swamp: { weather: 'swamp_mist', title: 'Pantano Sombrío', victoryWeather: 'starlit_night', victoryTitle: 'Noche de Luciérnagas', victoryDesc: '¡Llegaste al Santuario de las Luciérnagas!' },
   aero: { weather: 'aero_day', title: 'Valle Aero', victoryWeather: 'golden_hour', victoryTitle: 'Atardecer Aero', victoryDesc: '¡Llegaste a la Plaza del Globo!' },
+  garden: { weather: 'garden_day', title: 'Jardín Gigante', victoryWeather: 'golden_hour', victoryTitle: 'Tarde en el Jardín', victoryDesc: '¡Llegaste al Girasol Gigante!' },
+  castle: { weather: 'castle_night', title: 'Castillo Embrujado', victoryWeather: 'starlit_night', victoryTitle: 'Noche Estrellada', victoryDesc: '¡Llegaste a la Torre del Vampiro!' },
 };
 const atmos = (level: number) => THEME_ATMOS[themeForLevel(level)];
 
@@ -248,7 +250,7 @@ export class GameEngine {
     // 7c. Backpack items (berries, walnuts…) — 5 slots, keys 1-5
     this.itemSystem = new ItemSystem(this.scene);
     this.itemSystem.loadSpots(this.world.itemSpots);
-    this.puzzleSystem.load(this.world.puzzles);
+    this.puzzleSystem.load(this.world.puzzles, this.world.platforms);
     this.itemCtx = {
       feedCompanion: () => this.companionPowers.feed(),
       setJumpMultiplier: (m: number) => {
@@ -278,10 +280,16 @@ export class GameEngine {
     this.startLoop();
   }
 
+  /** Time trial budget: open-world levels with orbs are bigger, so they get more time. */
+  private timeTrialStart(): number {
+    const orbs = this.world?.puzzles?.orbs.length ?? 0;
+    return orbs > 0 ? 100 + orbs * 25 : 90;
+  }
+
   public setGameMode(mode: GameMode) {
     this.gameMode = mode;
     if (mode === 'time_trial') {
-      this.timeRemaining = 90;
+      this.timeRemaining = this.timeTrialStart();
       if (this.stalker) {
         this.stalker.dispose();
         this.stalker = null;
@@ -457,7 +465,7 @@ export class GameEngine {
     this.itemSystem.loadSpots(this.world.itemSpots);
     // Keys only open doors of their own level
     this.itemSystem.removeAllOfType('llave');
-    this.puzzleSystem.load(this.world.puzzles);
+    this.puzzleSystem.load(this.world.puzzles, this.world.platforms);
 
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
     const cp0 = this.world.checkpoints[0];
@@ -511,7 +519,7 @@ export class GameEngine {
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
     if (this.gameMode === 'time_trial') {
-      this.timeRemaining = 90;
+      this.timeRemaining = this.timeTrialStart();
       this.callbacks.onTimeTrialTick?.(this.timeRemaining);
     } else if (this.gameMode === 'chase') {
       if (!this.stalker) {
@@ -591,6 +599,14 @@ export class GameEngine {
         title: 'Bruma del Pantano',
         desc: 'Niebla espesa y luces fantasmales',
       },
+      garden_day: {
+        title: 'Mañana en el Jardín',
+        desc: 'Sol tibio entre flores y hojas gigantes',
+      },
+      castle_night: {
+        title: 'Noche Embrujada',
+        desc: 'Luna enorme sobre las torres del castillo',
+      },
     };
 
     const info = descriptions[weather];
@@ -629,7 +645,7 @@ export class GameEngine {
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
     if (this.gameMode === 'time_trial') {
-      this.timeRemaining = 90;
+      this.timeRemaining = this.timeTrialStart();
       this.callbacks.onTimeTrialTick?.(this.timeRemaining);
     } else if (this.gameMode === 'chase') {
       if (!this.stalker) {
@@ -1231,7 +1247,7 @@ export class GameEngine {
     }
 
     // 5c. Companion powers (float, speed, lure, rescue), backpack pickups & level decor
-    this.companionPowers.update(dt, time, this.physics, this.playerModel.companionSprite);
+    this.companionPowers.update(dt, time, this.physics, this.playerModel.companionSprite, { enemies: this.world.enemyManager, stalker: this.stalker });
     this.itemSystem.update(dt, this.physics.position, this.itemCtx);
     this.world.levelUpdate?.(dt, time);
     this.updateShowcase(time);
@@ -1307,6 +1323,9 @@ export class GameEngine {
           this.physics.position.copy(to);
           this.physics.velocity.set(0, 0, 0);
           this.physics.lastSafePos.copy(to);
+        },
+        onOrb: () => {
+          if (this.gameMode === 'time_trial') this.addTimeTrialBonus(20, 'Orbe (+20s)');
         },
       });
     }

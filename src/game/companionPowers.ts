@@ -4,6 +4,8 @@
  *  - Estelita (estrella): run faster
  *  - Chispa (luciernaga): glowing lure that distracts enemies and the Stalker
  *  - Catarina (catarina): rescues you if you fall off the islands
+ *  - Lila (hada):         fairy dust — a second jump in mid-air
+ *  - Jade (serpiente):    flies around you and knocks down enemies (and their projectiles) that get close
  *
  * A power is triggered with a key (G) or the HUD button, lasts a short time,
  * and then the companion gets hungry: it can't be used again until you feed it
@@ -12,6 +14,7 @@
 import * as THREE from 'three';
 import { CompanionStyle } from './character';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
+import type { AetherStalker, EnemyManager } from './enemies';
 
 export type PowerState = 'ready' | 'active' | 'hungry' | 'none';
 
@@ -63,7 +66,31 @@ export const COMPANION_POWERS: Partial<Record<CompanionStyle, CompanionPowerInfo
     activeText: '¡Catarina te cuida de las caídas!',
     color: '#fca5a5',
   },
+  hada: {
+    companion: 'hada',
+    companionName: 'Lila',
+    powerName: 'Doble Salto',
+    desc: 'Polvo de hada: puedes saltar otra vez en el aire.',
+    duration: 12,
+    activeText: '¡Lila te llena de polvo de hada! Salta otra vez en el aire ✨',
+    color: '#f9a8d4',
+  },
+  serpiente: {
+    companion: 'serpiente',
+    companionName: 'Jade',
+    powerName: 'Guardiana',
+    desc: 'Jade vuela a tu alrededor y derriba a los enemigos y proyectiles que se acercan.',
+    duration: 10,
+    activeText: '¡Jade te protege! Los enemigos cercanos caen 🐉',
+    color: '#34d399',
+  },
 };
+
+/** Enemies Jade can reach while guarding */
+export interface PowerFoes {
+  enemies?: EnemyManager | null;
+  stalker?: AetherStalker | null;
+}
 
 export interface CompanionPowerStatus {
   companion: CompanionStyle;
@@ -85,6 +112,8 @@ export interface PowerPhysicsHooks {
   floatCeiling: number;
   rescueGuard: boolean;
   onRescue: (() => void) | null;
+  airJumpPower: boolean;
+  onAirJump: (() => void) | null;
 }
 
 function createLureModel(): THREE.Group {
@@ -117,11 +146,39 @@ export class CompanionPowerSystem {
   private lurePos = new THREE.Vector3();
   private lureGoal = new THREE.Vector3();
   private scene: THREE.Scene;
+  /** Lila: pink ring burst under your feet on every air jump */
+  private dustRing: THREE.Mesh;
+  private dustT = 1;
+  /** Jade: glowing ring circling the player while guarding */
+  private guardRing: THREE.Group;
+  private guardPos = new THREE.Vector3();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.lure = createLureModel();
     scene.add(this.lure);
+    this.dustRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.4, 0.62, 28),
+      new THREE.MeshBasicMaterial({ color: 0xf9a8d4, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending })
+    );
+    this.dustRing.rotation.x = -Math.PI / 2;
+    this.dustRing.visible = false;
+    scene.add(this.dustRing);
+    this.guardRing = new THREE.Group();
+    const torus = new THREE.Mesh(
+      new THREE.TorusGeometry(1.6, 0.05, 8, 48),
+      new THREE.MeshBasicMaterial({ color: 0x34d399, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    torus.rotation.x = Math.PI / 2;
+    this.guardRing.add(torus);
+    for (let i = 0; i < 3; i++) {
+      const orb = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), new THREE.MeshBasicMaterial({ color: 0xa7f3d0 }));
+      const a = (i / 3) * Math.PI * 2;
+      orb.position.set(Math.cos(a) * 1.6, 0, Math.sin(a) * 1.6);
+      this.guardRing.add(orb);
+    }
+    this.guardRing.visible = false;
+    scene.add(this.guardRing);
   }
 
   get info(): CompanionPowerInfo | undefined {
@@ -221,6 +278,17 @@ export class CompanionPowerSystem {
         this.lure.position.copy(this.lurePos);
         break;
       }
+      case 'hada':
+        physics.airJumpPower = true;
+        physics.onAirJump = () => {
+          this.dustT = 0;
+          this.dustRing.visible = true;
+          this.dustRing.position.set(physics.position.x, physics.position.y + 0.05, physics.position.z);
+        };
+        break;
+      case 'serpiente':
+        this.guardRing.visible = true;
+        break;
       case 'catarina':
         physics.rescueGuard = true;
         physics.onRescue = () => {
@@ -238,8 +306,11 @@ export class CompanionPowerSystem {
     physics.speedMultiplier = 1;
     physics.rescueGuard = false;
     physics.onRescue = null;
+    physics.airJumpPower = false;
+    physics.onAirJump = null;
     this.lureTarget = null;
     this.lure.visible = false;
+    this.guardRing.visible = false;
   }
 
   /** Power is over: the companion is now hungry until it eats a snack. */
@@ -255,10 +326,46 @@ export class CompanionPowerSystem {
    * Per-frame update while playing.
    * @param companionSprite the floating companion mesh on the player (for visual feedback)
    */
-  public update(dt: number, time: number, physics: PowerPhysicsHooks, companionSprite: THREE.Object3D | null) {
+  public update(dt: number, time: number, physics: PowerPhysicsHooks, companionSprite: THREE.Object3D | null, foes: PowerFoes = {}) {
+    // Lila's fairy-dust ring fades out
+    if (this.dustT < 1) {
+      this.dustT = Math.min(1, this.dustT + dt * 2.2);
+      this.dustRing.scale.setScalar(1 + this.dustT * 2.2);
+      (this.dustRing.material as THREE.MeshBasicMaterial).opacity = 0.8 * (1 - this.dustT);
+      if (this.dustT >= 1) this.dustRing.visible = false;
+    }
+
     // Active power countdown
     if (this.state === 'active') {
       this.timeLeft -= dt;
+
+      // Jade guards you: enemies and projectiles that get close are knocked down
+      if (this.companion === 'serpiente') {
+        this.guardPos.set(physics.position.x, physics.position.y + 0.7, physics.position.z);
+        this.guardRing.position.copy(this.guardPos);
+        this.guardRing.rotation.y = time * 3;
+        this.guardRing.scale.setScalar(1 + Math.sin(time * 8) * 0.05);
+        const em = foes.enemies;
+        if (em) {
+          for (const e of em.enemies) {
+            if (e.isSquashed) continue;
+            const dx = e.position.x - physics.position.x;
+            const dz = e.position.z - physics.position.z;
+            const dy = e.position.y - physics.position.y;
+            if (dx * dx + dz * dz < 3.2 * 3.2 && Math.abs(dy) < 3) {
+              e.bop();
+              e.onBopped?.();
+            }
+          }
+          em.clearProjectilesNear(this.guardPos, 2.6);
+        }
+        const st = foes.stalker;
+        if (st && !st.isStunned && st.position.distanceTo(physics.position) < 4.5) {
+          st.isStunned = true;
+          st.stunTimer = 3;
+          this.emit('¡Jade espantó al Acechador! 🐉');
+        }
+      }
 
       // Float ceiling follows the ground you stand on while floating
       if (this.companion === 'nube' && physics.isGrounded) {
@@ -302,5 +409,7 @@ export class CompanionPowerSystem {
 
   public dispose() {
     this.scene.remove(this.lure);
+    this.scene.remove(this.dustRing);
+    this.scene.remove(this.guardRing);
   }
 }

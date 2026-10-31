@@ -1,14 +1,15 @@
 /**
  * Player progress for the endless level ladder.
  *  - Levels 1-4 are the handmade worlds; from level 5 on they are generated dynamically
- *    (themes rotate: Acogedor → Cósmico → Pantano → Aero).
+ *    (themes rotate: Acogedor → Cósmico → Pantano → Aero → Jardín → Castillo).
  *  - Levels unlock in order: finish level N to play level N+1.
- *  - Companions unlock every 10 levels: 10 Nubi, 20 Estelita, 30 Chispa, 40 Catarina.
- * Tip for testing: add ?desbloquear=todo to the URL to unlock everything (up to level 41).
+ *  - Companions unlock every 10 levels: 10 Nubi, 20 Estelita, 30 Chispa, 40 Catarina,
+ *    50 Lila (hada), 60 Jade (serpiente voladora).
+ * Tip for testing: add ?desbloquear=todo to the URL to unlock everything (up to level 61).
  */
 import type { CompanionStyle } from './character';
 
-export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero';
+export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero' | 'garden' | 'castle';
 
 export interface LevelInfo {
   id: number;
@@ -19,19 +20,21 @@ export interface LevelInfo {
   generated: boolean;
 }
 
-const THEME_ORDER: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero'];
+const THEME_ORDER: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero', 'garden', 'castle'];
 
 export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: string }> = {
   cozy: { name: 'Archipiélago Acogedor', desc: 'Islas flotantes, hongos y nubes al atardecer.', accent: '#f59e0b' },
   cosmic: { name: 'Ruta Cósmica', desc: 'Asteroides, anillos planetarios y nebulosas.', accent: '#a78bfa' },
   swamp: { name: 'Pantano Sombrío', desc: 'Niebla, ruinas embrujadas y la torre de la bruja.', accent: '#84cc16' },
   aero: { name: 'Valle Aero', desc: 'Pradera brillante, cascadas y ciudad de cristal.', accent: '#38bdf8' },
+  garden: { name: 'Jardín Gigante', desc: 'Eres diminuto: flores, hojas y gnomos traviesos.', accent: '#f472b6' },
+  castle: { name: 'Castillo Embrujado', desc: 'Torres bajo la luna, vampiros, hombres lobo y gárgolas.', accent: '#ef4444' },
 };
 
-/** Theme of any level: 1-4 handmade, then rotating forever. */
+/** Theme of any level: 1-4 handmade, then the 6 worlds rotating forever. */
 export function themeForLevel(level: number): ThemeId {
   if (level <= 4) return THEME_ORDER[Math.max(0, level - 1)];
-  return THEME_ORDER[(level - 5) % 4];
+  return THEME_ORDER[(level - 5) % THEME_ORDER.length];
 }
 
 export function levelInfo(level: number): LevelInfo {
@@ -56,6 +59,8 @@ export const COMPANION_UNLOCKS: { companion: CompanionStyle; level: number }[] =
   { companion: 'estrella', level: 20 },
   { companion: 'luciernaga', level: 30 },
   { companion: 'catarina', level: 40 },
+  { companion: 'hada', level: 50 },
+  { companion: 'serpiente', level: 60 },
 ];
 
 export function unlockLevelFor(c: CompanionStyle): number | undefined {
@@ -95,7 +100,7 @@ function read(): ProgressData {
   }
   try {
     if (/[?&]desbloquear=todo\b/.test(window.location.search)) {
-      data.highestCompleted = Math.max(data.highestCompleted, 40);
+      data.highestCompleted = Math.max(data.highestCompleted, 60);
     }
   } catch {
     // ignore

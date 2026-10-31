@@ -7,6 +7,9 @@
  *  - Sentinels: watchtowers sweeping a cone of light; if it spots you, you're sent
  *    back to the zone entrance. Hide behind walls and move when it looks away.
  *  - Hints: one-time tips shown when you first enter a puzzle area.
+ *  - Orbs (open-world levels): find them all at the end of each path to break the shield
+ *    around the summit and wake up the wind current that takes you there.
+ *  - Return portals: next to each orb, they bring you back to the central valley.
  */
 import * as THREE from 'three';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
@@ -73,6 +76,33 @@ export interface Hint {
   shown: boolean;
 }
 
+export interface Orb {
+  pos: THREE.Vector3;
+  group: THREE.Object3D;
+  beam: THREE.Object3D;
+  socket?: THREE.Mesh;
+  color: number;
+  collected: boolean;
+}
+
+export interface Portal {
+  pos: THREE.Vector3;
+  to: THREE.Vector3;
+  group: THREE.Object3D;
+}
+
+export interface SummitGate {
+  /** The wind current to the summit (only in world.platforms once every orb is found) */
+  updraft: PlatformItem;
+  /** Invisible wall around the summit while it is locked */
+  shield: PlatformItem;
+  shieldY: number;
+  shieldMesh: THREE.Mesh;
+  beam: THREE.Object3D;
+  active: boolean;
+  fade: number;
+}
+
 export interface PuzzleData {
   blocks: PushBlock[];
   doors: Door[];
@@ -80,10 +110,71 @@ export interface PuzzleData {
   carriers: Carrier[];
   hints: Hint[];
   pendingDrops: { type: ItemType; pos: THREE.Vector3 }[];
+  orbs: Orb[];
+  portals: Portal[];
+  summit?: SummitGate;
 }
 
 export function emptyPuzzles(): PuzzleData {
-  return { blocks: [], doors: [], sentinels: [], carriers: [], hints: [], pendingDrops: [] };
+  return { blocks: [], doors: [], sentinels: [], carriers: [], hints: [], pendingDrops: [], orbs: [], portals: [] };
+}
+
+/** Tall beam of light visible from anywhere (marks orbs and the open summit). */
+export function makeBeam(color: number, height = 70, radius = 0.3, startY = 0): THREE.Mesh {
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius * 1.8, radius, height, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.65, depthWrite: false, fog: false, side: THREE.DoubleSide })
+  );
+  beam.position.y = startY + height / 2;
+  return beam;
+}
+
+/** A glowing orb on a pedestal standing on the floor at (x, floorY, z). */
+export function makeOrb(root: THREE.Object3D, x: number, floorY: number, z: number, color: number): Orb {
+  const base = new THREE.Group();
+  base.position.set(x, floorY, z);
+  const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.75, 0.7, 10), new THREE.MeshStandardMaterial({ color: 0xe7e5e4, roughness: 0.5 }));
+  pedestal.position.y = 0.35;
+  pedestal.castShadow = true;
+  base.add(pedestal);
+  // Colored beam starting above the orb, visible from anywhere in the world
+  const beam = makeBeam(color, 60, 0.28, 2.6);
+  base.add(beam);
+  root.add(base);
+
+  const group = new THREE.Group();
+  group.position.set(x, floorY + 1.6, z);
+  const orb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.45, 24, 18),
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9, roughness: 0.15, metalness: 0.2 })
+  );
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(0.75, 20, 14),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending })
+  );
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.05, 8, 32), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  ring.rotation.x = Math.PI / 2;
+  group.add(orb, halo, ring);
+  root.add(group);
+  return { pos: group.position.clone(), group, beam, color, collected: false };
+}
+
+/** Swirling ring that sends you back to the valley. */
+export function makePortal(root: THREE.Object3D, x: number, floorY: number, z: number, to: THREE.Vector3, color: number): Portal {
+  const group = new THREE.Group();
+  group.position.set(x, floorY, z);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.9, 0.12, 10, 36), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.7 }));
+  ring.position.y = 1.15;
+  const disc = new THREE.Mesh(
+    new THREE.CircleGeometry(0.85, 32),
+    new THREE.MeshBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+  );
+  disc.position.y = 1.15;
+  const pad = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, 0.08, 24), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5 }));
+  pad.position.y = 0.05;
+  group.add(ring, disc, pad);
+  root.add(group);
+  return { pos: new THREE.Vector3(x, floorY, z), to: to.clone(), group };
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +228,7 @@ export function makePushBlock(root: THREE.Object3D, id: string, x: number, floor
 }
 
 /** A tall locked gate across a narrow bridge. */
-export function makeDoor(root: THREE.Object3D, id: string, x: number, floorY: number, z: number, width: number, accent: number): { plat: PlatformItem; door: Door } {
+export function makeDoor(root: THREE.Object3D, id: string, x: number, floorY: number, z: number, width: number, accent: number, acrossZ = false): { plat: PlatformItem; door: Door } {
   const H = DOOR_H;
   const group = new THREE.Group();
   group.position.set(x, floorY + H, z);
@@ -161,12 +252,14 @@ export function makeDoor(root: THREE.Object3D, id: string, x: number, floorY: nu
     if (side < 0) hole.rotation.y = Math.PI;
     group.add(lock, hole);
   }
+  // A gate on a bridge that runs along x spans the z axis instead
+  if (acrossZ) group.rotation.y = Math.PI / 2;
   root.add(group);
   const plat: PlatformItem = {
     id,
     type: 'static',
     position: new THREE.Vector3(x, floorY + H, z),
-    size: new THREE.Vector3(width, H + 0.4, 0.5),
+    size: acrossZ ? new THREE.Vector3(0.5, H + 0.4, width) : new THREE.Vector3(width, H + 0.4, 0.5),
     mesh: group,
     originalY: floorY + H,
     solid: true,
@@ -275,6 +368,8 @@ export interface PuzzleContext {
   hostility: number;
   /** Moves the player (e.g. caught by a sentinel) */
   teleport: (to: THREE.Vector3) => void;
+  /** An orb was found (have / total) */
+  onOrb?: (have: number, total: number) => void;
 }
 
 /** 2D segment vs axis-aligned box (slab test). */
@@ -300,9 +395,44 @@ function segmentHitsBox(ax: number, az: number, bx: number, bz: number, b: Cover
 
 export class PuzzleSystem {
   private data: PuzzleData = emptyPuzzles();
+  private platforms: PlatformItem[] = [];
+  private portalCooldown = 0;
 
-  load(data: PuzzleData | undefined) {
+  load(data: PuzzleData | undefined, platforms: PlatformItem[] = []) {
     this.data = data ?? emptyPuzzles();
+    this.platforms = platforms;
+    this.lockSummit();
+  }
+
+  /** Orbs found / total (total 0 = level without orbs). */
+  getOrbStatus(): { have: number; total: number; summitOpen: boolean } {
+    const total = this.data.orbs.length;
+    const have = this.data.orbs.filter((o) => o.collected).length;
+    return { have, total, summitOpen: !!this.data.summit?.active };
+  }
+
+  private lockSummit() {
+    const s = this.data.summit;
+    if (!s) return;
+    s.active = false;
+    s.fade = 0;
+    const i = this.platforms.indexOf(s.updraft);
+    if (i !== -1) this.platforms.splice(i, 1);
+    s.updraft.mesh.visible = false;
+    s.beam.visible = false;
+    s.shield.position.y = s.shieldY;
+    s.shieldMesh.visible = true;
+    (s.shieldMesh.material as THREE.MeshBasicMaterial).opacity = 0.22;
+  }
+
+  private openSummit() {
+    const s = this.data.summit;
+    if (!s || s.active) return;
+    s.active = true;
+    if (!this.platforms.includes(s.updraft)) this.platforms.push(s.updraft);
+    s.updraft.mesh.visible = true;
+    s.beam.visible = true;
+    s.shield.position.y = -100;
   }
 
   /** New run: blocks back home, doors closed, carriers holding their keys, hints re-armed. */
@@ -328,6 +458,14 @@ export class PuzzleSystem {
     }
     for (const h of this.data.hints) h.shown = false;
     this.data.pendingDrops.length = 0;
+    for (const o of this.data.orbs) {
+      o.collected = false;
+      o.group.visible = true;
+      o.group.scale.setScalar(1);
+      o.beam.visible = true;
+      if (o.socket) (o.socket.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.05;
+    }
+    this.lockSummit();
   }
 
   update(dt: number, time: number, ctx: PuzzleContext) {
@@ -338,6 +476,62 @@ export class PuzzleSystem {
       if (!h.shown && P.distanceTo(h.pos) < h.radius) {
         h.shown = true;
         ctx.items.notify(h.text);
+      }
+    }
+
+    // ---- Orbs, return portals & the summit ----
+    if (this.data.orbs.length) {
+      const total = this.data.orbs.length;
+      for (const o of this.data.orbs) {
+        if (o.collected) {
+          if (o.group.visible) {
+            o.group.scale.multiplyScalar(Math.max(0, 1 - dt * 6));
+            o.group.position.y += dt * 3;
+            if (o.group.scale.x < 0.05) o.group.visible = false;
+          }
+          continue;
+        }
+        o.group.rotation.y = time * 1.5;
+        o.group.position.y = o.pos.y + Math.sin(time * 2 + o.pos.x) * 0.15;
+        const dx = P.x - o.pos.x;
+        const dz = P.z - o.pos.z;
+        const dy = P.y + 0.7 - o.pos.y;
+        if (dx * dx + dz * dz + dy * dy < 1.5 * 1.5) {
+          o.collected = true;
+          o.beam.visible = false;
+          if (o.socket) (o.socket.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2;
+          const have = this.data.orbs.filter((q) => q.collected).length;
+          soundManager.playTimeBonus();
+          ctx.onOrb?.(have, total);
+          if (have >= total) {
+            this.openSummit();
+            soundManager.playCheckpoint();
+            ctx.items.notify('¡Todos los orbes! 🔮 El escudo de la cima se rompió: ve a la corriente de viento del valle 🌪️');
+          } else {
+            ctx.items.notify(`¡Orbe ${have}/${total}! 🔮 Usa el portal 🌀 para volver al valle`);
+          }
+        }
+      }
+      const s = this.data.summit;
+      if (s && s.active && s.fade < 1) {
+        s.fade = Math.min(1, s.fade + dt * 0.8);
+        (s.shieldMesh.material as THREE.MeshBasicMaterial).opacity = 0.22 * (1 - s.fade);
+        s.shieldMesh.scale.setScalar(1 + s.fade * 0.3);
+        if (s.fade >= 1) s.shieldMesh.visible = false;
+      } else if (s && !s.active) {
+        s.shieldMesh.rotation.y = time * 0.1;
+        (s.shieldMesh.material as THREE.MeshBasicMaterial).opacity = 0.18 + Math.sin(time * 1.6) * 0.05;
+      }
+    }
+    this.portalCooldown = Math.max(0, this.portalCooldown - dt);
+    for (const pt of this.data.portals) {
+      pt.group.rotation.y = time * 1.2;
+      if (this.portalCooldown > 0) continue;
+      if (Math.hypot(P.x - pt.pos.x, P.z - pt.pos.z) < 1.0 && P.y > pt.pos.y - 0.3 && P.y < pt.pos.y + 1.6) {
+        this.portalCooldown = 1.5;
+        soundManager.playRespawnPuff();
+        ctx.teleport(pt.to);
+        ctx.items.notify('🌀 ¡De vuelta al valle!');
       }
     }
 

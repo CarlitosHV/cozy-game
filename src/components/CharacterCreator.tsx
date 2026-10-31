@@ -78,6 +78,27 @@ export const COMPANION_ICONS: Record<CompanionStyle, React.ReactNode> = {
       <circle cx="15.5" cy="17" r="1.4" fill="#1b1b1f" />
     </svg>
   ),
+  hada: (
+    <svg viewBox="0 0 24 24" className="w-4 h-4" aria-hidden="true">
+      <ellipse cx="7" cy="9" rx="5" ry="3.6" fill="#f9a8d4" opacity="0.85" transform="rotate(-25 7 9)" />
+      <ellipse cx="17" cy="9" rx="5" ry="3.6" fill="#f9a8d4" opacity="0.85" transform="rotate(25 17 9)" />
+      <ellipse cx="8" cy="15.5" rx="3.6" ry="2.4" fill="#c4b5fd" opacity="0.85" transform="rotate(25 8 15.5)" />
+      <ellipse cx="16" cy="15.5" rx="3.6" ry="2.4" fill="#c4b5fd" opacity="0.85" transform="rotate(-25 16 15.5)" />
+      <circle cx="12" cy="6" r="2.6" fill="currentColor" />
+      <path d="M9.5 21 L12 9 L14.5 21 Z" fill="#ec4899" />
+      <path d="M19.5 2.5 l0.7 1.6 1.6 0.7 -1.6 0.7 -0.7 1.6 -0.7 -1.6 -1.6 -0.7 1.6 -0.7z" fill="#fde047" />
+    </svg>
+  ),
+  serpiente: (
+    <svg viewBox="0 0 24 24" className="w-4 h-4" aria-hidden="true">
+      <path d="M3 17c3-6 6 2 9-4s6-3 6-7" fill="none" stroke="#34d399" strokeWidth="3.4" strokeLinecap="round" />
+      <path d="M3 17c3-6 6 2 9-4s6-3 6-7" fill="none" stroke="#fde68a" strokeWidth="1" strokeDasharray="1 2.2" strokeLinecap="round" />
+      <circle cx="18.5" cy="5" r="3" fill="#10b981" />
+      <circle cx="19.5" cy="4.3" r="0.8" fill="#111" />
+      <path d="M16.5 3 l-1.5 -2 M20 2.6 l0.6 -2.2" stroke="#fde047" strokeWidth="1" strokeLinecap="round" />
+      <path d="M10 11 l-2.5 -3.5 3.8 1.6z" fill="#fde047" />
+    </svg>
+  ),
   ninguno: <X className="w-4 h-4" />,
 };
 

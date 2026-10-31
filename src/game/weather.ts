@@ -83,6 +83,28 @@ export const WEATHER_PRESETS: Record<WeatherType, WeatherPreset> = {
     hemiGroundColor: 0x1a1f17,
     hemiIntensity: 0.8,
   },
+  garden_day: {
+    // Tiny in a giant garden: fresh morning sky, green bounce light from the leaves
+    skyColor: 0xbfe6ff,
+    fogColor: 0xd9f2d0,
+    fogDensity: 0.0055,
+    sunColor: 0xfff1c1,
+    sunIntensity: 2.15,
+    hemiSkyColor: 0xe6f8cf,
+    hemiGroundColor: 0x5a8f3c,
+    hemiIntensity: 1.15,
+  },
+  castle_night: {
+    // Haunted castle: deep purple night under a huge pale moon
+    skyColor: 0x1a1033,
+    fogColor: 0x2a1a45,
+    fogDensity: 0.011,
+    sunColor: 0xd8ccff,
+    sunIntensity: 1.35,
+    hemiSkyColor: 0x8270b8,
+    hemiGroundColor: 0x1c1428,
+    hemiIntensity: 0.85,
+  },
   starlit_night: {
     skyColor: 0x0d1321,
     fogColor: 0x1d2d44,

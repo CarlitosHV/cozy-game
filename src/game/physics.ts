@@ -38,6 +38,10 @@ export class ParkourPhysics {
   /** Nubi: slow, floaty falling; holding jump rises up to floatCeiling */
   public floatPower: boolean = false;
   public floatCeiling: number = 0;
+  /** Lila (hada): one extra jump in mid-air */
+  public airJumpPower: boolean = false;
+  public onAirJump: (() => void) | null = null;
+  private airJumpsLeft: number = 0;
   /** Catarina: catches the player on a fall and carries them back to solid ground */
   public rescueGuard: boolean = false;
   public onRescue: (() => void) | null = null;
@@ -142,6 +146,7 @@ export class ParkourPhysics {
     // 1. Coyote Time & Jump Buffer
     if (this.isGrounded) {
       this.coyoteTimer = 0.18;
+      this.airJumpsLeft = 1;
     } else {
       this.coyoteTimer = Math.max(0, this.coyoteTimer - dt);
     }
@@ -211,6 +216,13 @@ export class ParkourPhysics {
       this.isGrounded = false;
       this.currentPlatform = null;
       soundManager.playJump();
+    } else if (this.airJumpPower && this.jumpBufferTimer > 0 && !this.isGrounded && this.airJumpsLeft > 0 && this.carryTimer <= 0) {
+      // Fairy dust: a second jump in mid-air
+      this.velocity.y = this.jumpForce * this.jumpMultiplier * 0.92;
+      this.airJumpsLeft--;
+      this.jumpBufferTimer = 0;
+      soundManager.playJump();
+      this.onAirJump?.();
     }
 
     // 4. Updraft Geyser check
@@ -440,7 +452,7 @@ export class ParkourPhysics {
     // 13. Summit Reached Check
     if (!this.hasReachedSummit) {
       const distToSummit = this.position.distanceTo(this.world.summitPosition);
-      if (distToSummit < 5.0) {
+      if (distToSummit < 5.0 && (this.isGrounded || !this.world.summitRequiresLanding)) {
         this.hasReachedSummit = true;
         soundManager.playVictory();
         if (onVictory) {

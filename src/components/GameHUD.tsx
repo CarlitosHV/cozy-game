@@ -69,6 +69,8 @@ const THEME_COMPANION: Record<ThemeId, CompanionStyle> = {
   cosmic: 'estrella',
   swamp: 'luciernaga',
   aero: 'catarina',
+  garden: 'hada',
+  castle: 'serpiente',
 };
 import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus } from '../game/items';
 import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
@@ -482,6 +484,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const powerInfo = power ? COMPANION_POWERS[power.companion] : undefined;
 
   // Backpack (5 slots) status, polled with the same rhythm
+  // Open-world levels: orbs found / total
+  const [orbs, setOrbs] = useState<{ have: number; total: number; summitOpen: boolean }>({ have: 0, total: 0, summitOpen: false });
+  useEffect(() => {
+    if (!engine || gameState !== 'playing') return;
+    const read = () => {
+      const st = engine.puzzleSystem?.getOrbStatus();
+      if (!st) return;
+      setOrbs((prev) => (prev.have === st.have && prev.total === st.total && prev.summitOpen === st.summitOpen ? prev : st));
+    };
+    read();
+    const id = window.setInterval(read, 200);
+    return () => window.clearInterval(id);
+  }, [engine, gameState]);
+
   const [inventory, setInventory] = useState<InventoryStatus | null>(null);
   const [showBackpack, setShowBackpack] = useState(false);
   const lastItemEventRef = useRef<number>(0);
@@ -983,11 +999,30 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <MapPin className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
               <div className="flex flex-col">
                 <span className="text-[9px] text-stone-400 font-medium uppercase tracking-wider">
-                  Nivel {engine?.currentLevel ?? 1} · Punto {checkpointIndex}/3
+                  Nivel {engine?.currentLevel ?? 1} · {orbs.total > 0 ? 'Mundo abierto' : `Punto ${checkpointIndex}/3`}
                 </span>
                 <span className="font-semibold text-stone-100 text-xs sm:text-sm">{checkpointName}</span>
               </div>
             </div>
+
+            {/* Open-world objective: orbs */}
+            {orbs.total > 0 && (
+              <div
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs shadow-md backdrop-blur-md ${
+                  orbs.summitOpen ? 'bg-amber-950/85 border-amber-400/70 text-amber-100' : 'bg-violet-950/80 border-violet-400/50 text-violet-100'
+                }`}
+              >
+                <span className="text-base leading-none">{orbs.summitOpen ? '🌪️' : '🔮'}</span>
+                <div className="flex flex-col">
+                  <span className="text-[9px] uppercase tracking-wider opacity-75 font-semibold">
+                    {orbs.summitOpen ? '¡Cima abierta!' : 'Orbes encontrados'}
+                  </span>
+                  <span className="font-semibold tabular-nums">
+                    {orbs.summitOpen ? 'Ve a la corriente del valle' : `${orbs.have} / ${orbs.total} · sigue los rayos de luz`}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Mode-Specific Status Banner */}
             {gameMode === 'time_trial' && (
@@ -2101,7 +2136,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
             {/* Puzzles guide (generated levels) */}
             <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-400/30 text-[11px] text-sky-100/90 leading-relaxed mb-3">
-              <strong className="text-sky-300">🧩 Puzzles (desde el nivel 5):</strong>
+              <strong className="text-sky-300">🗺️ Mundos abiertos y puzzles (desde el nivel 5):</strong>
+              <p className="mt-1">
+                Empiezas en un valle con varios caminos. Al final de cada uno hay un <strong>orbe 🔮</strong> (busca los rayos de luz) y un{' '}
+                <strong>portal 🌀</strong> para volver al valle. Con todos los orbes se rompe el escudo de la cima y se abre la corriente de viento del valle.
+                Algunos caminos empiezan cerrados: su llave está al final de otro camino.
+              </p>
               <ul className="list-disc list-inside mt-1 space-y-1">
                 <li><strong>Roca 🪨:</strong> camina contra ella para empujarla hasta el muro alto y súbete encima para trepar. Si cae al vacío, vuelve a su sitio.</li>
                 <li><strong>Puerta con candado 🚪:</strong> necesitas una llave 🔑. A veces está en una isla más abajo: baja por ella y regresa con el trampolín.</li>

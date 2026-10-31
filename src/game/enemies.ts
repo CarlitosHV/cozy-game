@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
 import { ProceduralTextures } from './textures';
 
-export type EnemyType = 'sproutling' | 'zephyr_puff' | 'chaser' | 'hopper' | 'shooter' | 'diver';
+export type EnemyType = 'sproutling' | 'zephyr_puff' | 'chaser' | 'hopper' | 'shooter' | 'diver' | 'walker' | 'flyer';
 
 /** Pushes the player: direction (XZ), horizontal force and upward speed. */
 export type KnockFn = (dir: THREE.Vector3, force: number, up: number) => void;
@@ -88,6 +88,19 @@ export class EnemyManager {
   }
   public registerEnemy(e: CozyEnemy) {
     this.enemies.push(e);
+  }
+  /** Removes enemy projectiles near a point (Jade's guardian power). Returns how many. */
+  public clearProjectilesNear(pos: THREE.Vector3, radius: number): number {
+    let n = 0;
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const pr = this.projectiles[i];
+      if (pr.mesh.position.distanceTo(pos) < radius) {
+        this.scene.remove(pr.mesh);
+        this.projectiles.splice(i, 1);
+        n++;
+      }
+    }
+    return n;
   }
   public spawnProjectile(mesh: THREE.Object3D, from: THREE.Vector3, velocity: THREE.Vector3, force: number, radius = 0.3, life = 4) {
     mesh.position.copy(from);
