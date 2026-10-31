@@ -2569,12 +2569,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </span>
               <div className="space-y-2 text-xs text-stone-300">
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Botón rotar pantalla</span>
-                  <span className="text-stone-200">Gira entre horizontal y vertical al instante</span>
+                  <span className="text-stone-400">Orientación</span>
+                  <span className="text-stone-200">Gira el móvil físicamente a horizontal</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Botón pantalla completa</span>
                   <span className="text-stone-200">Vista inmersiva sin barras del navegador</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-800">
+                  <span className="text-stone-400">Objetivo del nivel</span>
+                  <span className="text-stone-200">Al empezar y en el menú de pausa</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Joystick 360° (abajo a la izquierda)</span>
