@@ -63,7 +63,10 @@ export function gardenPack(kit: LevelKit): ThemePack {
     }
   };
 
-  const soilIsland: Builder = (g, w, d, h) => {
+  const soilIsland: Builder = (g, w, d, h) => soil(g, w, d, h, true);
+  /** Ground tiles of the open zone: same soil, no grass blades on the seams */
+  const soilTile: Builder = (g, w, d, h) => soil(g, w, d, h, false);
+  function soil(g: THREE.Group, w: number, d: number, h: number, withBlades: boolean) {
     const body = shadowed(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [soilMat, soilMat, grassTop, soilMat, soilMat, soilMat]));
     body.position.y = -h / 2;
     g.add(body);
@@ -78,8 +81,8 @@ export function gardenPack(kit: LevelKit): ThemePack {
       root.rotation.z = Math.sin(i) * 0.4;
       g.add(root);
     }
-    if (w * d < 1300) blades(g, w, d);
-  };
+    if (withBlades && w * d < 1300) blades(g, w, d);
+  }
 
   /** A giant leaf seen from above: green ellipse with a pale midrib, on a long stem */
   const leaf: Builder = (g, w, d, h) => {
@@ -282,6 +285,7 @@ export function gardenPack(kit: LevelKit): ThemePack {
     cpNames: ['Maceta del Inicio', 'Bosque de Tréboles', 'Charco del Rocío', 'Jardín de Margaritas', 'Sendero de Hormigas', 'Regadera Vieja'],
     summitName: 'Girasol Gigante',
     big: soilIsland,
+    terrain: soilTile,
     small: [leaf, daisy(petalWhite), bottleCap, daisy(petalYellow)],
     deck: sticks,
     mover: leaf,

@@ -93,6 +93,8 @@ export interface WorldBuildResult {
   companionShowcasePos?: THREE.Vector3;
   /** Optional per-frame animation for level decorations (waterfalls, bubbles…) */
   levelUpdate?: (dt: number, time: number) => void;
+  /** Generated zones: ordered platform ids of every route (used by the automatic level tests) */
+  routes?: { name: string; ids: string[] }[];
   /** Open-world levels: the summit only counts once you land on it (not while flying under it) */
   summitRequiresLanding?: boolean;
   /** Push blocks, locked doors, key carriers, sentinels (generated levels) */

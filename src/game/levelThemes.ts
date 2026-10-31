@@ -27,6 +27,8 @@ export interface ThemePack {
   cpNames: string[];
   summitName: string;
   big: Builder;
+  /** Ground tiles of the open zones (defaults to big) */
+  terrain?: Builder;
   small: Builder[];
   deck: Builder;
   mover: Builder;
