@@ -26,6 +26,7 @@ import {
   X,
   ArrowUp,
   Zap,
+  Smartphone,
   Camera,
   Download,
   Eye,
@@ -179,13 +180,14 @@ interface GameHUDProps {
 const VirtualJoystick: React.FC<{
   onMove: (forward: number, right: number) => void;
   isSimulatedLandscape?: boolean;
-}> = ({ onMove, isSimulatedLandscape = false }) => {
+  compact?: boolean;
+}> = ({ onMove, isSimulatedLandscape = false, compact = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [knobPos, setKnobPos] = useState({ x: 0, y: 0 });
   const [isActive, setIsActive] = useState(false);
   const touchIdRef = useRef<number | null>(null);
 
-  const maxRadius = 45;
+  const maxRadius = compact ? 34 : 45;
 
   const updateKnob = (clientX: number, clientY: number) => {
     if (!containerRef.current) return;
@@ -282,28 +284,34 @@ const VirtualJoystick: React.FC<{
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
-      className={`relative w-28 h-28 sm:w-32 sm:h-32 rounded-full border-2 transition-all select-none flex items-center justify-center ${
+      className={`relative rounded-full border-2 transition-all select-none flex items-center justify-center ${
+        compact ? 'w-22 h-22 w-[5.5rem] h-[5.5rem]' : 'w-28 h-28 sm:w-32 sm:h-32'
+      } ${
         isActive
           ? 'bg-amber-950/40 border-amber-400 shadow-xl shadow-amber-500/20'
-          : 'bg-stone-900/70 border-stone-700/70 shadow-lg'
+          : 'bg-stone-900/55 border-stone-700/60 shadow-lg backdrop-blur-sm'
       }`}
       style={{ touchAction: 'none' }}
     >
-      {/* Directional ticks */}
-      <span className="absolute top-2 text-[9px] text-stone-500 font-mono">W</span>
-      <span className="absolute bottom-2 text-[9px] text-stone-500 font-mono">S</span>
-      <span className="absolute left-2 text-[9px] text-stone-500 font-mono">A</span>
-      <span className="absolute right-2 text-[9px] text-stone-500 font-mono">D</span>
+      {!compact && (
+        <>
+          <span className="absolute top-2 text-[9px] text-stone-500 font-mono">W</span>
+          <span className="absolute bottom-2 text-[9px] text-stone-500 font-mono">S</span>
+          <span className="absolute left-2 text-[9px] text-stone-500 font-mono">A</span>
+          <span className="absolute right-2 text-[9px] text-stone-500 font-mono">D</span>
+        </>
+      )}
 
-      {/* Interactive knob */}
       <div
-        className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 shadow-md border-2 border-amber-200 pointer-events-none flex items-center justify-center"
+        className={`rounded-full bg-gradient-to-br from-amber-400 to-amber-600 shadow-md border-2 border-amber-200 pointer-events-none flex items-center justify-center ${
+          compact ? 'w-10 h-10' : 'w-12 h-12 sm:w-14 sm:h-14'
+        }`}
         style={{
           transform: `translate(${knobPos.x}px, ${knobPos.y}px)`,
           transition: isActive ? 'none' : 'transform 0.15s ease-out',
         }}
       >
-        <div className="w-4 h-4 rounded-full bg-amber-100/70" />
+        <div className={`rounded-full bg-amber-100/70 ${compact ? 'w-3 h-3' : 'w-4 h-4'}`} />
       </div>
     </div>
   );
@@ -438,6 +446,21 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [isSprintActive, setIsSprintActive] = useState(false);
   const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [viewportNarrow, setViewportNarrow] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 900 : false
+  );
+
+  useEffect(() => {
+    const onResize = () => setViewportNarrow(window.innerWidth < 900);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isPortrait || isSimulatedLandscape) {
+      setDismissPortraitHint(false);
+    }
+  }, [isPortrait, isSimulatedLandscape]);
 
   // Character Generator
   const [showCreator, setShowCreator] = useState(false);
@@ -615,6 +638,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches)
     );
   });
+  const [isTouchDevice] = useState(() =>
+    typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)
+  );
+
+  const isMobileUi = touchControlsEnabled || isTouchDevice || viewportNarrow;
+  const isPortraitPlay = isPortrait && !isSimulatedLandscape;
+  const compactControls = isMobileUi && isPortraitPlay;
+  const filledSlots = inventory?.slots.filter(Boolean).length ?? 0;
+  const showPortraitHint =
+    isMobileUi &&
+    isPortraitPlay &&
+    !dismissPortraitHint &&
+    !showCreator &&
+    (gameState === 'playing' || gameState === 'title');
 
   // Switch dynamically if user uses touch or keyboard
   useEffect(() => {
@@ -626,6 +663,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         'KeyQ', 'KeyE', 'KeyR', 'KeyC', 'KeyG', 'KeyI', 'Escape'
       ];
       if (gameKeys.includes(e.code)) {
+        if (isTouchDevice) return;
         if (typeof window.matchMedia === 'function' && !window.matchMedia('(pointer: coarse)').matches) {
           setTouchControlsEnabled(false);
         }
@@ -642,7 +680,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('touchstart', handleTouchStart);
     };
-  }, []);
+  }, [isTouchDevice]);
 
   // Timer
   useEffect(() => {
@@ -764,6 +802,58 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none z-10 overflow-hidden font-['Outfit',sans-serif]">
+      {showPortraitHint && (
+        <div className="absolute inset-0 z-[60] pointer-events-auto flex items-end sm:items-center justify-center p-4 pt-safe pb-safe bg-stone-950/55 backdrop-blur-[2px]">
+          <div className="w-full max-w-sm rounded-3xl bg-stone-900/95 border border-amber-500/35 shadow-2xl p-5 text-stone-100 flex flex-col items-center text-center gap-3">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-400/40 flex items-center justify-center text-amber-300 animate-[tilt-phone_1.6s_ease-in-out_infinite]">
+              <Smartphone className="w-7 h-7" />
+            </div>
+            <div>
+              <h3 className="text-lg font-serif font-bold text-amber-200 mb-1">Gira tu dispositivo</h3>
+              <p className="text-xs text-stone-300 leading-relaxed">
+                El juego se ve y se controla mucho mejor en horizontal. Puedes rotar la pantalla o simular landscape desde aquí.
+              </p>
+            </div>
+            <div className="w-full flex flex-col gap-2">
+              {toggleOrientation && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleOrientation();
+                    setDismissPortraitHint(true);
+                    showToast('Orientación Horizontal');
+                  }}
+                  className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <RotateCw className="w-4 h-4" />
+                  Jugar en horizontal
+                </button>
+              )}
+              {toggleFullscreen && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleFullscreen();
+                    showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-100 text-sm font-semibold cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {isFullscreen ? <Minimize className="w-4 h-4 text-amber-300" /> : <Maximize className="w-4 h-4 text-amber-300" />}
+                  {isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setDismissPortraitHint(true)}
+                className="w-full py-2.5 rounded-xl bg-stone-950/50 border border-stone-700 text-stone-300 hover:text-stone-100 hover:border-stone-500 text-xs font-semibold cursor-pointer"
+              >
+                Continuar en vertical
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ======================================================== */}
       {/* 1. TITLE SCREEN OVERLAY                                  */}
       {/* ======================================================== */}
@@ -778,8 +868,37 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {gameState === 'title' && !showCreator && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-gradient-to-t from-stone-950/85 via-stone-950/45 to-stone-950/20 text-stone-100 p-3 sm:p-6 transition-opacity duration-500 overflow-y-auto font-['Outfit',sans-serif]">
-          {/* Card container: mobile-first, centered, clean max-w-sm */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-gradient-to-t from-stone-950/85 via-stone-950/45 to-stone-950/20 text-stone-100 p-3 sm:p-6 pt-safe pb-safe transition-opacity duration-500 overflow-y-auto font-['Outfit',sans-serif]">
+          {isMobileUi && (
+            <div className="absolute top-safe right-0 pt-3 pr-3 pr-safe flex items-center gap-1.5 z-20">
+              {toggleFullscreen && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleFullscreen();
+                    showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
+                  }}
+                  title={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+                  className="p-2 rounded-xl bg-stone-900/80 border border-stone-700 text-amber-300 cursor-pointer"
+                >
+                  {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                </button>
+              )}
+              {toggleOrientation && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleOrientation();
+                    showToast(isSimulatedLandscape ? 'Orientación Vertical' : 'Orientación Horizontal');
+                  }}
+                  title="Rotar orientación"
+                  className="p-2 rounded-xl bg-stone-900/80 border border-stone-700 text-amber-300 cursor-pointer"
+                >
+                  <RotateCw className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
           <div className="w-full max-w-sm rounded-3xl bg-stone-950/90 border border-stone-800/90 p-5 sm:p-6 shadow-2xl backdrop-blur-xl flex flex-col my-auto transition-all animate-in fade-in zoom-in-95">
 
             {/* ======================================================== */}
@@ -1163,32 +1282,38 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {gameState === 'playing' && (
         <>
           {/* Top-Left Cluster: Mode Badge, Checkpoint, Collectibles, Time/Radar */}
-          <div className="absolute top-4 left-4 flex flex-col gap-2 pointer-events-auto">
+          <div className={`absolute top-safe left-0 flex flex-col gap-1.5 sm:gap-2 pointer-events-auto pl-safe ${isMobileUi ? 'pt-2 pl-2 max-w-[58vw] sm:max-w-none' : 'top-4 left-4 pl-4 pt-4'}`}>
             {/* Stage & Checkpoint Badge */}
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-900/85 border border-stone-800/80 text-stone-200 text-xs shadow-md backdrop-blur-md">
+            <div className={`flex items-center gap-2 rounded-xl bg-stone-900/85 border border-stone-800/80 text-stone-200 text-xs shadow-md backdrop-blur-md ${isMobileUi ? 'px-2 py-1' : 'px-3 py-1.5'}`}>
               <MapPin className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-              <div className="flex flex-col">
-                <span className="text-[9px] text-stone-400 font-medium uppercase tracking-wider">
+              <div className="flex flex-col min-w-0">
+                <span className="text-[9px] text-stone-400 font-medium uppercase tracking-wider truncate">
                   Nivel {engine?.currentLevel ?? 1} · {orbs.total > 0 ? 'Mundo abierto' : `Punto ${checkpointIndex}/3`}
                 </span>
-                <span className="font-semibold text-stone-100 text-xs sm:text-sm">{checkpointName}</span>
+                <span className={`font-semibold text-stone-100 truncate ${isMobileUi ? 'text-[11px]' : 'text-xs sm:text-sm'}`}>{checkpointName}</span>
               </div>
             </div>
 
             {/* Open-world objective: orbs */}
             {orbs.total > 0 && (
               <div
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs shadow-md backdrop-blur-md ${
+                className={`flex items-center gap-2 rounded-xl border text-xs shadow-md backdrop-blur-md ${
+                  isMobileUi ? 'px-2 py-1' : 'px-3 py-1.5'
+                } ${
                   orbs.summitOpen ? 'bg-amber-950/85 border-amber-400/70 text-amber-100' : 'bg-violet-950/80 border-violet-400/50 text-violet-100'
                 }`}
               >
                 <span className="text-base leading-none">{orbs.summitOpen ? '🌪️' : '🔮'}</span>
-                <div className="flex flex-col">
+                <div className="flex flex-col min-w-0">
                   <span className="text-[9px] uppercase tracking-wider opacity-75 font-semibold">
-                    {orbs.summitOpen ? '¡Cima abierta!' : 'Orbes encontrados'}
+                    {orbs.summitOpen ? '¡Cima abierta!' : 'Orbes'}
                   </span>
-                  <span className="font-semibold tabular-nums">
-                    {orbs.summitOpen ? 'La fortaleza está abierta: ¡sube a la cima!' : `${orbs.have} / ${orbs.total} · sigue los rayos de luz`}
+                  <span className={`font-semibold tabular-nums ${isMobileUi ? 'text-[11px] truncate' : ''}`}>
+                    {orbs.summitOpen
+                      ? isMobileUi
+                        ? '¡Sube a la cima!'
+                        : 'La fortaleza está abierta: ¡sube a la cima!'
+                      : `${orbs.have}/${orbs.total}`}
                   </span>
                 </div>
               </div>
@@ -1251,11 +1376,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             )}
 
             {/* Sun Crystals / Acorns Collectibles & Timer */}
-            <div className="flex items-center gap-3 px-3 py-1.5 rounded-xl bg-stone-900/85 border border-stone-800/80 text-xs text-stone-300 shadow-md backdrop-blur-md">
+            <div className={`flex items-center rounded-xl bg-stone-900/85 border border-stone-800/80 text-xs text-stone-300 shadow-md backdrop-blur-md ${isMobileUi ? 'gap-2 px-2 py-1' : 'gap-3 px-3 py-1.5'}`}>
               <div className="flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
                 <span className="tabular-nums font-semibold text-amber-300">
-                  {collectedCount} / {totalCollectibles}
+                  {collectedCount}/{totalCollectibles}
                 </span>
               </div>
               <div className="w-[1px] h-3 bg-stone-700/60" />
@@ -1265,8 +1390,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             </div>
 
-            {/* Companion Power badge (click / tap or press G) */}
-            {power && powerInfo && (
+            {/* Companion Power badge (hidden on mobile touch — action button covers it) */}
+            {power && powerInfo && !touchControlsEnabled && (
               <button
                 type="button"
                 onClick={() => engine?.activateCompanionPower()}
@@ -1319,9 +1444,39 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             )}
           </div>
 
-          {/* Top-Right Cluster: Quick Actions (Photo Mode, Help, Reset) */}
-          <div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-auto">
-            {/* Photo Mode Trigger */}
+          {/* Top-Right Cluster: Quick Actions */}
+          <div className={`absolute top-safe right-0 flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 pointer-events-auto pr-safe ${isMobileUi ? 'pt-2 pr-2 max-w-[55vw]' : 'top-4 right-4 pr-4 pt-4'}`}>
+            {isMobileUi && toggleFullscreen && (
+              <button
+                onClick={() => {
+                  toggleFullscreen();
+                  showToast(!isFullscreen ? 'Pantalla Completa' : 'Modo Ventana');
+                }}
+                title={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+                className="p-2 sm:p-2.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-md cursor-pointer"
+              >
+                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+              </button>
+            )}
+            {isMobileUi && toggleOrientation && (
+              <button
+                onClick={() => {
+                  toggleOrientation();
+                  showToast(isSimulatedLandscape ? 'Orientación Vertical' : 'Orientación Horizontal');
+                }}
+                title="Rotar orientación"
+                className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 text-amber-300 border border-stone-700 shadow-md cursor-pointer"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={() => engine?.setPaused(true)}
+              title="Pausa"
+              className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-stone-200 transition-colors shadow-md cursor-pointer"
+            >
+              <Pause className="w-4 h-4" />
+            </button>
             <button
               onClick={() => engine?.enterPhotoMode()}
               title="Modo foto (tecla P)"
@@ -1329,20 +1484,24 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             >
               <Camera className="w-4 h-4 text-amber-400" />
             </button>
-            <button
-              onClick={() => setShowHelpModal(true)}
-              title="Guía y controles"
-              className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-amber-300 transition-colors shadow-md cursor-pointer"
-            >
-              <HelpCircle className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => engine?.physics.respawnAtCheckpoint()}
-              title="Reiniciar en punto de control (R)"
-              className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-stone-300 transition-colors shadow-md cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
+            {!compactControls && (
+              <button
+                onClick={() => setShowHelpModal(true)}
+                title="Guía y controles"
+                className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-amber-300 transition-colors shadow-md cursor-pointer"
+              >
+                <HelpCircle className="w-4 h-4" />
+              </button>
+            )}
+            {!compactControls && (
+              <button
+                onClick={() => engine?.physics.respawnAtCheckpoint()}
+                title="Reiniciar en punto de control (R)"
+                className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:bg-stone-800 text-stone-300 transition-colors shadow-md cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
           {/* Discreet, Fast-Dismissing Micro Toast (Milestones & In-Game Alerts) */}
@@ -1365,97 +1524,155 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
           )}
 
-          {/* BACKPACK HOTBAR (5 slots, keys 1-5, I opens the panel) */}
+          {/* BACKPACK — compact FAB on mobile, full hotbar on desktop */}
           {inventory && (
             <div
-              className={`absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-auto z-20 ${
-                touchControlsEnabled && isPortrait && !isSimulatedLandscape ? 'bottom-56' : 'bottom-4'
+              className={`absolute flex flex-col items-center gap-1.5 pointer-events-auto z-20 ${
+                isMobileUi
+                  ? compactControls
+                    ? 'right-2 bottom-[11.5rem] items-end pr-safe'
+                    : 'left-1/2 -translate-x-1/2 bottom-4 pb-safe'
+                  : 'left-1/2 -translate-x-1/2 bottom-4'
               }`}
             >
               {inventory.superJumpLeft > 0 && (
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-stone-950 text-[11px] font-bold shadow">
-                  🌰 Súper salto · {Math.ceil(inventory.superJumpLeft)}s
+                <span className="px-2 py-0.5 rounded-full bg-amber-400 text-stone-950 text-[10px] font-bold shadow">
+                  🌰 {Math.ceil(inventory.superJumpLeft)}s
                 </span>
               )}
 
               {showBackpack && (
-                <div className="w-[min(92vw,340px)] rounded-2xl bg-stone-900/95 border border-stone-700 shadow-2xl backdrop-blur-md p-3 text-stone-100">
+                <div className={`rounded-2xl bg-stone-900/95 border border-stone-700 shadow-2xl backdrop-blur-md text-stone-100 ${isMobileUi ? 'w-[min(72vw,260px)] p-2.5' : 'w-[min(92vw,340px)] p-3'}`}>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="flex items-center gap-1.5 text-xs font-bold text-amber-300 uppercase tracking-wider">
-                      <BackpackIcon className="w-4 h-4" /> Mochila ({inventory.slots.filter(Boolean).length}/{INVENTORY_SIZE})
+                    <span className="flex items-center gap-1.5 text-[10px] sm:text-xs font-bold text-amber-300 uppercase tracking-wider">
+                      <BackpackIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Mochila ({filledSlots}/{INVENTORY_SIZE})
                     </span>
                     <button onClick={() => setShowBackpack(false)} className="p-1 rounded-lg hover:bg-stone-800 cursor-pointer" aria-label="Cerrar mochila">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    {inventory.slots.map((item, i) => {
-                      const info = item ? ITEM_INFO[item] : null;
-                      return (
-                        <div key={i} className="flex items-center gap-2 p-2 rounded-xl bg-stone-950/60 border border-stone-800">
-                          <span className="w-5 text-[10px] font-mono text-stone-500">{i + 1}</span>
-                          <span className="w-8 h-8 flex items-center justify-center text-xl rounded-lg bg-stone-800/80">{info?.emoji ?? ''}</span>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs font-semibold truncate">{info ? info.name : 'Vacío'}</div>
-                            {info && <div className="text-[10px] text-stone-400 leading-snug">{info.desc}</div>}
+                  {isMobileUi ? (
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {inventory.slots.map((item, i) => {
+                        const info = item ? ITEM_INFO[item] : null;
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => {
+                              if (!info) return;
+                              engine?.useItem(i);
+                              setShowBackpack(false);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              if (info) engine?.discardItem(i);
+                            }}
+                            title={info ? `${info.name}: tocar para usar` : `Vacío ${i + 1}`}
+                            className={`relative aspect-square rounded-xl flex items-center justify-center text-lg border transition-transform active:scale-90 cursor-pointer ${
+                              info ? 'bg-stone-800 border-stone-600' : 'bg-stone-950/60 border-stone-800 border-dashed'
+                            }`}
+                            style={info ? { boxShadow: `inset 0 -2px 0 ${info.color}` } : undefined}
+                          >
+                            <span className="absolute top-0.5 left-1 text-[8px] font-mono text-stone-500">{i + 1}</span>
+                            {info?.emoji}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1.5">
+                      {inventory.slots.map((item, i) => {
+                        const info = item ? ITEM_INFO[item] : null;
+                        return (
+                          <div key={i} className="flex items-center gap-2 p-2 rounded-xl bg-stone-950/60 border border-stone-800">
+                            <span className="w-5 text-[10px] font-mono text-stone-500">{i + 1}</span>
+                            <span className="w-8 h-8 flex items-center justify-center text-xl rounded-lg bg-stone-800/80">{info?.emoji ?? ''}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-semibold truncate">{info ? info.name : 'Vacío'}</div>
+                              {info && <div className="text-[10px] text-stone-400 leading-snug">{info.desc}</div>}
+                            </div>
+                            {info && (
+                              <>
+                                <button
+                                  onClick={() => engine?.useItem(i)}
+                                  className="px-2 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-[11px] font-bold cursor-pointer"
+                                >
+                                  Usar
+                                </button>
+                                <button
+                                  onClick={() => engine?.discardItem(i)}
+                                  className="p-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 cursor-pointer"
+                                  title="Tirar"
+                                  aria-label="Tirar"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
                           </div>
-                          {info && (
-                            <>
-                              <button
-                                onClick={() => engine?.useItem(i)}
-                                className="px-2 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-[11px] font-bold cursor-pointer"
-                              >
-                                Usar
-                              </button>
-                              <button
-                                onClick={() => engine?.discardItem(i)}
-                                className="p-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 cursor-pointer"
-                                title="Tirar"
-                                aria-label="Tirar"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-2 text-[10px] text-stone-400 leading-snug">
-                    Recoge bayas 🍇 y nueces 🌰 en las islas. Úsalas con las teclas 1–5 o tocando el espacio. Las llaves 🔑 se usan solas al llegar a una puerta.
-                  </p>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {!isMobileUi && (
+                    <p className="mt-2 text-[10px] text-stone-400 leading-snug">
+                      Recoge bayas 🍇 y nueces 🌰 en las islas. Úsalas con las teclas 1–5 o tocando el espacio. Las llaves 🔑 se usan solas al llegar a una puerta.
+                    </p>
+                  )}
                 </div>
               )}
 
-              <div className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-stone-900/80 border border-stone-700/80 shadow-lg backdrop-blur-md">
+              {isMobileUi ? (
                 <button
                   onClick={() => setShowBackpack((v) => !v)}
-                  title="Mochila (I)"
+                  title="Mochila"
                   aria-label="Abrir mochila"
-                  className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center cursor-pointer transition-colors ${
-                    showBackpack ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-amber-300 hover:bg-stone-700'
+                  className={`relative rounded-2xl flex items-center justify-center cursor-pointer transition-colors shadow-lg border backdrop-blur-md ${
+                    compactControls ? 'w-11 h-11' : 'w-12 h-12'
+                  } ${
+                    showBackpack
+                      ? 'bg-amber-500 text-stone-950 border-amber-300'
+                      : 'bg-stone-900/70 text-amber-300 border-stone-700/70 hover:bg-stone-800/80'
                   }`}
                 >
-                  <BackpackIcon className="w-5 h-5" />
+                  <BackpackIcon className={compactControls ? 'w-4 h-4' : 'w-5 h-5'} />
+                  {filledSlots > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-amber-400 text-stone-950 text-[9px] font-black flex items-center justify-center leading-none">
+                      {filledSlots}
+                    </span>
+                  )}
                 </button>
-                {inventory.slots.map((item, i) => {
-                  const info = item ? ITEM_INFO[item] : null;
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => engine?.useItem(i)}
-                      title={info ? `${info.name}: ${info.desc} (tecla ${i + 1})` : `Espacio ${i + 1} vacío`}
-                      className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center text-xl border transition-transform active:scale-90 cursor-pointer ${
-                        info ? 'bg-stone-800 border-stone-600 hover:border-amber-400' : 'bg-stone-950/50 border-stone-800 border-dashed'
-                      }`}
-                      style={info ? { boxShadow: `inset 0 -3px 0 ${info.color}` } : undefined}
-                    >
-                      <span className="absolute top-0.5 left-1 text-[9px] font-mono text-stone-500">{i + 1}</span>
-                      {info?.emoji}
-                    </button>
-                  );
-                })}
-              </div>
+              ) : (
+                <div className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-stone-900/80 border border-stone-700/80 shadow-lg backdrop-blur-md">
+                  <button
+                    onClick={() => setShowBackpack((v) => !v)}
+                    title="Mochila (I)"
+                    aria-label="Abrir mochila"
+                    className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center cursor-pointer transition-colors ${
+                      showBackpack ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-amber-300 hover:bg-stone-700'
+                    }`}
+                  >
+                    <BackpackIcon className="w-5 h-5" />
+                  </button>
+                  {inventory.slots.map((item, i) => {
+                    const info = item ? ITEM_INFO[item] : null;
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => engine?.useItem(i)}
+                        title={info ? `${info.name}: ${info.desc} (tecla ${i + 1})` : `Espacio ${i + 1} vacío`}
+                        className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center text-xl border transition-transform active:scale-90 cursor-pointer ${
+                          info ? 'bg-stone-800 border-stone-600 hover:border-amber-400' : 'bg-stone-950/50 border-stone-800 border-dashed'
+                        }`}
+                        style={info ? { boxShadow: `inset 0 -3px 0 ${info.color}` } : undefined}
+                      >
+                        <span className="absolute top-0.5 left-1 text-[9px] font-mono text-stone-500">{i + 1}</span>
+                        {info?.emoji}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -1463,14 +1680,43 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {/* ======================================================== */}
           {touchControlsEnabled && !isAnyModalOpen && (
             <>
-              {/* Bottom-Left 360° Analog Joystick */}
-              <div className="absolute bottom-6 left-6 pointer-events-auto z-20">
-                <VirtualJoystick onMove={handleJoystickMove} />
+              <div className={`absolute flex flex-col items-start gap-2 pointer-events-auto z-20 pl-safe pb-safe ${compactControls ? 'bottom-3 left-3' : 'bottom-5 left-5 sm:bottom-6 sm:left-6'}`}>
+                <div className="flex items-center gap-2 ml-1">
+                  <button
+                    onTouchStart={(e) => {
+                      e.stopPropagation();
+                      engine?.rotateCamera(Math.PI / 4);
+                    }}
+                    onClick={() => engine?.rotateCamera(Math.PI / 4)}
+                    className={`${compactControls ? 'w-9 h-9' : 'w-10 h-10'} rounded-full bg-stone-900/70 border border-stone-700/80 text-amber-300 flex items-center justify-center shadow-md active:scale-90 transition-transform cursor-pointer touch-none select-none backdrop-blur-sm`}
+                    style={{ touchAction: 'none' }}
+                    title="Girar cámara izquierda"
+                    aria-label="Girar cámara izquierda"
+                  >
+                    <Undo2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onTouchStart={(e) => {
+                      e.stopPropagation();
+                      engine?.rotateCamera(-Math.PI / 4);
+                    }}
+                    onClick={() => engine?.rotateCamera(-Math.PI / 4)}
+                    className={`${compactControls ? 'w-9 h-9' : 'w-10 h-10'} rounded-full bg-stone-900/70 border border-stone-700/80 text-amber-300 flex items-center justify-center shadow-md active:scale-90 transition-transform cursor-pointer touch-none select-none backdrop-blur-sm`}
+                    style={{ touchAction: 'none' }}
+                    title="Girar cámara derecha"
+                    aria-label="Girar cámara derecha"
+                  >
+                    <Redo2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <VirtualJoystick
+                  onMove={handleJoystickMove}
+                  isSimulatedLandscape={isSimulatedLandscape}
+                  compact={compactControls}
+                />
               </div>
 
-              {/* Bottom-Right Action Buttons (Jump & Sprint) */}
-              <div className="absolute bottom-6 right-6 flex flex-col items-end gap-3 pointer-events-auto z-20">
-                {/* Companion Power Button */}
+              <div className={`absolute flex flex-col items-end pointer-events-auto z-20 pr-safe pb-safe ${compactControls ? 'bottom-3 right-3 gap-2' : 'bottom-5 right-5 sm:bottom-6 sm:right-6 gap-3'}`}>
                 {power && powerInfo && (
                   <button
                     onTouchStart={(e) => {
@@ -1478,7 +1724,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       engine?.activateCompanionPower();
                     }}
                     onClick={() => engine?.activateCompanionPower()}
-                    className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none border-2 ${
+                    className={`flex items-center gap-1.5 rounded-2xl text-[10px] sm:text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none border-2 ${
+                      compactControls ? 'px-2.5 py-1.5' : 'px-3.5 py-2'
+                    } ${
                       power.state === 'ready'
                         ? 'text-stone-950 border-amber-200'
                         : 'bg-stone-900/80 text-stone-400 border-stone-700/80'
@@ -1494,7 +1742,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   </button>
                 )}
 
-                {/* Sprint Toggle Button */}
                 <button
                   onTouchStart={(e) => {
                     e.stopPropagation();
@@ -1507,7 +1754,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     setIsSprintActive(next);
                     engine?.setVirtualInput({ sprint: next });
                   }}
-                  className={`flex items-center gap-1.5 px-4 py-2.5 rounded-2xl text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none ${
+                  className={`flex items-center gap-1.5 rounded-2xl text-[10px] sm:text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none ${
+                    compactControls ? 'px-3 py-2' : 'px-4 py-2.5'
+                  } ${
                     isSprintActive
                       ? 'bg-amber-500 text-stone-950 border-2 border-amber-300'
                       : 'bg-stone-900/85 text-stone-200 border border-stone-700/80'
@@ -1518,7 +1767,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <span>{isSprintActive ? 'Corriendo' : 'Correr'}</span>
                 </button>
 
-                {/* Big Round Jump Button */}
                 <button
                   onTouchStart={(e) => {
                     e.stopPropagation();
@@ -1530,12 +1778,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   }}
                   onMouseDown={() => engine?.setVirtualInput({ jump: true })}
                   onMouseUp={() => engine?.setVirtualInput({ jump: false })}
-                  className="w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-gradient-to-br from-amber-500 to-amber-600 active:from-amber-600 active:to-amber-700 text-stone-950 font-bold flex flex-col items-center justify-center shadow-xl shadow-amber-950/40 border-2 border-amber-300 active:scale-90 transition-transform cursor-pointer touch-none select-none"
+                  className={`rounded-full bg-gradient-to-br from-amber-500 to-amber-600 active:from-amber-600 active:to-amber-700 text-stone-950 font-bold flex flex-col items-center justify-center shadow-xl shadow-amber-950/40 border-2 border-amber-300 active:scale-90 transition-transform cursor-pointer touch-none select-none ${
+                    compactControls ? 'w-14 h-14' : 'w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem]'
+                  }`}
                   style={{ touchAction: 'none' }}
                   title="Saltar"
                 >
-                  <ArrowUp className="w-7 h-7 stroke-[3]" />
-                  <span className="text-[10px] tracking-wider uppercase -mt-0.5">Saltar</span>
+                  <ArrowUp className={compactControls ? 'w-6 h-6 stroke-[3]' : 'w-7 h-7 stroke-[3]'} />
+                  <span className="text-[9px] sm:text-[10px] tracking-wider uppercase -mt-0.5">Saltar</span>
                 </button>
               </div>
             </>
@@ -1977,6 +2227,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-medium transition-colors cursor-pointer"
               >
                 Reiniciar
+              </button>
+              <button
+                onClick={() => {
+                  setShowHelpModal(true);
+                }}
+                className="w-full py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-sky-300 text-sm font-medium transition-colors cursor-pointer flex items-center justify-center gap-2"
+              >
+                <HelpCircle className="w-4 h-4" />
+                Guía y Controles
               </button>
               <button
                 onClick={handleReturnToTitle}
