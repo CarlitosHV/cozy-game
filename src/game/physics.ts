@@ -538,15 +538,19 @@ export class ParkourPhysics {
     this._horizontalVel.set(this.velocity.x, 0, this.velocity.z);
     const horizSpeed = this._horizontalVel.length();
 
-    // Rotate player mesh toward direction of movement smoothly
+    // Rotate player mesh toward direction of movement smoothly via shortest arc (never spins 360°)
     if (horizSpeed > 0.25) {
       const targetAngle = Math.atan2(this.velocity.x, this.velocity.z);
-      this.playerModel.group.rotation.y = THREE.MathUtils.damp(
-        this.playerModel.group.rotation.y,
-        targetAngle,
-        15.0,
-        dt
+      const curRot = this.playerModel.group.rotation.y;
+      // Calculate delta angle via shortest arc [-PI, +PI]
+      const deltaAngle = Math.atan2(
+        Math.sin(targetAngle - curRot),
+        Math.cos(targetAngle - curRot)
       );
+      // Turn smoothly via shortest angular path
+      const turnSpeed = 18.0;
+      const turnStep = deltaAngle * (1 - Math.exp(-turnSpeed * dt));
+      this.playerModel.group.rotation.y = THREE.MathUtils.euclideanModulo(curRot + turnStep + Math.PI, Math.PI * 2) - Math.PI;
     }
 
     // Play footstep sounds periodically

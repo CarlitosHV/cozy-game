@@ -118,6 +118,8 @@ export class GameEngine {
   public autoChaseCamera: boolean = true;
   public isUIModalOpen: boolean = false;
   private reverseRunTimer: number = 0;
+  private directionTurnCooldown: number = 0;
+  private lastInputVector = new THREE.Vector2();
 
   // Character Creator preview (close-up turntable camera on the title screen)
   public playerAppearance: CharacterAppearance = loadAppearance();
@@ -1441,12 +1443,33 @@ export class GameEngine {
     // 7. Update Weather & Background Clouds
     this.weatherSystem.update(dt, this.physics.position, time);
 
-    // 7b. Mobile / Touchscreen: Camera automatically follows where the character is facing
-    const isVirtualMove = Math.hypot(this.virtualInput.forward, this.virtualInput.right) > 0.05;
+    // 7b. Mobile / Touchscreen: Camera smoothly follows behind character
+    const inputMagnitude = Math.hypot(this.currentInput.forward, this.currentInput.right);
+    const isVirtualMove = inputMagnitude > 0.05;
     const isTouchActive = (this.isTouchDevice || isVirtualMove) && this.autoChaseCamera;
     const horizSpeed = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
 
-    if (isTouchActive && !this.isMouseDragging && horizSpeed > 0.35) {
+    // Track sudden input direction flips (e.g. flicking joystick from left to right or forward to back)
+    if (inputMagnitude > 0.25) {
+      const curInputX = this.currentInput.right / inputMagnitude;
+      const curInputY = this.currentInput.forward / inputMagnitude;
+      if (this.lastInputVector.lengthSq() > 0.01) {
+        const dot = this.lastInputVector.x * curInputX + this.lastInputVector.y * curInputY;
+        if (dot < 0.2) {
+          // Sharp direction change (over 78°) -> pause camera auto-chase briefly so camera doesn't jerk
+          this.directionTurnCooldown = 0.32;
+        }
+      }
+      this.lastInputVector.set(curInputX, curInputY);
+    } else {
+      this.lastInputVector.set(0, 0);
+    }
+
+    if (this.directionTurnCooldown > 0) {
+      this.directionTurnCooldown = Math.max(0, this.directionTurnCooldown - dt);
+    }
+
+    if (isTouchActive && !this.isMouseDragging && horizSpeed > 0.4 && this.directionTurnCooldown === 0) {
       // The player's mesh rotation represents the direction the character is facing
       const playerFacing = this.playerModel.group.rotation.y;
       const angleDiff = Math.atan2(
@@ -1454,19 +1477,32 @@ export class GameEngine {
         Math.cos(playerFacing - this.cameraYaw)
       );
 
-      if (Math.abs(angleDiff) < Math.PI * 0.72) {
-        // Forward and steering arc: smooth responsive follow behind the character's facing direction
-        this.reverseRunTimer = 0;
-        const followSpeed = THREE.MathUtils.lerp(2.8, 5.0, Math.min(1.0, horizSpeed / 5.5));
-        this.cameraYaw += angleDiff * Math.min(1.0, followSpeed * dt);
-      } else {
-        // Running backwards toward screen: don't jerk immediately, only rotate if running in reverse persistently
-        this.reverseRunTimer += dt;
-        if (this.reverseRunTimer > 0.45) {
-          this.cameraYaw += angleDiff * Math.min(1.0, 2.4 * dt);
+      // Only auto-follow camera when the player intends to move forward or forward-diagonally.
+      // Pure lateral strafing (|right| > 0.45 with forward <= 0.15) should NOT spin the camera in a circle.
+      const isForwardIntended = this.currentInput.forward > 0.15;
+      const isPureSideways = Math.abs(this.currentInput.right) > 0.45 && this.currentInput.forward <= 0.15;
+
+      if (!isPureSideways && Math.abs(angleDiff) > 0.05) {
+        if (Math.abs(angleDiff) < Math.PI * 0.70 && isForwardIntended) {
+          // Smooth, non-dizzy forward camera follow behind the character
+          this.reverseRunTimer = 0;
+          const followSpeed = THREE.MathUtils.lerp(1.8, 3.2, Math.min(1.0, horizSpeed / 5.5));
+          const maxStep = 2.2 * dt; // Clamp max turn rate to 2.2 rad/s to prevent jarring rotations
+          const step = Math.sign(angleDiff) * Math.min(Math.abs(angleDiff * followSpeed * dt), maxStep);
+          this.cameraYaw += step;
+        } else if (Math.abs(angleDiff) >= Math.PI * 0.70) {
+          // Running backwards toward screen: don't jerk immediately, only rotate if running in reverse persistently
+          this.reverseRunTimer += dt;
+          if (this.reverseRunTimer > 0.85) {
+            const step = Math.sign(angleDiff) * Math.min(Math.abs(angleDiff * 1.8 * dt), 1.6 * dt);
+            this.cameraYaw += step;
+          }
         }
       }
     }
+
+    // Keep cameraYaw normalized to [-PI, +PI]
+    this.cameraYaw = THREE.MathUtils.euclideanModulo(this.cameraYaw + Math.PI, Math.PI * 2) - Math.PI;
 
     // 8. Damped Third-Person Camera Follow
     const playerPos = this.physics.position;

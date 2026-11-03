@@ -209,13 +209,23 @@ const VirtualJoystick: React.FC<{
 
     setKnobPos({ x: clampedX, y: clampedY });
 
-    // Normalized analog values (-1 to 1)
-    const normRight = clampedX / maxRadius;
-    const normForward = -clampedY / maxRadius;
+    // Deadzone (12% of maxRadius) eliminates noisy twitching when crossing the center
+    const deadZone = maxRadius * 0.12;
+    if (dist <= deadZone) {
+      onMove(0, 0);
+      return;
+    }
+
+    // Remap remaining distance smoothly from deadzone to 1.0
+    const activeRadius = maxRadius - deadZone;
+    const magnitude = Math.min(1.0, (dist - deadZone) / activeRadius);
+    const normRight = (dx / dist) * magnitude;
+    const normForward = (-dy / dist) * magnitude;
     onMove(normForward, normRight);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     if (touchIdRef.current !== null) return;
 
@@ -226,6 +236,7 @@ const VirtualJoystick: React.FC<{
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     for (let i = 0; i < e.changedTouches.length; i++) {
       const touch = e.changedTouches[i];
@@ -237,6 +248,7 @@ const VirtualJoystick: React.FC<{
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     for (let i = 0; i < e.changedTouches.length; i++) {
       if (e.changedTouches[i].identifier === touchIdRef.current) {
@@ -1645,6 +1657,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <div className="flex items-center gap-2 ml-1">
                   <button
                     onTouchStart={(e) => {
+                      e.preventDefault();
                       e.stopPropagation();
                       engine?.rotateCamera(Math.PI / 4);
                     }}
@@ -1658,6 +1671,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   </button>
                   <button
                     onTouchStart={(e) => {
+                      e.preventDefault();
                       e.stopPropagation();
                       engine?.rotateCamera(-Math.PI / 4);
                     }}
@@ -1680,6 +1694,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 {power && powerInfo && (
                   <button
                     onTouchStart={(e) => {
+                      e.preventDefault();
                       e.stopPropagation();
                       engine?.activateCompanionPower();
                     }}
@@ -1704,6 +1719,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
                 <button
                   onTouchStart={(e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     const next = !isSprintActive;
                     setIsSprintActive(next);
@@ -1729,10 +1745,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
                 <button
                   onTouchStart={(e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     engine?.setVirtualInput({ jump: true });
                   }}
                   onTouchEnd={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    engine?.setVirtualInput({ jump: false });
+                  }}
+                  onTouchCancel={(e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     engine?.setVirtualInput({ jump: false });
                   }}
