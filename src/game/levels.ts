@@ -343,27 +343,30 @@ export function buildCozyParkourWorld(
   registerCylinderCollider('tree_start_sakura', -4.5, 0, -4.0, 0.42, 3.5);
   registerCylinderCollider('tree_start_autumn', 4.5, 0, -3.5, 0.38, 3.2);
 
-  // Tiny hidden heart behind the sakura (walk behind the shrine / trees)
-  const easterEggPos = new THREE.Vector3(-5.85, 0.55, -5.9);
+  // Secret Monse ledge: tucked under the NW underside of the start island.
+  // Reach it by walking off the sakura corner and landing on the thin shelf before the void.
+  createIsland('secret_monse_shelf', -6.35, -2.15, -6.55, 1.35, 1.15, 0.35, 'stone');
+  createIsland('secret_monse_ledge', -4.85, -5.35, -5.15, 2.55, 2.4, 0.55, 'stone');
+  const easterEggPos = new THREE.Vector3(-4.85, -4.72, -5.15);
   const easterHeart = new THREE.Group();
   easterHeart.position.copy(easterEggPos);
   const heartMat = new THREE.MeshStandardMaterial({
-    color: 0xf472b6,
-    emissive: 0xbe185d,
-    emissiveIntensity: 0.35,
-    roughness: 0.45,
-    metalness: 0.1,
+    color: 0xe879a8,
+    emissive: 0x9d174d,
+    emissiveIntensity: 0.12,
+    roughness: 0.55,
+    metalness: 0.05,
   });
-  const lobeGeo = new THREE.SphereGeometry(0.16, 12, 12);
+  const lobeGeo = new THREE.SphereGeometry(0.14, 12, 12);
   const lobeL = new THREE.Mesh(lobeGeo, heartMat);
-  lobeL.position.set(-0.09, 0.06, 0);
+  lobeL.position.set(-0.08, 0.05, 0);
   const lobeR = new THREE.Mesh(lobeGeo, heartMat);
-  lobeR.position.set(0.09, 0.06, 0);
-  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.28, 10), heartMat);
-  tip.position.set(0, -0.1, 0);
+  lobeR.position.set(0.08, 0.05, 0);
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.24, 10), heartMat);
+  tip.position.set(0, -0.09, 0);
   tip.rotation.z = Math.PI;
   easterHeart.add(lobeL, lobeR, tip);
-  easterHeart.scale.setScalar(0.85);
+  easterHeart.scale.setScalar(0.72);
   scene.add(easterHeart);
   decorativeMeshes.push(easterHeart);
 
@@ -821,11 +824,11 @@ export function buildCozyParkourWorld(
     victoryPortal,
     enemyManager,
     companionShowcasePos: new THREE.Vector3(18.0, summitY + 9.5, 123.0),
-    easterEgg: { position: easterEggPos, radius: 0.85 },
+    easterEgg: { position: easterEggPos, radius: 0.7 },
     levelUpdate: (dt, time) => {
       victoryPortal.update(dt, time);
-      easterHeart.rotation.y = time * 0.9;
-      easterHeart.position.y = easterEggPos.y + Math.sin(time * 2.2) * 0.08;
+      easterHeart.rotation.y = time * 0.55;
+      easterHeart.position.y = easterEggPos.y + Math.sin(time * 1.6) * 0.05;
     },
     itemSpots: [
       // Magic berries (feed your companion)

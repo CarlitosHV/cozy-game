@@ -26,56 +26,99 @@ interface RemotePlayerEntity {
 }
 
 function createNameTagSprite(username: string): THREE.Sprite {
+  const label = (username || 'Explorador').trim() || 'Explorador';
+  const trimmed = label.length > 16 ? `${label.slice(0, 15)}…` : label;
+
+  const padX = 28;
+  const padY = 16;
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 64;
+  const measure = canvas.getContext('2d');
+  const font = '600 34px "Outfit", "Nunito", system-ui, sans-serif';
+  let textW = 140;
+  if (measure) {
+    measure.font = font;
+    textW = Math.ceil(measure.measureText(trimmed).width);
+  }
+
+  const dotR = 7;
+  const gap = 14;
+  const contentW = dotR * 2 + gap + textW;
+  const w = Math.min(512, Math.max(180, contentW + padX * 2));
+  const h = 64;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d');
 
   if (ctx) {
-    ctx.clearRect(0, 0, 256, 64);
+    ctx.clearRect(0, 0, w, h);
 
-    // Rounded badge background
-    ctx.fillStyle = 'rgba(28, 25, 23, 0.78)';
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)';
-    ctx.lineWidth = 3;
+    const x = 6;
+    const y = 6;
+    const bw = w - 12;
+    const bh = h - 12;
+    const r = bh / 2;
 
-    const x = 8, y = 8, w = 240, h = 48, r = 24;
+    ctx.shadowColor = 'rgba(61, 74, 82, 0.28)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 3;
+
     ctx.beginPath();
     ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
+    ctx.arcTo(x + bw, y, x + bw, y + bh, r);
+    ctx.arcTo(x + bw, y + bh, x, y + bh, r);
+    ctx.arcTo(x, y + bh, x, y, r);
+    ctx.arcTo(x, y, x + bw, y, r);
     ctx.closePath();
+
+    const fill = ctx.createLinearGradient(0, y, 0, y + bh);
+    fill.addColorStop(0, 'rgba(255, 250, 242, 0.94)');
+    fill.addColorStop(1, 'rgba(255, 241, 222, 0.92)');
+    ctx.fillStyle = fill;
     ctx.fill();
+
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.strokeStyle = 'rgba(214, 184, 148, 0.85)';
+    ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Online dot
-    ctx.fillStyle = '#22c55e';
+    const cx = x + padX * 0.55 + dotR;
+    const cy = y + bh / 2;
+    ctx.fillStyle = '#5b8f72';
     ctx.beginPath();
-    ctx.arc(28, 32, 6, 0, Math.PI * 2);
+    ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.beginPath();
+    ctx.arc(cx - 2, cy - 2, 2.2, 0, Math.PI * 2);
     ctx.fill();
 
-    // Username text
-    ctx.fillStyle = '#fef3c7';
-    ctx.font = 'bold 22px sans-serif';
+    ctx.fillStyle = '#3d4a52';
+    ctx.font = font;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    const trimmed = username.length > 14 ? `${username.substring(0, 13)}…` : username;
-    ctx.fillText(trimmed, 44, 32);
+    ctx.fillText(trimmed, cx + dotR + gap, cy + 1);
   }
 
   const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
   texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
   const mat = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
     depthTest: false,
+    depthWrite: false,
+    sizeAttenuation: true,
   });
 
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(1.8, 0.45, 1);
-  sprite.position.set(0, 2.3, 0);
+  const worldH = 0.42;
+  const worldW = worldH * (w / h);
+  sprite.scale.set(worldW, worldH, 1);
+  sprite.position.set(0, 2.48, 0);
+  sprite.renderOrder = 10;
   return sprite;
 }
 
