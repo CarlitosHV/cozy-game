@@ -314,6 +314,18 @@ export class GameEngine {
 
     // 8b. Online Multiplayer Remote Players Manager
     this.remotePlayers = new RemotePlayersManager(this.scene, this.textures);
+    // Shared puzzle progress inside a party: orbs found and rocks pushed by anyone count for everyone
+    multiplayerClient.onWorldState = (data) => {
+      if (data.levelId === this.currentLevel) this.applySharedWorld(data);
+    };
+    multiplayerClient.onWorldOrb = (data) => {
+      if (data.levelId !== this.currentLevel) return;
+      this.puzzleSystem.collectOrbRemote(data.orbIndex, data.username || 'Tu equipo', this.itemSystem);
+    };
+    multiplayerClient.onWorldBlock = (data) => {
+      if (data.levelId !== this.currentLevel) return;
+      this.puzzleSystem.setBlockRemote(data.blockIndex, data.x, data.y, data.z);
+    };
     if (this.partyRoomId) {
       multiplayerClient.joinLevel(this.currentLevel, this.partyRoomId);
     }
@@ -560,6 +572,7 @@ export class GameEngine {
     // Keys only open doors of their own level
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.load(this.world.puzzles, this.world.platforms);
+    this.reapplySharedWorld();
 
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
     const cp0 = this.world.checkpoints[0];
@@ -629,6 +642,7 @@ export class GameEngine {
     if (freshBackpack) this.itemSystem.clearInventory(this.itemCtx);
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.reset();
+    this.reapplySharedWorld();
     soundManager.init();
     soundManager.resume();
     if (mode) {
@@ -689,6 +703,19 @@ export class GameEngine {
       this.physics.velocity.x = 0;
       this.physics.velocity.z = 0;
     }
+  }
+
+  /** Multiplayer: apply the party's shared progress (orbs found, rock positions) to this level. */
+  private applySharedWorld(data: { orbs: number[]; blocks: { index: number; x: number; y: number; z: number }[] }) {
+    for (const i of data.orbs) this.puzzleSystem.collectOrbRemote(i, null, null);
+    for (const b of data.blocks) this.puzzleSystem.setBlockRemote(b.index, b.x, b.y, b.z, true);
+  }
+
+  /** After a restart or a level load, keep what the party already achieved. */
+  private reapplySharedWorld() {
+    if (!this.partyRoomId) return;
+    const ws = multiplayerClient.getWorldState(this.currentLevel);
+    if (ws) this.applySharedWorld(ws);
   }
 
   public setPartyRoom(roomId: string | null, joinNow = true) {
@@ -810,6 +837,7 @@ export class GameEngine {
     this.itemSystem.clearInventory(this.itemCtx);
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.reset();
+    this.reapplySharedWorld();
     this.gameState = 'playing';
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
@@ -1570,9 +1598,14 @@ export class GameEngine {
           this.physics.velocity.set(0, 0, 0);
           this.physics.lastSafePos.copy(to);
         },
-        onOrb: () => {
+        onOrb: (_have, _total, index) => {
           if (this.gameMode === 'time_trial') this.addTimeTrialBonus(20, 'Orbe (+20s)');
+          if (this.partyRoomId) multiplayerClient.sendOrb(this.currentLevel, index);
         },
+        onBlockMoved: (index, pos, final) => {
+          if (this.partyRoomId) multiplayerClient.sendBlock(this.currentLevel, index, pos.x, pos.y, pos.z, final);
+        },
+        shared: Boolean(this.partyRoomId),
       });
     }
 

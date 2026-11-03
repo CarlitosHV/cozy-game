@@ -49,6 +49,33 @@ export interface SocketErrorPayload {
   message: string;
 }
 
+/** Shared puzzle progress of the party on one level (orbs found, rocks moved). */
+export interface WorldBlockPos {
+  index: number;
+  x: number;
+  y: number;
+  z: number;
+}
+export interface WorldStatePayload {
+  levelId: number;
+  orbs: number[];
+  blocks: WorldBlockPos[];
+}
+export interface WorldOrbPayload {
+  userId: string;
+  username: string;
+  levelId: number;
+  orbIndex: number;
+}
+export interface WorldBlockPayload {
+  userId: string;
+  levelId: number;
+  blockIndex: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
 class MultiplayerClient {
   private socket: Socket | null = null;
   private currentLevelId: number | null = null;
@@ -90,6 +117,14 @@ class MultiplayerClient {
   public onInviteSent?: (data: InviteSentPayload) => void;
   public onInviteResult?: (data: InviteResultPayload) => void;
   public onSocketError?: (data: SocketErrorPayload) => void;
+  /** Shared puzzle progress (see GameEngine): full state when joining, then live changes */
+  public onWorldState?: (data: WorldStatePayload) => void;
+  public onWorldOrb?: (data: WorldOrbPayload) => void;
+  public onWorldBlock?: (data: WorldBlockPayload) => void;
+
+  /** Latest known shared progress of the party, so it can be re-applied after a restart */
+  private world: { levelId: number; orbs: Set<number>; blocks: Map<number, WorldBlockPos> } | null = null;
+  private lastBlockSend = new Map<number, number>();
 
   private lastSyncTime: number = 0;
   private syncThrottleMs: number = 40;
@@ -248,6 +283,28 @@ class MultiplayerClient {
       }
     });
 
+    this.socket.on('world:state', (data: WorldStatePayload) => {
+      if (!data || typeof data.levelId !== 'number') return;
+      this.world = {
+        levelId: data.levelId,
+        orbs: new Set(Array.isArray(data.orbs) ? data.orbs : []),
+        blocks: new Map((Array.isArray(data.blocks) ? data.blocks : []).map((b) => [b.index, b])),
+      };
+      this.onWorldState?.(data);
+    });
+
+    this.socket.on('world:orb', (data: WorldOrbPayload) => {
+      if (!data || typeof data.orbIndex !== 'number') return;
+      this.rememberWorld(data.levelId).orbs.add(data.orbIndex);
+      this.onWorldOrb?.(data);
+    });
+
+    this.socket.on('world:block', (data: WorldBlockPayload) => {
+      if (!data || typeof data.blockIndex !== 'number') return;
+      this.rememberWorld(data.levelId).blocks.set(data.blockIndex, { index: data.blockIndex, x: data.x, y: data.y, z: data.z });
+      this.onWorldBlock?.(data);
+    });
+
     this.socket.on('invite:received', (data: InviteReceivedPayload) => {
       if (this.onInviteReceived && data?.inviteId) {
         this.onInviteReceived(data);
@@ -296,7 +353,37 @@ class MultiplayerClient {
     this.emitJoin(levelId, roomId);
   }
 
+  private rememberWorld(levelId: number) {
+    if (!this.world || this.world.levelId !== levelId) this.world = { levelId, orbs: new Set(), blocks: new Map() };
+    return this.world;
+  }
+
+  /** Shared progress known for a level while in a party (null when there is none). */
+  public getWorldState(levelId: number): WorldStatePayload | null {
+    if (!this.isInPartyRoom() || !this.world || this.world.levelId !== levelId) return null;
+    return { levelId, orbs: [...this.world.orbs], blocks: [...this.world.blocks.values()] };
+  }
+
+  /** Client -> Server: world:orb — this player found an orb */
+  public sendOrb(levelId: number, orbIndex: number): void {
+    if (!this.socket?.connected || !this.isInPartyRoom()) return;
+    this.rememberWorld(levelId).orbs.add(orbIndex);
+    this.socket.emit('world:orb', { levelId, orbIndex });
+  }
+
+  /** Client -> Server: world:block — this player is moving a rock (throttled unless `final`) */
+  public sendBlock(levelId: number, blockIndex: number, x: number, y: number, z: number, final = false): void {
+    if (!this.socket?.connected || !this.isInPartyRoom()) return;
+    const now = performance.now();
+    if (!final && now - (this.lastBlockSend.get(blockIndex) ?? 0) < 60) return;
+    this.lastBlockSend.set(blockIndex, now);
+    const pos = { index: blockIndex, x: Number(x.toFixed(3)), y: Number(y.toFixed(3)), z: Number(z.toFixed(3)) };
+    this.rememberWorld(levelId).blocks.set(blockIndex, pos);
+    this.socket.emit('world:block', { levelId, blockIndex, x: pos.x, y: pos.y, z: pos.z });
+  }
+
   public leaveRoom(): void {
+    this.world = null;
     this.currentRoomId = null;
     if (this.socket?.connected) {
       this.socket.emit('room:leave');

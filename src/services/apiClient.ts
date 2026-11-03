@@ -122,7 +122,8 @@ class ApiClient {
   private refreshPromise: Promise<string | null> | null = null;
 
   constructor() {
-    const envUrl = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_API_URL;
+    // Written literally so Vite can fill it in both in `npm run dev` and in production builds
+    const envUrl = import.meta.env.VITE_API_URL as string | undefined;
     if (!envUrl) {
       throw new Error('VITE_API_URL is required');
     }

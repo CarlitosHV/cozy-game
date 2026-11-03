@@ -26,6 +26,13 @@ export interface PushBlock {
   start: THREE.Vector3;
   vy: number;
   respawnTimer: number;
+  /** Multiplayer: where another player is moving this rock (null when nobody is) */
+  remoteTarget?: THREE.Vector3 | null;
+  /** Seconds since the last remote update */
+  remoteT?: number;
+  /** Multiplayer: last position sent to the party, and whether it was moving last frame */
+  lastSent?: THREE.Vector3;
+  moving?: boolean;
 }
 
 export interface Door {
@@ -371,7 +378,11 @@ export interface PuzzleContext {
   /** Moves the player (e.g. caught by a sentinel) */
   teleport: (to: THREE.Vector3) => void;
   /** An orb was found (have / total) */
-  onOrb?: (have: number, total: number) => void;
+  onOrb?: (have: number, total: number, index: number) => void;
+  /** Multiplayer: this player moved rock `index` (final = it just stopped) */
+  onBlockMoved?: (index: number, pos: THREE.Vector3, final: boolean) => void;
+  /** Multiplayer: puzzles are shared with a party (rocks never reset on their own) */
+  shared?: boolean;
 }
 
 /** 2D segment vs axis-aligned box (slab test). */
@@ -411,6 +422,51 @@ export class PuzzleSystem {
     const total = this.data.orbs.length;
     const have = this.data.orbs.filter((o) => o.collected).length;
     return { have, total, summitOpen: !!this.data.summit?.active };
+  }
+
+  private tmpBefore = new THREE.Vector3();
+
+  private markOrb(o: Orb) {
+    o.collected = true;
+    o.beam.visible = false;
+    if (o.socket) (o.socket.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2;
+  }
+
+  /**
+   * Multiplayer: another player of the party found orb `index`, so it counts for everyone.
+   * `who` = their name for the message (null = silent, e.g. catching up after joining).
+   */
+  collectOrbRemote(index: number, who: string | null, items: ItemSystem | null) {
+    const o = this.data.orbs[index];
+    if (!o || o.collected) return;
+    this.markOrb(o);
+    const total = this.data.orbs.length;
+    const have = this.data.orbs.filter((q) => q.collected).length;
+    if (who) soundManager.playTimeBonus();
+    if (have >= total) {
+      this.openSummit();
+      if (who) {
+        soundManager.playCheckpoint();
+        items?.notify(`¡${who} encontró el último orbe! ${this.data.summit?.openText ?? ''}`.trim());
+      }
+    } else if (who) {
+      items?.notify(`¡${who} encontró un orbe! (${have}/${total})`);
+    }
+  }
+
+  /** Multiplayer: another player is pushing rock `index` (snap = jump there right away). */
+  setBlockRemote(index: number, x: number, y: number, z: number, snap = false) {
+    const b = this.data.blocks[index];
+    if (!b || !isFinite(x) || !isFinite(y) || !isFinite(z)) return;
+    (b.remoteTarget ??= new THREE.Vector3()).set(x, y, z);
+    b.remoteT = 0;
+    if (snap) {
+      b.plat.position.set(x, y, z);
+      b.plat.mesh.position.set(x, y, z);
+      b.plat.mesh.visible = true;
+      b.respawnTimer = 0;
+      (b.lastSent ??= new THREE.Vector3()).set(x, y, z);
+    }
   }
 
   private lockSummit() {
@@ -503,12 +559,10 @@ export class PuzzleSystem {
         const dz = P.z - o.pos.z;
         const dy = P.y + 0.7 - o.pos.y;
         if (dx * dx + dz * dz + dy * dy < 1.5 * 1.5) {
-          o.collected = true;
-          o.beam.visible = false;
-          if (o.socket) (o.socket.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2;
+          this.markOrb(o);
           const have = this.data.orbs.filter((q) => q.collected).length;
           soundManager.playTimeBonus();
-          ctx.onOrb?.(have, total);
+          ctx.onOrb?.(have, total, this.data.orbs.indexOf(o));
           if (have >= total) {
             this.openSummit();
             soundManager.playCheckpoint();
@@ -584,8 +638,52 @@ export class PuzzleSystem {
       }
     }
 
-    // ---- Push blocks ----
-    for (const b of this.data.blocks) this.updateBlock(b, dt, ctx);
+    // ---- Push blocks (shared with the party in multiplayer) ----
+    this.data.blocks.forEach((b, index) => {
+      const bp = b.plat.position;
+      const before = this.tmpBefore.copy(bp);
+      if (b.remoteTarget && (b.remoteT ?? 0) < 0.6) {
+        // Another player is pushing it: follow their updates smoothly
+        b.remoteT = (b.remoteT ?? 0) + dt;
+        if (bp.distanceTo(b.remoteTarget) > 3) bp.copy(b.remoteTarget);
+        else bp.lerp(b.remoteTarget, 1 - Math.exp(-dt * 14));
+        b.vy = 0;
+        b.respawnTimer = 0;
+        b.plat.mesh.visible = true;
+        b.plat.mesh.position.copy(bp);
+        (b.lastSent ??= new THREE.Vector3()).copy(bp);
+        b.moving = false;
+      } else {
+        if (b.remoteTarget) {
+          bp.copy(b.remoteTarget);
+          b.remoteTarget = null;
+          (b.lastSent ??= new THREE.Vector3()).copy(bp);
+        }
+        this.updateBlock(b, dt, ctx);
+        // Tell the party where the rock goes while this player moves it
+        const sent = (b.lastSent ??= bp.clone());
+        if (sent.distanceToSquared(bp) > 0.0004) {
+          ctx.onBlockMoved?.(index, bp, false);
+          sent.copy(bp);
+          b.moving = true;
+        } else if (b.moving) {
+          ctx.onBlockMoved?.(index, bp, true);
+          b.moving = false;
+        }
+      }
+      // Whoever stands on the rock rides along when it moves (pushed by anyone)
+      const dxm = bp.x - before.x;
+      const dym = bp.y - before.y;
+      const dzm = bp.z - before.z;
+      if (dxm || dym || dzm) {
+        const half = BLOCK_SIZE / 2 + 0.3;
+        if (Math.abs(P.x - before.x) < half && Math.abs(P.z - before.z) < half && Math.abs(P.y - before.y) < 0.08) {
+          P.x += dxm;
+          P.y += dym;
+          P.z += dzm;
+        }
+      }
+    });
 
     // ---- Sentinels ----
     const h = ctx.hostility;
@@ -666,7 +764,8 @@ export class PuzzleSystem {
 
     const P = ctx.position;
     // Safety net: if you wander off and left it out of place, it quietly goes home
-    if (P.distanceTo(bp) > 22 && P.distanceTo(b.start) > 22 && bp.distanceToSquared(b.start) > 0.01) {
+    // (not in a party: someone else may be using it)
+    if (!ctx.shared && P.distanceTo(bp) > 22 && P.distanceTo(b.start) > 22 && bp.distanceToSquared(b.start) > 0.01) {
       bp.copy(b.start);
       b.vy = 0;
     }
