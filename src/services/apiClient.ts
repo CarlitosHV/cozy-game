@@ -1,7 +1,7 @@
 /**
  * Client API Service for Cozy Leap Online Backend (v1)
  * Adheres strictly to the specification in API_ENDPOINTS_b196a80b.md:
- *  - Base URL: /api/v1 (or configurable via VITE_API_URL / custom server URL)
+ *  - Base URL: from VITE_API_URL
  *  - Auth: Register, Login, Refresh, Logout (Bearer token + Refresh Token)
  *  - Player: /player/me, /player/appearance, /player/inventory, /player/complete-level
  *  - Leaderboard: /leaderboard/:levelId
@@ -110,7 +110,6 @@ const STORAGE_KEYS = {
   ACCESS_TOKEN: 'cozyleap_access_token',
   REFRESH_TOKEN: 'cozyleap_refresh_token',
   CURRENT_USER: 'cozyleap_current_user',
-  API_BASE_URL: 'cozyleap_api_base_url',
 };
 
 class ApiClient {
@@ -123,9 +122,11 @@ class ApiClient {
   private refreshPromise: Promise<string | null> | null = null;
 
   constructor() {
-    const savedUrl = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.API_BASE_URL) : null;
     const envUrl = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_API_URL;
-    this.baseUrl = savedUrl || envUrl || 'http://localhost:3000/api/v1';
+    if (!envUrl) {
+      throw new Error('VITE_API_URL is required');
+    }
+    this.baseUrl = envUrl.replace(/\/+$/, '');
 
     if (typeof window !== 'undefined') {
       this.accessToken = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
@@ -141,26 +142,13 @@ class ApiClient {
     }
   }
 
-  // --- Configuration ---
   public getBaseUrl(): string {
     return this.baseUrl;
   }
 
-  public setBaseUrl(url: string) {
-    this.baseUrl = url.replace(/\/+$/, '');
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(STORAGE_KEYS.API_BASE_URL, this.baseUrl);
-    }
-  }
-
   public getSocketUrl(): string {
-    // Socket.io connects to root host of the API (without /api/v1 path)
-    try {
-      const parsed = new URL(this.baseUrl);
-      return `${parsed.protocol}//${parsed.host}`;
-    } catch {
-      return 'http://localhost:3000';
-    }
+    const parsed = new URL(this.baseUrl);
+    return `${parsed.protocol}//${parsed.host}`;
   }
 
   // --- Auth State ---
