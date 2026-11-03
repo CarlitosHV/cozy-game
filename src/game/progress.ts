@@ -231,3 +231,11 @@ export function markLevelComplete(level: number): CompanionStyle | null {
   const reward = COMPANION_UNLOCKS.find((u) => u.level > before && u.level <= d.highestCompleted);
   return reward ? reward.companion : null;
 }
+
+/** Synchronizes progress from backend API (sets highestCompleted = maxUnlockedLevel - 1) */
+export function syncProgressFromBackend(highestCompletedLvl: number): void {
+  const d = data();
+  d.highestCompleted = Math.max(d.highestCompleted, highestCompletedLvl);
+  persist();
+}
+

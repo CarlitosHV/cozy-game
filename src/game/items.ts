@@ -282,6 +282,14 @@ export class ItemSystem {
     ctx?.setJumpMultiplier(1);
   }
 
+  /** Sets inventory slots directly (used when syncing from backend). */
+  public setSlots(newSlots: (ItemType | null)[]) {
+    for (let i = 0; i < INVENTORY_SIZE; i++) {
+      this.slots[i] = newSlots[i] ?? null;
+    }
+    this.emit('Mochila sincronizada');
+  }
+
   /** Uses the item in a slot (0-4). */
   public use(slot: number, ctx: ItemUseContext): boolean {
     const type = this.slots[slot];

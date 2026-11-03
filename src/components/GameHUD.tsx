@@ -50,6 +50,8 @@ import {
   Trash2,
   ArrowRight,
   Key,
+  Trophy,
+  LogIn,
 } from 'lucide-react';
 import { GameEngine, GameState, GameMode } from '../game/GameEngine';
 import {
@@ -61,7 +63,11 @@ import {
   highestCompleted,
   nextCompanionUnlock,
   ThemeId,
+  syncProgressFromBackend,
 } from '../game/progress';
+import { AuthModal } from './AuthModal';
+import { LeaderboardModal } from './LeaderboardModal';
+import { apiClient, User, PlayerProfileData } from '../services/apiClient';
 import { CompanionStyle } from '../game/character';
 
 const THEME_COMPANION: Record<ThemeId, CompanionStyle> = {
@@ -504,6 +510,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showLevelBrief, setShowLevelBrief] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showLeaderboardModal, setShowLeaderboardModal] = useState(false);
+  const [leaderboardLevelId, setLeaderboardLevelId] = useState(1);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => apiClient.getCurrentUser());
+  const [lastSubmittedVictory, setLastSubmittedVictory] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -511,6 +522,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     typeof window !== 'undefined' ? window.innerWidth < 900 : false
   );
   const briefLevelRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return apiClient.onAuthChange((user) => {
+      setCurrentUser(user);
+    });
+  }, []);
 
   useEffect(() => {
     const onResize = () => setViewportNarrow(window.innerWidth < 900);
@@ -691,11 +708,59 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showEasterEgg ||
     showBackpack ||
     showCreator ||
+    showAuthModal ||
+    showLeaderboardModal ||
     Boolean(capturedPhotoUrl) ||
     gameState === 'paused' ||
     gameState === 'victory' ||
     gameState === 'game_over' ||
     gameState === 'photo_mode';
+
+  // Automatically submit level completion to backend API if logged in
+  useEffect(() => {
+    if (gameState === 'victory' && engine && lastSubmittedVictory !== engine.currentLevel) {
+      setLastSubmittedVictory(engine.currentLevel);
+      if (apiClient.isAuthenticated()) {
+        apiClient
+          .completeLevel({
+            levelId: engine.currentLevel,
+            timeSeconds: elapsedTime,
+            relicsFound: collectedCount,
+            mode: gameMode,
+          })
+          .then((res) => {
+            if (res?.progress?.maxUnlockedLevel) {
+              syncProgressFromBackend(res.progress.maxUnlockedLevel - 1);
+            }
+            showToast(res.isNewBest ? '¡Nuevo récord personal guardado online!' : 'Tiempo registrado en el servidor', 2500);
+          })
+          .catch((err) => {
+            console.warn('Level record submission notice:', err);
+          });
+      }
+    } else if (gameState === 'playing') {
+      setLastSubmittedVictory(null);
+    }
+  }, [gameState, engine, elapsedTime, collectedCount, gameMode, lastSubmittedVictory]);
+
+  const handleProfileSynced = (profile: PlayerProfileData) => {
+    if (profile.appearance && engine) {
+      const fullAppearance = {
+        ...appearance,
+        ...(profile.appearance as Partial<CharacterAppearance>),
+      };
+      setAppearance(fullAppearance);
+      engine.setPlayerAppearance(fullAppearance);
+    }
+    if (profile.progress?.maxUnlockedLevel) {
+      syncProgressFromBackend(profile.progress.maxUnlockedLevel - 1);
+      setSelectedLevel(profile.progress.maxUnlockedLevel);
+    }
+    if (profile.inventory?.slots && engine?.itemSystem) {
+      engine.itemSystem.setSlots(profile.inventory.slots);
+    }
+    showToast(`¡Perfil sincronizado con la nube!`, 2500);
+  };
 
   const currentHowTo = levelHowTo(engine?.currentLevel ?? pendingLevel);
 
@@ -1063,6 +1128,49 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     </div>
                     <ChevronRight className="w-4 h-4 text-stone-400 group-hover:translate-x-0.5 transition-transform" />
                   </button>
+
+                  {/* Online Account & Leaderboard Status */}
+                  <div className="w-full mt-1 pt-2.5 border-t border-stone-800/80 flex items-center justify-between gap-2">
+                    {currentUser ? (
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0 shadow-sm shadow-emerald-400/50 animate-pulse" />
+                        <span className="text-xs font-bold text-amber-200 truncate">@{currentUser.username}</span>
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-stone-400">Multijugador Online</span>
+                    )}
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLeaderboardLevelId(1);
+                          setShowLeaderboardModal(true);
+                        }}
+                        className="p-2 rounded-xl bg-stone-900 border border-stone-700 hover:border-amber-400 text-amber-300 cursor-pointer shadow-sm transition-colors"
+                        title="Ver mejores tiempos online"
+                      >
+                        <Trophy className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowAuthModal(true)}
+                        className="px-3 py-1.5 rounded-xl bg-stone-900 border border-stone-700 hover:border-amber-400 text-stone-200 hover:text-amber-300 text-xs font-semibold cursor-pointer shadow-sm flex items-center gap-1.5 transition-colors"
+                      >
+                        {currentUser ? (
+                          <>
+                            <UserRound className="w-3.5 h-3.5" />
+                            <span>Mi Cuenta</span>
+                          </>
+                        ) : (
+                          <>
+                            <LogIn className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Entrar</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Subtle mobile hint */}
@@ -1499,6 +1607,26 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
               </button>
             )}
+            <button
+              onClick={() => {
+                setLeaderboardLevelId(engine?.currentLevel ?? 1);
+                setShowLeaderboardModal(true);
+              }}
+              title="Mejores tiempos online"
+              className="p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:border-amber-400 text-amber-300 transition-colors shadow-md cursor-pointer"
+            >
+              <Trophy className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowAuthModal(true)}
+              title={currentUser ? `Cuenta: @${currentUser.username}` : 'Iniciar sesión / Registrarse'}
+              className="relative p-2 sm:p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 hover:border-amber-400 text-stone-200 hover:text-amber-300 transition-colors shadow-md cursor-pointer"
+            >
+              <UserRound className="w-4 h-4" />
+              {currentUser && (
+                <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-400 border-2 border-stone-900 rounded-full" />
+              )}
+            </button>
             <button
               onClick={() => engine?.setPaused(true)}
               title="Pausa"
@@ -2431,6 +2559,19 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             )}
 
+            {/* Online Leaderboard shortcut in Victory */}
+            <button
+              type="button"
+              onClick={() => {
+                setLeaderboardLevelId(engine?.currentLevel ?? 1);
+                setShowLeaderboardModal(true);
+              }}
+              className="w-full mb-3 py-2.5 px-3 rounded-2xl bg-amber-950/35 hover:bg-amber-900/45 border border-amber-500/40 text-amber-200 text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-sm"
+            >
+              <Trophy className="w-4 h-4 text-amber-400" />
+              <span>Ver tabla de mejores tiempos online</span>
+            </button>
+
             {/* Strictly the 2 requested buttons: Siguiente nivel & Jugar de nuevo */}
             <div className="w-full flex flex-col gap-2.5">
               {engine && isLevelUnlocked(engine.currentLevel + 1) ? (
@@ -2668,6 +2809,21 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
         </div>
       )}
+
+      {/* Online Backend Authentication & Profile Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onProfileSynced={handleProfileSynced}
+      />
+
+      {/* Online Redis Leaderboard Modal */}
+      <LeaderboardModal
+        isOpen={showLeaderboardModal}
+        onClose={() => setShowLeaderboardModal(false)}
+        initialLevelId={leaderboardLevelId}
+        initialMode={gameMode}
+      />
     </div>
   );
 };

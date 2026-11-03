@@ -23,6 +23,9 @@ import { LEVELS, markLevelComplete, isCompanionUnlocked, isLevelUnlocked, themeF
 import { generateLevel } from './levelGen';
 import { PuzzleSystem } from './puzzles';
 import { CompanionStyle } from './character';
+import { RemotePlayersManager } from './RemotePlayersManager';
+import { multiplayerClient } from '../services/multiplayerClient';
+import { apiClient } from '../services/apiClient';
 
 export { LEVELS };
 
@@ -83,6 +86,8 @@ export class GameEngine {
   private itemCtx!: ItemUseContext;
   /** Push blocks, doors, key carriers and sentinels */
   public puzzleSystem: PuzzleSystem = new PuzzleSystem();
+  /** 3D online multiplayer avatars */
+  public remotePlayers!: RemotePlayersManager;
 
   // Levels
   public currentLevel: number = 1;
@@ -279,6 +284,10 @@ export class GameEngine {
       this.callbacks.onWeatherChange(target, !finished);
     };
 
+    // 8b. Online Multiplayer Remote Players Manager
+    this.remotePlayers = new RemotePlayersManager(this.scene, this.textures);
+    multiplayerClient.joinLevel(this.currentLevel);
+
     // 9. Input & Window Listeners
     this.setupListeners();
 
@@ -342,7 +351,12 @@ export class GameEngine {
     this.playerModel = next;
     this.physics.playerModel = next;
     this.companionPowers.setCompanion(this.playerAppearance.companion, this.physics);
-    if (persist) saveAppearance(this.playerAppearance);
+    if (persist) {
+      saveAppearance(this.playerAppearance);
+      if (apiClient.isAuthenticated()) {
+        apiClient.updateAppearance(this.playerAppearance).catch(() => {});
+      }
+    }
   }
 
   /** Toggles the close-up turntable camera used while the Character Creator is open. */
@@ -359,6 +373,7 @@ export class GameEngine {
   public activateCompanionPower() {
     if (this.gameState !== 'playing') return;
     this.companionPowers.activate(this.physics, this.stalker ? this.stalker.position : null);
+    multiplayerClient.triggerCompanionPower(this.playerAppearance.companion);
   }
 
   /** Fresh run: power ready, snacks restored, companion back to normal size. */
@@ -469,6 +484,8 @@ export class GameEngine {
 
     // Build the new one
     this.currentLevel = level;
+    this.remotePlayers?.clearAll();
+    multiplayerClient.joinLevel(level);
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(level);
@@ -1532,6 +1549,30 @@ export class GameEngine {
     this.dirLight.position.set(playerPos.x + 25, playerPos.y + 45, playerPos.z + 20);
     this.dirLight.target.position.copy(playerPos);
     this.dirLight.target.updateMatrixWorld();
+
+    // 8. Online Multiplayer Sync & Remote Players update
+    if (this.remotePlayers) {
+      this.remotePlayers.update(dt);
+    }
+
+    if (this.gameState === 'playing') {
+      const speed = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
+      let anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall' = 'idle';
+      if (!this.physics.isGrounded) {
+        anim = this.physics.velocity.y > 0 ? 'jump' : 'fall';
+      } else if (speed > 7.0) {
+        anim = 'run';
+      } else if (speed > 0.4) {
+        anim = 'walk';
+      }
+      multiplayerClient.syncPlayer(
+        playerPos.x,
+        playerPos.y,
+        playerPos.z,
+        this.playerModel.group.rotation.y,
+        anim
+      );
+    }
   }
 
   public dispose() {
@@ -1551,6 +1592,8 @@ export class GameEngine {
     window.removeEventListener('mouseup', this.handleMouseUp);
     dom.removeEventListener('wheel', this.handleWheel);
 
+    this.remotePlayers?.clearAll();
+    multiplayerClient.disconnect();
     this.stalker?.dispose();
     this.companionPowers?.dispose();
     this.itemSystem?.dispose();
