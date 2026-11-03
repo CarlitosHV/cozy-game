@@ -623,6 +623,8 @@ export class GameEngine {
     this.lastUnlocked = null;
     this.clearPreviewCamera();
     this.resetCompanionPowers();
+    this.physics.resetCollectibles();
+    this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
     this.itemSystem.resetPickups();
     if (freshBackpack) this.itemSystem.clearInventory(this.itemCtx);
     this.itemSystem.removeAllOfType('llave');
@@ -792,12 +794,18 @@ export class GameEngine {
     this.callbacks.onTimeTrialTick?.(this.timeRemaining, { seconds, reason });
   }
 
+  public restartLevel() {
+    this.restartGame(this.gameMode);
+  }
+
   public restartGame(mode?: GameMode) {
     if (mode) {
       this.setGameMode(mode);
     }
     this.physics.respawnAtCheckpoint(0, true);
     this.resetCompanionPowers();
+    this.physics.resetCollectibles();
+    this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
     this.itemSystem.resetPickups();
     this.itemSystem.clearInventory(this.itemCtx);
     this.itemSystem.removeAllOfType('llave');
@@ -1443,12 +1451,10 @@ export class GameEngine {
       const prevSec = Math.floor(this.timeRemaining);
       this.timeRemaining -= dt;
       const curSec = Math.floor(this.timeRemaining);
-      if (prevSec !== curSec) {
-        this.callbacks.onTimeTrialTick?.(Math.max(0, this.timeRemaining));
-        if (curSec <= 15 && curSec > 0) {
-          soundManager.playTimeWarning();
-        }
+      if (prevSec !== curSec && curSec <= 15 && curSec > 0) {
+        soundManager.playTimeWarning();
       }
+      this.callbacks.onTimeTrialTick?.(Math.max(0, this.timeRemaining));
       if (this.timeRemaining <= 0) {
         this.timeRemaining = 0;
         this.gameState = 'game_over';
@@ -1668,6 +1674,9 @@ export class GameEngine {
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(this.targetLookAt);
 
+    // Fade out foliage or trees that block the camera view of the player
+    this.updateTreeOcclusion(dt);
+
     // Follow light with player
     this.dirLight.position.set(playerPos.x + 25, playerPos.y + 45, playerPos.z + 20);
     this.dirLight.target.position.copy(playerPos);
@@ -1696,6 +1705,101 @@ export class GameEngine {
         anim
       );
     }
+  }
+
+  private occludedMeshes = new Set<THREE.Mesh>();
+
+  /** Fades out decorative tree foliage/trunks when they block the camera's view of the player. */
+  private updateTreeOcclusion(dt: number) {
+    if (!this.world || !this.world.decorativeMeshes || this.world.decorativeMeshes.length === 0) return;
+    const camPos = this.camera.position;
+    const playerPos = this.physics.position;
+    const playerY = playerPos.y + 1.1;
+
+    const camToP_x = playerPos.x - camPos.x;
+    const camToP_y = playerY - camPos.y;
+    const camToP_z = playerPos.z - camPos.z;
+    const segLenSq = camToP_x * camToP_x + camToP_y * camToP_y + camToP_z * camToP_z;
+    if (segLenSq < 0.25) return;
+
+    const nowOccluded = new Set<THREE.Mesh>();
+    const meshPos = new THREE.Vector3();
+
+    for (const rootObj of this.world.decorativeMeshes) {
+      rootObj.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+
+        mesh.getWorldPosition(meshPos);
+        const toMesh_x = meshPos.x - camPos.x;
+        const toMesh_y = meshPos.y - camPos.y;
+        const toMesh_z = meshPos.z - camPos.z;
+
+        // Projection fraction along camera-to-player line
+        const proj = (toMesh_x * camToP_x + toMesh_y * camToP_y + toMesh_z * camToP_z) / segLenSq;
+        if (proj > 0.12 && proj < 0.88) {
+          const closeX = camPos.x + camToP_x * proj;
+          const closeY = camPos.y + camToP_y * proj;
+          const closeZ = camPos.z + camToP_z * proj;
+          const distSq = (meshPos.x - closeX) ** 2 + (meshPos.y - closeY) ** 2 + (meshPos.z - closeZ) ** 2;
+
+          if (distSq < 3.8) {
+            nowOccluded.add(mesh);
+          }
+        }
+      });
+    }
+
+    for (const mesh of nowOccluded) {
+      this.occludedMeshes.add(mesh);
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        if (m) {
+          m.transparent = true;
+          m.opacity = THREE.MathUtils.damp(m.opacity, 0.28, 8.0, dt);
+        }
+      }
+    }
+
+    for (const mesh of this.occludedMeshes) {
+      if (!nowOccluded.has(mesh)) {
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        let restored = true;
+        for (const m of mats) {
+          if (m) {
+            m.opacity = THREE.MathUtils.damp(m.opacity, 1.0, 6.0, dt);
+            if (m.opacity < 0.98) restored = false;
+            else m.opacity = 1.0;
+          }
+        }
+        if (restored) {
+          this.occludedMeshes.delete(mesh);
+        }
+      }
+    }
+  }
+
+  public setAutoChaseCamera(enabled: boolean) {
+    this.autoChaseCamera = enabled;
+  }
+
+  public setGraphicsQuality(quality: 'high' | 'medium' | 'low') {
+    if (this.isSoftwareGl || !this.renderer) return;
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    if (quality === 'high') {
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2.0));
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    } else if (quality === 'medium') {
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.BasicShadowMap;
+    } else {
+      this.renderer.setPixelRatio(1.0);
+      this.renderer.shadowMap.enabled = false;
+    }
+    this.renderer.setSize(w, h);
   }
 
   public dispose() {

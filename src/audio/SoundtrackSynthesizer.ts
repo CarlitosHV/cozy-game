@@ -82,11 +82,14 @@ class SoundtrackSynthesizer {
     }
   }
 
+  public onMuteChange?: (muted: boolean) => void;
+
   public setMuted(muted: boolean) {
     this.isMuted = muted;
     if (this.masterGain && this.ctx) {
       this.masterGain.gain.setTargetAtTime(muted ? 0 : 0.7, this.ctx.currentTime, 0.05);
     }
+    this.onMuteChange?.(muted);
   }
 
   public getMuted() {
@@ -106,6 +109,11 @@ class SoundtrackSynthesizer {
   public setAmbientVolume(val: number) {
     if (!this.ctx || !this.ambientGain) return;
     this.ambientGain.gain.setTargetAtTime(Math.max(0, Math.min(1, val)), this.ctx.currentTime, 0.05);
+  }
+
+  public setSfxVolume(val: number) {
+    if (!this.ctx || !this.sfxGain) return;
+    this.sfxGain.gain.setTargetAtTime(Math.max(0, Math.min(1, val)), this.ctx.currentTime, 0.05);
   }
 
   public setWeather(weather: WeatherType, duration: number = 3.2) {

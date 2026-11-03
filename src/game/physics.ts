@@ -112,6 +112,16 @@ export class ParkourPhysics {
     }
   }
 
+  /** Resets collectible count and restores all collectibles to the world for a new run. */
+  public resetCollectibles() {
+    this.collectedCount = 0;
+    for (const col of this.world.collectibles) {
+      col.collected = false;
+      col.group.visible = true;
+      col.group.scale.set(1, 1, 1);
+    }
+  }
+
   public update(
     dt: number,
     input: PlayerInput,
@@ -466,11 +476,14 @@ export class ParkourPhysics {
       );
     }
 
-    // 11. Collectibles Pickup Check
+    // 11. Collectibles Pickup Check (checks horizontal and vertical body span so head/jump catches them)
     for (const col of this.world.collectibles) {
       if (!col.collected) {
-        const dist = this.position.distanceTo(col.group.position);
-        if (dist < 1.4) {
+        const dx = this.position.x - col.group.position.x;
+        const dz = this.position.z - col.group.position.z;
+        const dy = col.group.position.y - this.position.y;
+        const distXZ = Math.hypot(dx, dz);
+        if (distXZ < 1.45 && dy >= -0.5 && dy <= 2.2) {
           col.collected = true;
           this.collectedCount++;
           soundManager.playCollectible();

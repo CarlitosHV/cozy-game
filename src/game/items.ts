@@ -514,12 +514,17 @@ export class ItemSystem {
       p.group.rotation.y += dt * 1.4;
       (p.halo.material as THREE.MeshBasicMaterial).opacity = 0.45 + Math.sin(p.phase * 5) * 0.2;
 
-      if (p.group.position.distanceTo(playerPos) < 1.5) {
+      const dx = p.group.position.x - playerPos.x;
+      const dz = p.group.position.z - playerPos.z;
+      const dy = p.group.position.y - playerPos.y;
+      const distXZ = Math.hypot(dx, dz);
+
+      if (distXZ < 1.45 && dy >= -0.5 && dy <= 2.2) {
         const free = this.slots.indexOf(null);
         if (free === -1) {
           if (p.fullWarnCooldown <= 0) {
-            this.emit('Tu mochila está llena (5/5). Usa o tira algo');
-            p.fullWarnCooldown = 3;
+            this.emit('¡Mochila llena (5/5)! Usa o tira un objeto primero');
+            p.fullWarnCooldown = 2.5;
           }
           continue;
         }

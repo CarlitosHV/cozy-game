@@ -31,10 +31,10 @@ export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: s
   castle: { name: 'Castillo Embrujado', desc: 'Torres bajo la luna, vampiros, hombres lobo y gárgolas.', accent: '#ef4444' },
 };
 
-/** Theme of any level: 1-4 handmade, then the 6 worlds rotating forever. */
+/** Theme of any level: 1 to 6 in order (cozy, cosmic, swamp, aero, garden, castle), then looping smoothly. */
 export function themeForLevel(level: number): ThemeId {
-  if (level <= 4) return THEME_ORDER[Math.max(0, level - 1)];
-  return THEME_ORDER[(level - 5) % THEME_ORDER.length];
+  const idx = Math.max(0, Math.floor(level) - 1);
+  return THEME_ORDER[idx % THEME_ORDER.length];
 }
 
 export function levelInfo(level: number): LevelInfo {
@@ -109,6 +109,18 @@ export function levelHowTo(level: number): LevelHowTo {
     };
   }
 
+  if (level === 5) {
+    return {
+      title: 'Nivel 5 · Jardín Gigante',
+      goal: 'Asciende entre flores gigantes y alcanza la cima del Girasol',
+      steps: [
+        'Explora las hojas colosales, enredaderas y tallos trepadores',
+        'Salta entre pétalos primaverales y evita las trampas de espinas',
+        'Llega a la Gran Torre del Girasol y cruza el portal',
+      ],
+    };
+  }
+
   return {
     title: `Nivel ${level} · ${info.name}`,
     goal: 'Reúne los orbes y conquista la fortaleza',
@@ -122,8 +134,8 @@ export function levelHowTo(level: number): LevelHowTo {
   };
 }
 
-/** The 4 handmade worlds (kept for reference/UI). */
-export const LEVELS: LevelInfo[] = [1, 2, 3, 4].map(levelInfo);
+/** The 5 core worlds (levels 1-5). */
+export const LEVELS: LevelInfo[] = [1, 2, 3, 4, 5].map(levelInfo);
 
 /** Companions earned every 10 levels. */
 export const COMPANION_UNLOCKS: { companion: CompanionStyle; level: number }[] = [

@@ -48,6 +48,31 @@ export function makeGlowTexture(inner: string, outer: string = 'rgba(0,0,0,0)', 
   return tex;
 }
 
+/** Soft vertical gradient for light beams: fades to 0 at bottom and top to avoid hard clipping. */
+export function makeVerticalGradientTexture(colorHex: number): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 32;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  const col = new THREE.Color(colorHex);
+  const r = Math.round(col.r * 255);
+  const g = Math.round(col.g * 255);
+  const b = Math.round(col.b * 255);
+  const grad = ctx.createLinearGradient(0, 256, 0, 0); // bottom to top
+  grad.addColorStop(0.0, `rgba(${r},${g},${b},0)`);
+  grad.addColorStop(0.08, `rgba(${r},${g},${b},0.45)`);
+  grad.addColorStop(0.35, `rgba(${r},${g},${b},0.35)`);
+  grad.addColorStop(0.75, `rgba(${r},${g},${b},0.12)`);
+  grad.addColorStop(1.0, `rgba(${r},${g},${b},0)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 32, 256);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export function createLevelKit(root: THREE.Object3D, textures: ProceduralTextures) {
   const platforms: PlatformItem[] = [];
   const checkpoints: CheckpointItem[] = [];

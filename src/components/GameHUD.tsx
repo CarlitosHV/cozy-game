@@ -58,6 +58,8 @@ import {
   Heart,
   Users,
   Gamepad2,
+  Lock,
+  Settings,
 } from 'lucide-react';
 import { GameEngine, GameState, GameMode } from '../game/GameEngine';
 import {
@@ -73,6 +75,7 @@ import {
 } from '../game/progress';
 import { AuthModal } from './AuthModal';
 import { LeaderboardModal } from './LeaderboardModal';
+import { SettingsModal } from './SettingsModal';
 import { ActionFeedbackBanner } from './ActionFeedback';
 import { ConfirmDialog, ConfirmRequest } from './ConfirmDialog';
 import { IconAction } from './IconAction';
@@ -440,12 +443,36 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   showEasterEgg = false,
   onDismissEasterEgg,
 }) => {
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(() => soundManager.getMuted());
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [language, setLanguage] = useState<'es' | 'en'>(() => {
+    return (localStorage.getItem('cozy_lang') as 'es' | 'en') || 'es';
+  });
+  const [largeText, setLargeText] = useState<boolean>(() => {
+    return localStorage.getItem('cozy_large_text') === 'true';
+  });
+  const [showFps, setShowFps] = useState<boolean>(() => {
+    return localStorage.getItem('cozy_show_fps') === 'true';
+  });
+  const [fps, setFps] = useState(60);
+  const [pickupAlert, setPickupAlert] = useState<{ text: string; id: number } | null>(null);
+  const [helpTab, setHelpTab] = useState<'controls' | 'companions' | 'worlds' | 'modes'>('controls');
+  const [showTutorialHint, setShowTutorialHint] = useState<boolean>(() => {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('cozy_tutorial_seen') !== 'true';
+  });
+
   const [selectedMode, setSelectedMode] = useState<GameMode>('free');
   type TitleStep = 'main' | 'select_level' | 'game_modes' | 'select_character';
   const [titleStep, setTitleStep] = useState<TitleStep>('main');
-  const [pendingLevel, setPendingLevel] = useState<number>(() => maxPlayableLevel());
-  const [pendingMode, setPendingMode] = useState<GameMode>('free');
+  const [pendingLevel, setPendingLevel] = useState<number>(() => {
+    const saved = localStorage.getItem('cozy_last_level');
+    const parsed = saved ? parseInt(saved, 10) : maxPlayableLevel();
+    return parsed >= 1 && isLevelUnlocked(parsed) ? parsed : maxPlayableLevel();
+  });
+  const [pendingMode, setPendingMode] = useState<GameMode>(() => {
+    const saved = localStorage.getItem('cozy_last_mode') as GameMode;
+    return saved === 'time_trial' || saved === 'chase' || saved === 'free' ? saved : 'free';
+  });
   const [previousTitleStep, setPreviousTitleStep] = useState<'main' | 'select_level' | 'game_modes'>('main');
   const [titleDraftReady, setTitleDraftReady] = useState(false);
 
@@ -815,6 +842,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const blocks =
       showHelpModal ||
       showLevelBrief ||
+      showSettingsModal ||
       showAuthModal ||
       showLeaderboardModal ||
       showCreator ||
@@ -830,6 +858,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     engine,
     showHelpModal,
     showLevelBrief,
+    showSettingsModal,
     showAuthModal,
     showLeaderboardModal,
     showCreator,
@@ -842,6 +871,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const isAnyModalOpen =
     showHelpModal ||
     showLevelBrief ||
+    showSettingsModal ||
     showEasterEgg ||
     showBackpack ||
     showCreator ||
@@ -971,14 +1001,52 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     };
   }, [isTouchDevice]);
 
-  // Timer
+  // Timer (Bug 7: cleanly pauses when objective panel or any modal is open)
   useEffect(() => {
-    if (gameState !== 'playing') return;
+    if (gameState !== 'playing' || isAnyModalOpen) return;
     const interval = setInterval(() => {
       setElapsedTime((prev) => prev + 1);
     }, 1000);
     return () => clearInterval(interval);
-  }, [gameState]);
+  }, [gameState, isAnyModalOpen]);
+
+  // Sync mute state with soundManager synthesizer
+  useEffect(() => {
+    soundManager.onMuteChange = (muted) => setIsMuted(muted);
+    setIsMuted(soundManager.getMuted());
+  }, []);
+
+  // Floating pickup alert effect
+  const prevCollectedRef = useRef(collectedCount);
+  useEffect(() => {
+    if (gameState === 'playing' && collectedCount > prevCollectedRef.current) {
+      setPickupAlert({ text: '+1 Reliquia', id: Date.now() });
+      const timer = window.setTimeout(() => setPickupAlert(null), 1400);
+      prevCollectedRef.current = collectedCount;
+      return () => window.clearTimeout(timer);
+    }
+    prevCollectedRef.current = collectedCount;
+  }, [collectedCount, gameState]);
+
+  // Realtime FPS measurement loop
+  useEffect(() => {
+    if (!showFps) return;
+    let frames = 0;
+    let lastTime = performance.now();
+    let animId: number;
+    const loop = () => {
+      frames++;
+      const now = performance.now();
+      if (now >= lastTime + 1000) {
+        setFps(Math.round((frames * 1000) / (now - lastTime)));
+        frames = 0;
+        lastTime = now;
+      }
+      animId = requestAnimationFrame(loop);
+    };
+    animId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animId);
+  }, [showFps]);
 
   // Live Canvas Filter in Photo Mode
   useEffect(() => {
@@ -1012,6 +1080,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         }
         if (capturedPhotoUrl) {
           discardPhotoCapture();
+          e.preventDefault();
+          return;
+        }
+        if (showSettingsModal) {
+          setShowSettingsModal(false);
           e.preventDefault();
           return;
         }
@@ -1064,7 +1137,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
       if (e.code === 'KeyO' && (gameState === 'playing' || gameState === 'paused')) {
         e.preventDefault();
-        setShowLevelBrief(true);
+        setShowLevelBrief((prev) => !prev);
         return;
       }
 
@@ -1121,6 +1194,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             engine?.setCharacterPreview(true);
             setPreviousTitleStep('select_level');
             setTitleStep('select_character');
+          } else {
+            e.preventDefault();
+            showToast(`El nivel ${lvl} está bloqueado. Completa el nivel ${lvl - 1} para desbloquear.`, 2200, 'neutral');
           }
           return;
         }
@@ -1252,14 +1328,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const formatTime = (secs: number) => formatClock(secs);
 
   const toggleMute = () => {
-    const next = !isMuted;
-    setIsMuted(next);
+    const next = !soundManager.getMuted();
     soundManager.setMuted(next);
+    setIsMuted(next);
+    showToast(next ? 'Sonido silenciado' : 'Sonido activado', 1200, 'neutral');
   };
 
   const handleStartGame = (modeToStart?: GameMode, levelToStart?: number) => {
     const targetMode = modeToStart ?? pendingMode;
     const targetLevel = levelToStart ?? pendingLevel;
+    localStorage.setItem('cozy_last_mode', targetMode);
+    localStorage.setItem('cozy_last_level', String(targetLevel));
     setTitleDraftReady(false);
     if (engine) {
       engine.setCharacterPreview(false);
@@ -1680,7 +1759,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
                 <div className="flex flex-col gap-3 max-h-[48vh] overflow-y-auto pr-1">
                   {(() => {
-                    const levels = Array.from({ length: maxPlayableLevel() }, (_, i) => i + 1)
+                    const totalLevelsToShow = Math.max(5, maxPlayableLevel());
+                    const levels = Array.from({ length: totalLevelsToShow }, (_, i) => i + 1)
                       .filter((lvl) => {
                         const completed = isLevelCompleted(lvl);
                         if (levelListFilter === 'done') return completed;
@@ -1718,6 +1798,36 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     return levels.map((lvl) => {
                       const info = levelInfo(lvl);
                       const completed = isLevelCompleted(lvl);
+                      const unlocked = isLevelUnlocked(lvl);
+
+                      if (!unlocked) {
+                        return (
+                          <div
+                            key={lvl}
+                            onClick={() =>
+                              showToast(
+                                `El nivel ${lvl} está bloqueado. Completa el nivel ${lvl - 1} para desbloquear.`,
+                                2200,
+                                'neutral'
+                              )
+                            }
+                            className="flex items-center gap-3 p-3.5 rounded-2xl bg-cozy-panel-deep/50 border border-cozy-line/50 text-left opacity-60 cursor-not-allowed group select-none transition-opacity hover:opacity-75"
+                          >
+                            <span className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 bg-stone-300/30 text-cozy-muted">
+                              <Lock className="w-4 h-4 text-cozy-soft" />
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-bold text-cozy-muted truncate">
+                                Nivel {lvl} · {info.name}
+                              </div>
+                              <div className="text-[10px] text-cozy-soft">
+                                Bloqueado · Completa el nivel {lvl - 1} para desbloquear
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       return (
                         <button
                           key={lvl}
@@ -1786,6 +1896,24 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       </span>
                     </button>
                   )}
+                  {/* Bug 12: Modo Libre added clearly to Game Modes */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setPendingMode('free');
+                        setPendingLevel(maxPlayableLevel());
+                        engine?.loadLevel(maxPlayableLevel());
+                        engine?.setCharacterPreview(true);
+                        setPreviousTitleStep('game_modes');
+                        setTitleStep('select_character');
+                      }}
+                      className={`${BTN.primary} flex-1 flex items-center justify-center gap-2`}
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>Modo Libre</span>
+                    </button>
+                    <HelpTip label="Explora a tu propio ritmo sin límite de tiempo ni sombras acechadoras." side="bottom" />
+                  </div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => {
@@ -1796,7 +1924,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                         setPreviousTitleStep('game_modes');
                         setTitleStep('select_character');
                       }}
-                      className={`${BTN.primary} flex-1 flex items-center justify-center gap-2`}
+                      className={`${BTN.secondary} flex-1 flex items-center justify-center gap-2`}
                     >
                       <Clock className="w-4 h-4" />
                       <span>Contrarreloj</span>
@@ -1979,7 +2107,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             {gameMode === 'time_trial' && (
               <div
                 className={`relative flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-colors shadow-md backdrop-blur-md ${
-                  timeRemaining <= 20
+                  timeRemaining <= 10
+                    ? 'bg-red-950/95 border-red-500 text-red-100 animate-pulse ring-2 ring-red-500/60 shadow-lg shadow-red-900/50'
+                    : timeRemaining <= 20
                     ? 'bg-red-950/90 border-red-500/80 text-red-200 animate-pulse'
                     : 'bg-amber-950/80 border-amber-500/50 text-amber-200'
                 }`}
@@ -1988,7 +2118,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">Tiempo:</span>
                   <span className="font-mono font-black text-sm tracking-wide">
-                    {timeRemaining > 0 ? `${timeRemaining}s` : '0s'}
+                    {timeRemaining > 0 ? `${timeRemaining.toFixed(1)}s` : '0.0s'}
                   </span>
                 </div>
 
@@ -2035,6 +2165,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <div className={`flex items-center rounded-xl cozy-chip text-xs ${isMobileUi ? 'gap-2 px-2 py-1' : 'gap-3 px-3 py-1.5'}`}>
               <div className="flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider hidden sm:inline">Reliquias:</span>
                 <span className="tabular-nums font-semibold text-amber-300">
                   {collectedCount}/{totalCollectibles}
                 </span>
@@ -2042,9 +2173,29 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <div className="w-[1px] h-3 bg-stone-700/60" />
               <div className="flex items-center gap-1 font-mono text-stone-300">
                 <Timer className="w-3 h-3 text-stone-400" />
+                <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider hidden sm:inline font-ui">Tiempo:</span>
                 <span>{formatTime(elapsedTime)}</span>
               </div>
             </div>
+
+            {/* Floating Pickup Alert */}
+            {pickupAlert && (
+              <div
+                key={pickupAlert.id}
+                className="self-start px-2.5 py-1 rounded-full bg-gradient-to-r from-amber-400 to-amber-500 text-stone-950 text-xs font-black shadow-lg animate-bounce flex items-center gap-1 pointer-events-none"
+              >
+                <Sparkles className="w-3.5 h-3.5 fill-current" />
+                <span>{pickupAlert.text}</span>
+              </div>
+            )}
+
+            {/* FPS live counter badge */}
+            {showFps && (
+              <div className="self-start flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-stone-900/80 border border-stone-700/60 text-[10px] font-mono text-emerald-400 shadow-sm backdrop-blur-sm pointer-events-none">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>{fps} FPS</span>
+              </div>
+            )}
 
             {/* Companion Power badge (hidden on mobile touch — action button covers it) */}
             {power && powerInfo && !touchControlsEnabled && (
@@ -2116,6 +2267,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               onClick={() => engine?.enterPhotoMode()}
             >
               <Camera className="w-4 h-4 text-cozy-accent-deep" />
+            </IconAction>
+            <IconAction
+              label="Ajustes"
+              title="Ajustes y opciones"
+              compact={isMobileUi}
+              onClick={() => setShowSettingsModal(true)}
+              className="text-cozy-accent-deep"
+            >
+              <Settings className="w-4 h-4" />
             </IconAction>
             <IconAction
               label={UI.pause}
@@ -2945,6 +3105,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               >
                 {UI.resume}
               </button>
+              <button
+                onClick={() => {
+                  engine?.restartLevel();
+                  engine?.setPaused(false);
+                }}
+                className={`${BTN.secondary} flex items-center justify-center gap-2`}
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Reiniciar nivel</span>
+              </button>
               <span className="inline-flex items-center justify-center gap-1">
                 <button
                   onClick={requestRespawnCheckpoint}
@@ -2978,6 +3148,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <HelpCircle className="w-3.5 h-3.5" />
                 {UI.howToPlay}
               </button>
+              <button
+                type="button"
+                onClick={() => setShowSettingsModal(true)}
+                className="hover:text-cozy-ink cursor-pointer inline-flex items-center gap-1"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>Ajustes</span>
+              </button>
               <span className="inline-flex items-center gap-0.5">
                 <button
                   type="button"
@@ -3001,9 +3179,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <button
                 type="button"
                 onClick={toggleMute}
-                className="hover:text-cozy-ink cursor-pointer"
+                className="hover:text-cozy-ink cursor-pointer inline-flex items-center gap-1 font-medium"
               >
-                {isMuted ? UI.soundOff : UI.soundOn}
+                {isMuted ? (
+                  <VolumeX className="w-3.5 h-3.5 text-stone-400" />
+                ) : (
+                  <Volume2 className="w-3.5 h-3.5 text-emerald-600" />
+                )}
+                <span>{isMuted ? 'Sonido: Silenciado' : 'Sonido: Activado'}</span>
               </button>
               {toggleFullscreen && (
                 <button
@@ -3161,228 +3344,235 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {/* ======================================================== */}
-      {/* 7. HELP & CONTROLS MODAL (Spanish & English Detailed)    */}
+      {/* 7. HELP & CONTROLS MODAL (Tabbed & Organized)            */}
       {/* ======================================================== */}
       {showHelpModal && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto cozy-scrim p-4 sm:p-6 z-40">
-          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-[1.75rem] cozy-panel p-6 relative font-ui">
+          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-[1.75rem] cozy-panel p-6 relative font-ui flex flex-col gap-4">
             <button
               onClick={() => setShowHelpModal(false)}
               className="absolute top-5 right-5 text-cozy-soft hover:text-cozy-ink cursor-pointer"
+              aria-label="Cerrar ayuda"
             >
               <X className="w-5 h-5" />
             </button>
 
-            <h3 className="text-xl font-display font-bold text-cozy-ink mb-4 flex items-center gap-2">
+            <h3 className="text-xl font-display font-bold text-cozy-ink flex items-center gap-2">
               <Compass className="w-5 h-5 text-cozy-accent-deep" />
               <span>{UI.howToPlay}</span>
             </h3>
 
-            {/* Keyboard Section */}
-            <div className="mb-4">
-              <span className="text-[11px] text-cozy-accent-deep font-bold uppercase tracking-wider block mb-2">
-                Controles del teclado
-              </span>
-              <div className="space-y-2 text-xs text-cozy-ink">
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Moverse</span>
-                  <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Flechas o WASD</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Saltar</span>
-                  <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Espacio</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Correr</span>
-                  <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Mayús</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Girar cámara</span>
-                  <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Arrastrar o Q / E</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Pantalla completa</span>
-                  <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">F</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Modo foto</span>
-                  <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">P</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">{UI.lastRest}</span>
-                  <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">R</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Poder del compañero</span>
-                  <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">G</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Usar objeto</span>
-                  <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">1 a 5</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Abrir mochila</span>
-                  <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">I</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Silencio</span>
-                  <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">M</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Pausa</span>
-                  <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Esc</span>
-                </div>
-              </div>
+            {/* Ayuda Tab Navigation */}
+            <div className="grid grid-cols-4 gap-1 p-1 rounded-xl bg-cozy-panel-deep text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setHelpTab('controls')}
+                className={`py-1.5 px-2 rounded-lg transition-colors cursor-pointer text-center truncate ${
+                  helpTab === 'controls'
+                    ? 'bg-amber-100 text-cozy-ink shadow-sm'
+                    : 'text-cozy-muted hover:text-cozy-ink'
+                }`}
+              >
+                Controles
+              </button>
+              <button
+                type="button"
+                onClick={() => setHelpTab('companions')}
+                className={`py-1.5 px-2 rounded-lg transition-colors cursor-pointer text-center truncate ${
+                  helpTab === 'companions'
+                    ? 'bg-amber-100 text-cozy-ink shadow-sm'
+                    : 'text-cozy-muted hover:text-cozy-ink'
+                }`}
+              >
+                Compañeros
+              </button>
+              <button
+                type="button"
+                onClick={() => setHelpTab('worlds')}
+                className={`py-1.5 px-2 rounded-lg transition-colors cursor-pointer text-center truncate ${
+                  helpTab === 'worlds'
+                    ? 'bg-amber-100 text-cozy-ink shadow-sm'
+                    : 'text-cozy-muted hover:text-cozy-ink'
+                }`}
+              >
+                Mundos
+              </button>
+              <button
+                type="button"
+                onClick={() => setHelpTab('modes')}
+                className={`py-1.5 px-2 rounded-lg transition-colors cursor-pointer text-center truncate ${
+                  helpTab === 'modes'
+                    ? 'bg-amber-100 text-cozy-ink shadow-sm'
+                    : 'text-cozy-muted hover:text-cozy-ink'
+                }`}
+              >
+                Modos
+              </button>
             </div>
 
-            <div className="mb-4">
-              <span className="text-[11px] text-cozy-accent-deep font-bold uppercase tracking-wider block mb-2">
-                Atajos para quienes juegan mucho
-              </span>
-              <p className="text-[10px] text-cozy-muted mb-2 leading-relaxed">
-                Opcionales: no hacen falta para empezar. Aceleran lo que ya haces a menudo.
-              </p>
-              <div className="space-y-2 text-xs text-cozy-ink">
-                {POWER_SHORTCUTS.map((row) => (
-                  <div key={`${row.action}-${row.keys}`} className="flex justify-between items-center gap-3 py-1 border-b border-cozy-line">
-                    <span className="text-cozy-muted">
-                      {row.action}
-                      <span className="block text-[10px] text-cozy-soft">{row.context}</span>
-                    </span>
-                    <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep shrink-0">
-                      {row.keys}
-                    </span>
+            {/* TAB 1: CONTROLES */}
+            {helpTab === 'controls' && (
+              <div className="flex flex-col gap-4 animate-in fade-in duration-150">
+                <div>
+                  <span className="text-[11px] text-cozy-accent-deep font-bold uppercase tracking-wider block mb-2">
+                    Controles del teclado
+                  </span>
+                  <div className="space-y-2 text-xs text-cozy-ink">
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Moverse</span>
+                      <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Flechas o WASD</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Saltar</span>
+                      <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Espacio</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Correr</span>
+                      <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Mayús</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Girar cámara</span>
+                      <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Arrastrar o Q / E</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Poder del compañero</span>
+                      <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">G</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Abrir / cerrar objetivo</span>
+                      <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">O</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Abrir mochila</span>
+                      <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">I</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Silenciar sonido</span>
+                      <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">M</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Pausa</span>
+                      <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Esc</span>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
 
-            {/* Companion powers guide */}
-            <div className="p-3 rounded-2xl bg-amber-950/30 border border-amber-700/40 text-[11px] text-amber-100/90 leading-relaxed mb-3">
-              <strong className="text-cozy-accent-deep">Poderes de tu compañero:</strong>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                {Object.values(COMPANION_POWERS).map((p) =>
-                  p ? (
-                    <li key={p.companion}>
-                      <strong>{p.companionName} – {p.powerName}:</strong> {p.desc} ({p.duration}s)
-                    </li>
-                  ) : null
-                )}
-              </ul>
-              <p className="mt-1.5">
-                Después de usarlo, tu compañero queda con hambre. Dale una <strong>baya mágica</strong> desde la mochila para recargar el poder.
-              </p>
-            </div>
+                <div>
+                  <span className="text-[11px] text-cozy-accent-deep font-bold uppercase tracking-wider block mb-2">
+                    Controles en el móvil
+                  </span>
+                  <div className="space-y-2 text-xs text-cozy-ink">
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Palanca táctil (abajo izq)</span>
+                      <span className="text-cozy-ink">Mover; al borde corre automáticamente</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Botón de salto (abajo der)</span>
+                      <span className="text-cozy-ink">Salto vertical y rebote</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Girar cámara</span>
+                      <span className="text-cozy-ink">Desliza un dedo en la pantalla</span>
+                    </div>
+                  </div>
+                </div>
 
-            {/* Puzzles guide (generated levels) */}
-            <div className="p-3 rounded-2xl cozy-panel-soft text-[11px] leading-relaxed mb-3">
-              <strong className="text-cozy-accent-deep">Mundos abiertos (desde el nivel 5):</strong>
-              <p className="mt-1">
-                Cada nivel es una zona para explorar libremente: colinas, mesetas, escaleras, fosos e islas en el cielo. Escondidos por la zona hay varios{' '}
-                <strong>orbes</strong> (busca los rayos de luz): en torres, islas flotantes, bóvedas con llave, sobre pilares o al final de rutas fuera del mapa
-                (con un <strong>portal</strong> para volver). Con todos los orbes se rompe el escudo de la <strong>fortaleza</strong> del centro: entra por la
-                puerta y sube su espiral, la parte más difícil del nivel, hasta la cima.
-              </p>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li><strong>Roca:</strong> camina contra ella para empujarla hasta el pilar alto y súbete encima para alcanzar el orbe. Si se cae, vuelve a su sitio.</li>
-                <li><strong>Bóveda con candado:</strong> el orbe está encerrado; necesitas una llave. Búscala en las islas del cielo (sube con un trampolín).</li>
-                <li><strong>Ladrón de llaves:</strong> si un enemigo lleva una llave sobre la cabeza, salta encima de él para quitársela.</li>
-                <li><strong>Vigía:</strong> si su luz te ve, vuelves a la entrada de la zona. Escóndete tras los muros y avanza cuando mire a otro lado.</li>
-              </ul>
-            </div>
-
-            {/* Game Modes Guide */}
-            <div className="p-3 rounded-2xl bg-[#fff1de] border border-cozy-line text-[11px] text-cozy-ink leading-relaxed mb-3">
-              <strong className="text-cozy-accent-deep inline-flex items-center gap-1">
-                <Trophy className="w-3.5 h-3.5" />
-                {UI.gameModes} disponibles:
-              </strong>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li>
-                  <strong>Modo libre:</strong> Salta sin prisa. Sin reloj ni enemigos. El clima cambia poco a poco.
-                </li>
-                <li>
-                  <strong>Modo contrarreloj:</strong> Empiezas con 90 segundos. Cada reliquia o bellota otorga <strong>+8 segundos</strong> y cada campana de punto de control te da <strong>+15 segundos</strong>.
-                </li>
-                <li>
-                  <strong>Modo persecución:</strong> Un <em>Acechador Sombrío</em> aparece detrás de ti y te persigue por todo el archipiélago. Si te alcanza, te expulsará de la plataforma. ¡Mantente en movimiento!
-                </li>
-              </ul>
-            </div>
-
-            {/* Mobile Touch Section */}
-            <div className="mb-4">
-              <span className="text-[11px] text-cozy-accent-deep font-bold uppercase tracking-wider block mb-2">
-                Controles en el móvil
-              </span>
-              <div className="space-y-2 text-xs text-cozy-ink">
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Orientación</span>
-                  <span className="text-stone-200">Gira el móvil físicamente a horizontal</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Botón pantalla completa</span>
-                  <span className="text-cozy-ink">Ocupa toda la pantalla</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">{UI.objective}</span>
-                  <span className="text-stone-200">Al empezar y en el menú de pausa</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Palanca (abajo izquierda)</span>
-                  <span className="text-cozy-ink">Mueve en cualquier dirección; al borde, corre</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Botón saltar (abajo a la derecha)</span>
-                  <span className="text-stone-200">Salto y rebote</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-cozy-line">
-                  <span className="text-cozy-muted">Girar y acercar</span>
-                  <span className="text-cozy-ink">Un dedo gira, dos dedos acercan</span>
+                <div>
+                  <span className="text-[11px] text-cozy-accent-deep font-bold uppercase tracking-wider block mb-2">
+                    Atajos rápidos
+                  </span>
+                  <div className="space-y-2 text-xs text-cozy-ink">
+                    {POWER_SHORTCUTS.slice(0, 5).map((row) => (
+                      <div key={`${row.action}-${row.keys}`} className="flex justify-between items-center gap-3 py-1 border-b border-cozy-line">
+                        <span className="text-cozy-muted">
+                          {row.action}
+                          <span className="block text-[10px] text-cozy-soft">{row.context}</span>
+                        </span>
+                        <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep shrink-0">
+                          {row.keys}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
-            {/* Enhanced Object Physics & Varied Obstacles Section */}
-            <div className="p-3 rounded-2xl bg-cozy-sky-soft border border-cozy-line text-[11px] text-cozy-ink leading-relaxed mb-3">
-              <strong className="text-cozy-accent-deep">Obstáculos y elementos del mundo:</strong>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li><strong>Hongos elásticos:</strong> Al tocarlos o rozarlos te lanzan de inmediato por los cielos con un salto vertical potente hacia las nubes.</li>
-                <li><strong>Corriente de aire:</strong> Te eleva hacia las nubes para alcanzar plataformas lejanas.</li>
-                <li><strong>Molinos florales giratorios:</strong> Aspas de madera suave que rotan sobre puentes; sincroniza tu paso para cruzarlos.</li>
-                <li><strong>Troncos rodantes de equilibrio:</strong> Troncos cubiertos de musgo que giran sobre su eje, requiriendo paso ágil.</li>
-                <li><strong>Géiseres de esporas cálidas:</strong> Calderas que erupcionan ráfagas rítmicas de vapor para impulsarte en el aire.</li>
-                <li><strong>Pelotas de lana:</strong> Rebotan y empujan al chocar.</li>
-                <li><strong>Plataformas quebradizas:</strong> Tiemblan bajo tu peso, cayendo tras un breve instante y regenerándose después.</li>
-              </ul>
-            </div>
+            {/* TAB 2: COMPAÑEROS */}
+            {helpTab === 'companions' && (
+              <div className="flex flex-col gap-3 animate-in fade-in duration-150">
+                <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-700/40 text-xs text-amber-100/90 leading-relaxed">
+                  <strong className="text-cozy-accent-deep block mb-1">Poderes de tu compañero (Tecla G):</strong>
+                  <ul className="list-disc list-inside space-y-1.5">
+                    {Object.values(COMPANION_POWERS).map((p) =>
+                      p ? (
+                        <li key={p.companion}>
+                          <strong>{p.companionName} – {p.powerName}:</strong> {p.desc} ({p.duration}s de duración).
+                        </li>
+                      ) : null
+                    )}
+                  </ul>
+                  <div className="mt-3 pt-2.5 border-t border-amber-600/30 text-[11px]">
+                    🍎 <strong>Recarga de energía:</strong> Después de activarlo, tu compañero queda hambriento. Dale una <strong>baya mágica</strong> desde la mochila para volver a usarlo.
+                  </div>
+                </div>
+              </div>
+            )}
 
-            {/* Photo Mode Guide */}
-            <div className="p-3 rounded-2xl cozy-panel-soft text-[11px] leading-relaxed mb-3">
-              <strong className="text-cozy-accent-deep">Modo foto:</strong>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li><strong>Cámara libre:</strong> Acerca, aleja, sube, baja e inclina la vista a tu gusto.</li>
-                <li><strong>Pausar acción:</strong> Congela el tiempo para capturar poses en el aire.</li>
-                <li><strong>Filtros artísticos:</strong> Hora dorada, pastel ensueño, atardecer cálido, noche estelar, película clásica y natural.</li>
-                <li><strong>Marcos:</strong> Polaroid, cine, postal y guía suave.</li>
-                <li><strong>Guardar:</strong> Descarga tu foto al instante.</li>
-              </ul>
-            </div>
+            {/* TAB 3: MUNDOS Y OBJETOS */}
+            {helpTab === 'worlds' && (
+              <div className="flex flex-col gap-3 text-xs leading-relaxed animate-in fade-in duration-150">
+                <div className="p-3 rounded-2xl cozy-panel-soft">
+                  <strong className="text-cozy-accent-deep block mb-1">Orbes y fortalezas (Niveles abiertos):</strong>
+                  <p className="text-cozy-muted text-[11px] mb-2">
+                    En cada nivel hay orbes místicos que desprenden un haz de luz vertical. Al reunirlos todos se abre la fortaleza central para llegar a la cima.
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 text-cozy-ink text-[11px]">
+                    <li><strong>Rocas empujables:</strong> Camina contra ellas para acercarlas y saltar encima.</li>
+                    <li><strong>Bóvedas con candado:</strong> Busca la llave escondida en islas altas o custodiada por ladrones.</li>
+                    <li><strong>Vigías:</strong> Ocultate tras las paredes cuando su linterna apunte hacia ti.</li>
+                  </ul>
+                </div>
 
-            {/* Cozy Enemies Guide */}
-            <div className="p-3 rounded-2xl bg-cozy-moss-soft border border-cozy-line text-[11px] text-cozy-ink leading-relaxed mb-4">
-              <strong className="text-cozy-moss">Criaturas pacíficas y desafíos:</strong>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li>
-                  <strong>Duendes bellota:</strong> Seres de musgo con casco de bellota. ¡Salta sobre su cabeza para impulsarte!
-                </li>
-                <li>
-                  <strong>Nubes sopladoras:</strong> Inflan las mejillas y soplan brisas que ponen a prueba tu equilibrio.
-                </li>
-              </ul>
-            </div>
+                <div className="p-3 rounded-2xl bg-cozy-sky-soft border border-cozy-line">
+                  <strong className="text-cozy-accent-deep block mb-1">Obstáculos del mundo:</strong>
+                  <ul className="list-disc list-inside space-y-1 text-cozy-ink text-[11px]">
+                    <li><strong>Hongos elásticos:</strong> Te lanzan con gran impulso hacia las alturas.</li>
+                    <li><strong>Molinos de viento:</strong> Mide bien el tiempo para pasar entre sus aspas.</li>
+                    <li><strong>Troncos rodantes:</strong> Mantén el equilibrio mientras giran sobre su eje.</li>
+                    <li><strong>Plataformas quebradizas:</strong> Caen segundos después de pisarlas.</li>
+                  </ul>
+                </div>
+              </div>
+            )}
 
-            <div className="flex flex-col gap-2">
+            {/* TAB 4: MODOS DE JUEGO */}
+            {helpTab === 'modes' && (
+              <div className="flex flex-col gap-3 animate-in fade-in duration-150">
+                <div className="p-3.5 rounded-2xl bg-[#fff1de] border border-cozy-line text-xs text-cozy-ink leading-relaxed">
+                  <strong className="text-cozy-accent-deep inline-flex items-center gap-1.5 font-bold mb-2">
+                    <Trophy className="w-4 h-4" />
+                    Tres formas de jugar:
+                  </strong>
+                  <div className="space-y-3 text-[11px]">
+                    <div className="p-2 rounded-xl bg-white/70 border border-stone-200">
+                      <strong className="text-emerald-700">🌱 Modo Libre:</strong>
+                      <p className="text-stone-600 mt-0.5">Explora el archipiélago con calma, sin límite de tiempo ni enemigos que te persigan. Ideal para disfrutar el paisaje y tomar fotos.</p>
+                    </div>
+                    <div className="p-2 rounded-xl bg-white/70 border border-stone-200">
+                      <strong className="text-amber-700">⏱️ Modo Contrarreloj:</strong>
+                      <p className="text-stone-600 mt-0.5">Comienzas con 90 segundos. Cada reliquia dorada te otorga <strong>+8s</strong> y cada campana de descanso te da <strong>+15s</strong>. ¡Tus mejores tiempos quedan en el Ranking!</p>
+                    </div>
+                    <div className="p-2 rounded-xl bg-white/70 border border-stone-200">
+                      <strong className="text-rose-700">👻 Modo Persecución:</strong>
+                      <p className="text-stone-600 mt-0.5">El Acechador Sombrío sigue tus pasos sin detenerse. Si te alcanza te expulsará de la isla. ¡Usa los hongos elásticos y corre para escapar!</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2 pt-2 border-t border-cozy-line">
               <button
                 type="button"
                 onClick={() => setShowHelpModal(false)}
@@ -3390,17 +3580,72 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               >
                 {UI.understood}
               </button>
-              <button
-                type="button"
-                onClick={() => setShowHelpModal(false)}
-                className={BTN.ghost}
-              >
-                {UI.cancel}
-              </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* First-Time Guidance / Tutorial Card (Level 1) */}
+      {showTutorialHint && gameState === 'playing' && (engine?.currentLevel ?? 1) === 1 && (
+        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 pointer-events-auto z-30 max-w-sm w-[90vw] animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="rounded-2xl cozy-panel p-4 shadow-xl border border-amber-300/60 bg-amber-50/95 text-stone-900 font-ui flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 font-display font-bold text-sm text-amber-900">
+                <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
+                Guía rápida · Primeros pasos
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTutorialHint(false);
+                  localStorage.setItem('cozy_tutorial_seen', 'true');
+                }}
+                className="text-stone-400 hover:text-stone-700 cursor-pointer p-0.5"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-1.5 text-xs text-stone-700 leading-relaxed">
+              <p>🌱 <strong>Muévete:</strong> Teclas WASD / Flechas (o la palanca táctil en móvil).</p>
+              <p>✨ <strong>Objetivo:</strong> Recoge las <strong>12 reliquias doradas</strong> repartidas en las islas.</p>
+              <p>🚩 <strong>Meta:</strong> Salta sobre hongos y sube a la plataforma final para ganar.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setShowTutorialHint(false);
+                localStorage.setItem('cozy_tutorial_seen', 'true');
+              }}
+              className="mt-1 w-full py-1.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs cursor-pointer text-center shadow-sm transition-colors"
+            >
+              ¡Entendido, a jugar!
+            </button>
+          </div>
+        </div>
+      )}
+
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        engine={engine}
+        isMuted={isMuted}
+        onToggleMute={toggleMute}
+        language={language}
+        onLanguageChange={(l) => {
+          setLanguage(l);
+          localStorage.setItem('cozy_lang', l);
+        }}
+        largeText={largeText}
+        onLargeTextChange={(lt) => {
+          setLargeText(lt);
+          localStorage.setItem('cozy_large_text', String(lt));
+        }}
+        showFps={showFps}
+        onShowFpsChange={(f) => {
+          setShowFps(f);
+          localStorage.setItem('cozy_show_fps', String(f));
+        }}
+      />
 
       <AuthModal
         isOpen={showAuthModal}

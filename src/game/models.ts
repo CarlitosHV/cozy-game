@@ -2031,15 +2031,42 @@ export function createVictoryPortal(
     motes.push(m);
   }
 
-  // Vertical light beacon beam (soft translucent cylinder rising upward)
-  const beamGeom = new THREE.CylinderGeometry(0.85, 0.85, 14, 16, 1, true);
-  beamGeom.translate(0, 7 + 0.28, 0);
+  // Vertical light beacon beam (soft translucent cylinder rising upward with smooth gradient fade to avoid clipping)
+  const beamTexCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+  let beamGradientTex: THREE.CanvasTexture | null = null;
+  if (beamTexCanvas) {
+    beamTexCanvas.width = 32;
+    beamTexCanvas.height = 256;
+    const bCtx = beamTexCanvas.getContext('2d');
+    if (bCtx) {
+      const col = new THREE.Color(themeColor);
+      const r = Math.round(col.r * 255);
+      const g = Math.round(col.g * 255);
+      const b = Math.round(col.b * 255);
+      const grad = bCtx.createLinearGradient(0, 256, 0, 0); // bottom to top
+      grad.addColorStop(0.0, `rgba(${r},${g},${b},0)`);
+      grad.addColorStop(0.08, `rgba(${r},${g},${b},0.4)`);
+      grad.addColorStop(0.35, `rgba(${r},${g},${b},0.28)`);
+      grad.addColorStop(0.7, `rgba(${r},${g},${b},0.1)`);
+      grad.addColorStop(1.0, `rgba(${r},${g},${b},0)`);
+      bCtx.fillStyle = grad;
+      bCtx.fillRect(0, 0, 32, 256);
+      beamGradientTex = new THREE.CanvasTexture(beamTexCanvas);
+      beamGradientTex.wrapS = THREE.ClampToEdgeWrapping;
+      beamGradientTex.wrapT = THREE.ClampToEdgeWrapping;
+    }
+  }
+
+  const beamGeom = new THREE.CylinderGeometry(1.4, 0.85, 28, 20, 1, true);
+  beamGeom.translate(0, 14 + 0.28, 0);
   const beamMat = new THREE.MeshBasicMaterial({
     color: themeColor,
+    map: beamGradientTex,
     transparent: true,
-    opacity: 0.18,
+    opacity: 0.35,
     side: THREE.DoubleSide,
     depthWrite: false,
+    blending: THREE.AdditiveBlending,
   });
   const beam = new THREE.Mesh(beamGeom, beamMat);
   group.add(beam);

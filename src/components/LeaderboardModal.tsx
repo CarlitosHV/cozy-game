@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Trophy, Clock, X, RefreshCw, Medal } from 'lucide-react';
+import { Trophy, Clock, X, RefreshCw, Medal, Loader2 } from 'lucide-react';
 import { apiClient, LeaderboardEntry } from '../services/apiClient';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { ActionFeedbackBanner } from './ActionFeedback';
@@ -146,7 +146,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
           {(
             [
               { id: 'time_trial' as const, label: 'Contrarreloj' },
-              { id: 'free' as const, label: 'Libre' },
+              { id: 'chase' as const, label: 'Persecución' },
             ] as const
           ).map((m) => (
             <button
@@ -172,21 +172,28 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
         />
 
         <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[220px]">
-          {loadAction.busy && !hasLoadedOnce && !loadAction.showLoading ? (
-            <div className="flex flex-col items-center justify-center h-48 text-cozy-soft text-xs">
-              <span>Un momento...</span>
+          {loadAction.busy ? (
+            <div className="flex flex-col items-center justify-center h-48 text-cozy-muted text-xs gap-3">
+              <Loader2 className="w-7 h-7 text-cozy-accent-deep animate-spin" />
+              <span>Cargando mejores tiempos...</span>
             </div>
           ) : loadAction.feedback?.type === 'error' && entries.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 text-cozy-soft text-xs text-center p-4 gap-3">
-              <Medal className="w-10 h-10 text-cozy-soft stroke-[1.5]" />
-              <p>No pudimos cargar el ranking. Revisa tu conexión y toca Actualizar.</p>
+            <div className="flex flex-col items-center justify-center h-48 text-cozy-ink text-xs text-center p-4 gap-3 bg-amber-500/10 rounded-2xl border border-amber-500/20">
+              <Medal className="w-10 h-10 text-cozy-accent-deep stroke-[1.5]" />
+              <div className="space-y-1">
+                <p className="font-bold text-cozy-ink">No se pudo conectar con el ranking</p>
+                <p className="text-cozy-muted text-[11px]">
+                  El servidor de clasificaciones no respondió. Revisa tu conexión y vuelve a intentar.
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => void fetchLeaderboard(true)}
                 disabled={loadAction.busy}
-                className={BTN.primary}
+                className={`${BTN.primary} flex items-center justify-center gap-2 text-xs py-2 px-4`}
               >
-                {UI.retryLoad}
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Reintentar</span>
               </button>
             </div>
           ) : entries.length === 0 ? (
