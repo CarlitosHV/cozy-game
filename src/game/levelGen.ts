@@ -1039,7 +1039,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
  * The theme backdrops were made for a straight route along +z. Build one in its own group,
  * center it on the zone and push every solid piece out of the play area (radius playR).
  */
-function addOpenBackdrop(
+export function addOpenBackdrop(
   root: THREE.Object3D,
   textures: ProceduralTextures,
   themeId: ThemeId,

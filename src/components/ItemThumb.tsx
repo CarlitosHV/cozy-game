@@ -77,6 +77,80 @@ export const ItemThumb: React.FC<{
     );
   }
 
+  const svg = (children: React.ReactNode) => (
+    <svg viewBox="0 0 32 32" className={`select-none pointer-events-none drop-shadow-sm ${className}`} aria-label={label}>
+      <title>{label}</title>
+      {children}
+    </svg>
+  );
+
+  switch (type) {
+    case 'resortera':
+      return svg(
+        <>
+          <path d="M16 29 L16 17 M16 17 L9 6 M16 17 L23 6" stroke="#92400e" strokeWidth="3.2" strokeLinecap="round" fill="none" />
+          <path d="M9 7 Q16 16 23 7" stroke="#ef4444" strokeWidth="1.8" fill="none" />
+          <circle cx="16" cy="12.5" r="2.4" fill="#9ca3af" stroke="#4b5563" strokeWidth="1" />
+        </>
+      );
+    case 'piedra':
+      return svg(
+        <>
+          <path d="M5 24 L8 16 L15 14 L19 19 L17 26 L9 27 Z" fill="#a8a29e" stroke="#57534e" strokeWidth="1.3" strokeLinejoin="round" />
+          <path d="M16 22 L19 14 L25 13 L28 19 L26 25 L19 26 Z" fill="#d6d3d1" stroke="#57534e" strokeWidth="1.3" strokeLinejoin="round" />
+          <path d="M11 13 L14 7 L20 7 L22 12 L18 15 L13 15 Z" fill="#78716c" stroke="#44403c" strokeWidth="1.3" strokeLinejoin="round" />
+        </>
+      );
+    case 'bate':
+      return svg(
+        <>
+          <path d="M6 27 L9 24" stroke="#1f2937" strokeWidth="4" strokeLinecap="round" />
+          <path d="M8.5 24.5 L24 6.5" stroke="#d97706" strokeWidth="5.5" strokeLinecap="round" />
+          <path d="M18 12 L24 6.5" stroke="#f59e0b" strokeWidth="7" strokeLinecap="round" />
+          <path d="M20 9 L23 6" stroke="#fde68a" strokeWidth="1.4" strokeLinecap="round" />
+        </>
+      );
+    case 'red':
+      return svg(
+        <>
+          <path d="M6 28 L14 18" stroke="#78350f" strokeWidth="2.6" strokeLinecap="round" />
+          <circle cx="19" cy="12" r="9" fill="#cffafe" fillOpacity="0.35" stroke="#0e7490" strokeWidth="2.2" />
+          <path d="M12 8 L26 16 M11 13 L24 20 M14 5 L27 11 M15 20 L23 5 M11 16 L18 4 M19 21 L27 9" stroke="#22d3ee" strokeWidth="0.9" />
+        </>
+      );
+    case 'bomba':
+      return svg(
+        <>
+          <circle cx="15" cy="19" r="9" fill="#1f2937" stroke="#030712" strokeWidth="1.2" />
+          <rect x="12.5" y="8.5" width="5" height="3" rx="1" fill="#6b7280" />
+          <path d="M16 8.5 Q18 4 22 5" stroke="#d6d3d1" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+          <circle cx="23" cy="4.5" r="2.6" fill="#fbbf24" />
+          <circle cx="23" cy="4.5" r="1.2" fill="#fff7ed" />
+          <circle cx="11.5" cy="15.5" r="2" fill="#9ca3af" opacity="0.7" />
+        </>
+      );
+    case 'luz':
+      return svg(
+        <>
+          <circle cx="16" cy="16" r="12" fill="#fde68a" opacity="0.35" />
+          <circle cx="16" cy="16" r="7.5" fill="#fef9c3" stroke="#facc15" strokeWidth="1.6" />
+          <path d="M16 3 L16 7 M16 25 L16 29 M3 16 L7 16 M25 16 L29 16 M7 7 L9.5 9.5 M22.5 22.5 L25 25 M25 7 L22.5 9.5 M9.5 22.5 L7 25" stroke="#facc15" strokeWidth="1.6" strokeLinecap="round" />
+          <circle cx="14" cy="14" r="2" fill="#ffffff" />
+        </>
+      );
+    case 'antorcha':
+      return svg(
+        <>
+          <path d="M16 29 L16 15" stroke="#78350f" strokeWidth="3.4" strokeLinecap="round" />
+          <rect x="12.5" y="13" width="7" height="3.5" rx="1" fill="#44403c" />
+          <path d="M16 3 C21 8, 21 12, 16 13 C11 12, 11 8, 16 3 Z" fill="#fb923c" stroke="#ea580c" strokeWidth="1" />
+          <path d="M16 7 C18 9.5, 18 11, 16 12 C14 11, 14 9.5, 16 7 Z" fill="#fef08a" />
+        </>
+      );
+    default:
+      break;
+  }
+
   // type === 'llave'
   return (
     <svg

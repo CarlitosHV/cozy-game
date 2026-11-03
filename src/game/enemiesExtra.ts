@@ -765,7 +765,7 @@ export function spawnExtraEnemy(
 // ===========================================================================
 
 /** A garden gnome ~1m tall facing +z. Returns the parts used by animations. */
-function gnome(root: THREE.Object3D, alert: THREE.Material, hatColor: number, tunicColor: number) {
+export function gnome(root: THREE.Object3D, alert: THREE.Material, hatColor: number, tunicColor: number) {
   const skinM = std(0xf2c9a0, 0.7);
   const tunic = std(tunicColor, 0.6);
   const bootM = std(0x5b3a1f, 0.8);
@@ -803,7 +803,7 @@ function gnome(root: THREE.Object3D, alert: THREE.Material, hatColor: number, tu
 }
 
 /** A vampire ~1.25m tall with a cape. */
-function vampire(root: THREE.Object3D, alert: THREE.Material, capeColor: number, liningColor: number) {
+export function vampire(root: THREE.Object3D, alert: THREE.Material, capeColor: number, liningColor: number) {
   const pale = std(0xe6e1ef, 0.6);
   const black = std(0x15121c, 0.6);
   for (const s of [1, -1]) root.add(mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.38, 8), black, 0.1 * s, 0.19, 0));

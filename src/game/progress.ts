@@ -5,6 +5,8 @@
  *  - Levels unlock in order: finish level N to play level N+1.
  *  - Companions unlock every 10 levels: 10 Nubi, 20 Estelita, 30 Chispa, 40 Catarina,
  *    50 Lila (hada), 60 Jade (serpiente voladora).
+ *  - Two generators: "Caja de arena" (open zone with orbs) and "Lucha contra jefes"
+ *    (an arena with the world's boss). Which one a level gets is random but fixed per level.
  * Tip for testing: add ?desbloquear=todo to the URL to unlock everything (up to level 61).
  */
 import type { CompanionStyle } from './character';
@@ -18,6 +20,8 @@ export interface LevelInfo {
   theme: ThemeId;
   accent: string;
   generated: boolean;
+  /** Boss of this level (null on sandbox and handmade levels) */
+  boss: BossKind | null;
 }
 
 const THEME_ORDER: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero', 'garden', 'castle'];
@@ -37,16 +41,131 @@ export function themeForLevel(level: number): ThemeId {
   return THEME_ORDER[idx % THEME_ORDER.length];
 }
 
+// ---------------------------------------------------------------------------
+// Level generators: from level 5 on, each level is (at random, but always the same for a
+// given number) either a "Caja de arena" open zone or a "Lucha contra jefe" arena.
+// ---------------------------------------------------------------------------
+export type LevelKind = 'handmade' | 'sandbox' | 'boss';
+export type BossKind = 'bird' | 'glitch' | 'ufo' | 'skeleton' | 'gnome' | 'dracula';
+
+/** One boss per world. */
+export const BOSS_FOR_THEME: Record<ThemeId, BossKind> = {
+  cozy: 'bird',
+  aero: 'glitch',
+  cosmic: 'ufo',
+  swamp: 'skeleton',
+  garden: 'gnome',
+  castle: 'dracula',
+};
+
+export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: string; steps: string[] }> = {
+  bird: {
+    name: 'Plumarroca, el Ave de Piedra',
+    short: 'Plumarroca',
+    desc: 'Un ave gigante lanza piedras desde lo alto de las torres.',
+    steps: [
+      'Plumarroca lanza piedras: mira las sombras rojas en el suelo y esquívalas',
+      'Sube por los escalones de la torre donde está posada',
+      'Golpéala con el bate o cáele encima de un salto',
+      'Cada golpe la hace volar a otra torre: ¡síguela!',
+      'Con la resortera puedes aturdirla un momento desde abajo',
+    ],
+  },
+  glitch: {
+    name: 'ERR0R.exe, el Monstruo Glitch',
+    short: 'ERR0R.exe',
+    desc: 'Un error del sistema que crea copias glitch de ti.',
+    steps: [
+      'ERR0R.exe crea copias glitch de tu personaje: derrótalas',
+      'Usa el bate, la resortera o cáeles encima',
+      'Cada copia suelta un orbe de luz: recógelo',
+      'Lanza los orbes de luz al monstruo (usa el objeto apuntando con la cámara)',
+      'Salta las ondas de pantallazo que salen del monstruo',
+    ],
+  },
+  ufo: {
+    name: 'La Nave Nodriza',
+    short: 'Nave Nodriza',
+    desc: 'Un ovni gigante dispara láseres y se cura secuestrando vacas.',
+    steps: [
+      'Junta piedras y dispárale al vidrio del ovni con la resortera',
+      'Esquiva los círculos rojos: ahí cae un rayo láser',
+      'Si el ovni secuestra una vaca, se cura: ¡lánzale la red a la vaca!',
+      'Mientras secuestra, el ovni se queda quieto: buen momento para disparar',
+    ],
+  },
+  skeleton: {
+    name: 'Huesudo, el Esqueleto del Pantano',
+    short: 'Huesudo',
+    desc: 'Un esqueleto gigante sale del pantano con esqueletos bailarines.',
+    steps: [
+      'Los esqueletos bailarines te atrapan y te llevan a la boca de Huesudo',
+      'Si te atrapan, pulsa saltar muchas veces para soltarte',
+      'Rescata a tus amigos golpeando al que tiene la jaula de huesos',
+      'Junta bombas y lánzalas a la boca de Huesudo cuando la abra',
+    ],
+  },
+  gnome: {
+    name: 'El Rey Gnomo',
+    short: 'Rey Gnomo',
+    desc: 'El rey de los gnomos ataca con su mazo gigante.',
+    steps: [
+      'El Rey Gnomo golpea el suelo con su mazo: salta las ondas',
+      'Lánzale la red para atraparlo unos segundos',
+      'Mientras está atrapado, golpéalo con el bate, piedras o cayéndole encima',
+      'Las redes se rompen: busca otra si se te acaba',
+    ],
+  },
+  dracula: {
+    name: 'El Conde Drácula',
+    short: 'Drácula',
+    desc: 'Drácula oscurece todo; solo la luz de los candelabros lo debilita.',
+    steps: [
+      'Drácula oscurece la pantalla y ataca en picada: esquívalo',
+      'Toma una antorcha y acércate a los candelabros para prenderlos',
+      'Con todos los candelabros prendidos, Drácula cae debilitado',
+      'Golpéalo mientras está débil: luego volverá a apagar las velas',
+    ],
+  },
+};
+
+function mulberry(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Handmade worlds 1-4; from 5 on, each level is randomly (but always the same) a sandbox or a boss fight. */
+export function levelKind(level: number): LevelKind {
+  if (level <= 4) return 'handmade';
+  return mulberry(level * 7717 + 3 * 131)() < 0.3 ? 'boss' : 'sandbox';
+}
+
+export function isBossLevel(level: number): boolean {
+  return levelKind(level) === 'boss';
+}
+
+export function bossForLevel(level: number): BossKind | null {
+  return isBossLevel(level) ? BOSS_FOR_THEME[themeForLevel(level)] : null;
+}
+
 export function levelInfo(level: number): LevelInfo {
   const theme = themeForLevel(level);
   const t = THEME_INFO[theme];
+  const boss = bossForLevel(level);
   return {
     id: level,
-    name: t.name,
-    desc: level <= 4 ? t.desc : t.desc,
+    name: boss ? `Jefe: ${BOSS_INFO[boss].short} · ${t.name}` : t.name,
+    desc: boss ? BOSS_INFO[boss].desc : t.desc,
     theme,
     accent: t.accent,
     generated: level > 4,
+    boss,
   };
 }
 
@@ -105,6 +224,20 @@ export function levelHowTo(level: number): LevelHowTo {
         'Sigue la ruta por cascadas y plataformas aéreas',
         'Usa impulsos y trampolines para salvar los huecos',
         'Llega a la Plaza del Globo y cruza el portal',
+      ],
+    };
+  }
+
+  const boss = bossForLevel(level);
+  if (boss) {
+    const b = BOSS_INFO[boss];
+    return {
+      title: `Nivel ${level} · ${b.name}`,
+      goal: `Derrota a ${b.short} y cruza el portal`,
+      steps: [
+        ...b.steps,
+        'Cuida tu barra de vida: hamburguesas y papitas la recuperan',
+        'Bate y red se rompen con el uso: en la arena aparecen más',
       ],
     };
   }

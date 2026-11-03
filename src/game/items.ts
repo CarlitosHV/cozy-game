@@ -4,12 +4,15 @@
  * 5-slot backpack when touched. Use them any time with keys 1-5 or the HUD.
  *  - Baya mágica: feeds your companion and recharges its power
  *  - Nuez energética: super jump for a while
+ *  - Boss fights: resortera (shoots piedras), bate & red (wear out with use), bombas,
+ *    orbes de luz and antorchas. Piedras, bombas and orbes stack in one slot.
  * New item types only need an entry in ITEM_INFO, a 3D model and a use effect.
  */
 import * as THREE from 'three';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
+import { createToolModel } from './toolModels';
 
-export type ItemType = 'baya' | 'nuez' | 'llave';
+export type ItemType = 'baya' | 'nuez' | 'llave' | 'resortera' | 'piedra' | 'bate' | 'red' | 'bomba' | 'luz' | 'antorcha';
 
 export interface ItemInfo {
   type: ItemType;
@@ -37,9 +40,70 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
     desc: 'Abre una puerta cerrada de este nivel. Se usa sola al llegar a la puerta.',
     color: '#facc15',
   },
+  resortera: {
+    type: 'resortera',
+    name: 'Resortera',
+    desc: 'Dispara una piedra al objetivo marcado (gira la cámara para elegirlo). Necesita piedras.',
+    color: '#b45309',
+  },
+  piedra: {
+    type: 'piedra',
+    name: 'Piedras',
+    desc: 'Munición de la resortera. Junta los montoncitos del suelo.',
+    color: '#a8a29e',
+  },
+  bate: {
+    type: 'bate',
+    name: 'Bate',
+    desc: 'Golpea lo que tengas enfrente (tecla F). Se rompe tras varios golpes.',
+    color: '#d97706',
+  },
+  red: {
+    type: 'red',
+    name: 'Red',
+    desc: 'Lánzala al objetivo marcado para atraparlo. Se rompe tras unos usos.',
+    color: '#22d3ee',
+  },
+  bomba: {
+    type: 'bomba',
+    name: 'Bomba',
+    desc: 'Lánzala al objetivo marcado. ¡Explota al llegar!',
+    color: '#ef4444',
+  },
+  luz: {
+    type: 'luz',
+    name: 'Orbe de luz',
+    desc: 'Lánzalo al monstruo glitch para dañarlo.',
+    color: '#fde68a',
+  },
+  antorcha: {
+    type: 'antorcha',
+    name: 'Antorcha',
+    desc: 'Alumbra en la oscuridad y prende los candelabros al acercarte.',
+    color: '#fb923c',
+  },
 };
 
-export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave'];
+export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave', 'resortera', 'piedra', 'bate', 'red', 'bomba', 'luz', 'antorcha'];
+
+/** Items that pile up in one slot (max per slot) */
+export const STACK_MAX: Partial<Record<ItemType, number>> = { piedra: 12, bomba: 3, luz: 3 };
+/** Tools that break: uses when new */
+export const DURABILITY: Partial<Record<ItemType, number>> = { bate: 12, red: 4 };
+/** How many you get from one pickup */
+const PICKUP_AMOUNT: Partial<Record<ItemType, number>> = { piedra: 3 };
+/** Only one of these is ever needed in the backpack */
+const UNIQUE: ItemType[] = ['resortera', 'antorcha'];
+/** Seconds before a pickup appears again */
+const RESPAWN_BY_TYPE: Partial<Record<ItemType, number>> = { piedra: 8, bate: 14, red: 14, resortera: 10, bomba: 9, antorcha: 6 };
+
+/** Count shown for a slot: stack size, uses left, or 1. */
+export function defaultCount(type: ItemType): number {
+  return DURABILITY[type] ?? PICKUP_AMOUNT[type] ?? 1;
+}
+
+/** Result of a combat tool action: not done, done, or done and it wore the tool / spent ammo. */
+export type ToolResult = 'none' | 'used' | 'wear';
 
 export const INVENTORY_SIZE = 5;
 const RESPAWN_SECONDS = 30;
@@ -52,6 +116,8 @@ export interface ItemSpot {
 
 export interface InventoryStatus {
   slots: (ItemType | null)[];
+  /** Stack size (piedras, bombas…) or uses left (bate, red); 1 for the rest */
+  counts: number[];
   superJumpLeft: number;
   eventId: number;
   eventText: string;
@@ -62,6 +128,8 @@ export interface ItemUseContext {
   /** Returns true if the companion actually ate the berry */
   feedCompanion: () => boolean;
   setJumpMultiplier: (mult: number) => void;
+  /** Boss fights: shoot, swing or throw (provided while a combat system is active) */
+  tool?: (type: ItemType) => ToolResult;
 }
 
 interface Pickup {
@@ -188,9 +256,14 @@ function createKeyModel(): { group: THREE.Group; halo: THREE.Mesh } {
   return { group, halo };
 }
 
-function createItemModel(type: ItemType) {
+function createItemModel(type: ItemType): { group: THREE.Group; halo: THREE.Mesh } {
   if (type === 'llave') return createKeyModel();
-  return type === 'nuez' ? createWalnutModel() : createBerryModel();
+  if (type === 'nuez') return createWalnutModel();
+  if (type === 'baya') return createBerryModel();
+  const group = createToolModel(type);
+  const halo = createHalo(new THREE.Color(ITEM_INFO[type].color).getHex());
+  group.add(halo);
+  return { group, halo };
 }
 
 /** The 3D item mesh for world pickups or UI previews (halo optional). */
@@ -247,7 +320,7 @@ export function getItemPreviewUrl(type: ItemType): string {
     const urls = {} as Record<ItemType, string>;
     for (const itemType of ITEM_TYPES) {
       const mesh = createItemMesh(itemType, false);
-      mesh.scale.setScalar(itemType === 'llave' ? 1.55 : itemType === 'nuez' ? 2.05 : 2.35);
+      mesh.scale.setScalar(itemType === 'llave' ? 1.55 : itemType === 'nuez' ? 2.05 : itemType === 'baya' ? 2.35 : 1.3);
       if (itemType === 'llave') mesh.rotation.z = -0.35;
       scene.add(mesh);
       renderer.render(scene, camera);
@@ -265,6 +338,7 @@ export function getItemPreviewUrl(type: ItemType): string {
 
 export class ItemSystem {
   public slots: (ItemType | null)[] = new Array(INVENTORY_SIZE).fill(null);
+  public counts: number[] = new Array(INVENTORY_SIZE).fill(0);
   public superJumpLeft = 0;
 
   private pickups: Pickup[] = [];
@@ -284,6 +358,7 @@ export class ItemSystem {
   public getStatus(): InventoryStatus {
     return {
       slots: [...this.slots],
+      counts: [...this.counts],
       superJumpLeft: this.superJumpLeft,
       eventId: this.eventId,
       eventText: this.eventText,
@@ -337,6 +412,7 @@ export class ItemSystem {
   /** Empties the backpack and stops item effects (new game). */
   public clearInventory(ctx?: ItemUseContext) {
     this.slots.fill(null);
+    this.counts.fill(0);
     this.superJumpLeft = 0;
     ctx?.setJumpMultiplier(1);
   }
@@ -344,7 +420,9 @@ export class ItemSystem {
   /** Sets inventory slots directly (used when syncing from backend). */
   public setSlots(newSlots: (ItemType | null)[]) {
     for (let i = 0; i < INVENTORY_SIZE; i++) {
-      this.slots[i] = newSlots[i] ?? null;
+      const t = newSlots[i] ?? null;
+      this.slots[i] = t && ITEM_INFO[t] ? t : null;
+      this.counts[i] = this.slots[i] ? defaultCount(this.slots[i]!) : 0;
     }
     this.emit('Mochila sincronizada');
   }
@@ -355,6 +433,21 @@ export class ItemSystem {
     if (!type) {
       this.emit(`El espacio ${slot + 1} está vacío`);
       return false;
+    }
+    // Boss-fight tools
+    if (type === 'resortera' || type === 'piedra') return this.shoot(ctx);
+    if (type === 'antorcha') {
+      this.emit('La antorcha prende los candelabros sola: acércate a uno');
+      return false;
+    }
+    if (type === 'bate' || type === 'red' || type === 'bomba' || type === 'luz') {
+      const r = ctx.tool ? ctx.tool(type) : 'none';
+      if (r === 'none') {
+        if (!ctx.tool) this.emit(`${ITEM_INFO[type].name}: sirve en las luchas contra jefes`);
+        return false;
+      }
+      if (r === 'wear') this.spend(slot);
+      return true;
     }
     let used = false;
     switch (type) {
@@ -372,8 +465,58 @@ export class ItemSystem {
         used = true;
         break;
     }
-    if (used) this.slots[slot] = null;
+    if (used) this.clearSlot(slot);
     return used;
+  }
+
+  private clearSlot(slot: number) {
+    this.slots[slot] = null;
+    this.counts[slot] = 0;
+  }
+
+  /** One less stone/bomb/orb, or one use less of a tool (it breaks at 0). */
+  private spend(slot: number) {
+    const type = this.slots[slot];
+    if (!type) return;
+    this.counts[slot] = Math.max(0, this.counts[slot] - 1);
+    if (this.counts[slot] > 0) return;
+    this.clearSlot(slot);
+    if (DURABILITY[type] !== undefined) {
+      soundManager.playEnemyBonk();
+      this.emit(type === 'bate' ? '¡Tu bate se rompió! Busca otro en la arena' : '¡Tu red se rompió! Busca otra en la arena');
+    }
+  }
+
+  /** Slingshot: needs the slingshot and at least one stone. */
+  private shoot(ctx: ItemUseContext): boolean {
+    if (!this.has('resortera')) {
+      this.emit('Las piedras se lanzan con una resortera: busca una');
+      return false;
+    }
+    const s = this.slots.indexOf('piedra');
+    if (s === -1) {
+      this.emit('No tienes piedras: junta los montoncitos del suelo');
+      return false;
+    }
+    const r = ctx.tool ? ctx.tool('resortera') : 'none';
+    if (r === 'none') {
+      if (!ctx.tool) this.emit('La resortera sirve en las luchas contra jefes');
+      return false;
+    }
+    if (r === 'wear') this.spend(s);
+    return true;
+  }
+
+  /** Total of a stackable item (e.g. stones) across slots. */
+  public total(type: ItemType): number {
+    let n = 0;
+    for (let i = 0; i < this.slots.length; i++) if (this.slots[i] === type) n += Math.max(1, this.counts[i]);
+    return n;
+  }
+
+  /** First slot holding a type (−1 if none). */
+  public slotOf(type: ItemType): number {
+    return this.slots.indexOf(type);
   }
 
   /** Shows a message in the HUD toast (used by puzzles). */
@@ -407,13 +550,13 @@ export class ItemSystem {
   public consume(type: ItemType): boolean {
     const i = this.slots.indexOf(type);
     if (i === -1) return false;
-    this.slots[i] = null;
+    this.clearSlot(i);
     return true;
   }
 
   /** Removes every item of a type (e.g. keys when changing level). */
   public removeAllOfType(type: ItemType) {
-    for (let i = 0; i < this.slots.length; i++) if (this.slots[i] === type) this.slots[i] = null;
+    for (let i = 0; i < this.slots.length; i++) if (this.slots[i] === type) this.clearSlot(i);
   }
 
   /** True if a pickup of this type is currently lying in the world. */
@@ -433,7 +576,7 @@ export class ItemSystem {
   public discard(slot: number): ItemType | null {
     const type = this.slots[slot];
     if (!type) return null;
-    this.slots[slot] = null;
+    this.clearSlot(slot);
     this.emit(`Tiraste: ${ITEM_INFO[type].name}`);
     return type;
   }
@@ -442,6 +585,7 @@ export class ItemSystem {
   public restore(slot: number, type: ItemType): boolean {
     if (this.slots[slot] === null) {
       this.slots[slot] = type;
+      this.counts[slot] = defaultCount(type);
       this.emit(`Recuperaste: ${ITEM_INFO[type].name}`);
       return true;
     }
@@ -451,6 +595,7 @@ export class ItemSystem {
       return false;
     }
     this.slots[free] = type;
+    this.counts[free] = defaultCount(type);
     this.emit(`Recuperaste: ${ITEM_INFO[type].name}`);
     return true;
   }
@@ -461,7 +606,7 @@ export class ItemSystem {
     for (let i = 0; i < this.slots.length; i++) {
       if (this.slots[i] !== type) continue;
       removed.push({ slot: i, type });
-      this.slots[i] = null;
+      this.clearSlot(i);
     }
     return removed;
   }
@@ -471,12 +616,14 @@ export class ItemSystem {
     for (const entry of entries) {
       if (this.slots[entry.slot] === null) {
         this.slots[entry.slot] = entry.type;
+        this.counts[entry.slot] = defaultCount(entry.type);
         n++;
         continue;
       }
       const free = this.slots.indexOf(null);
       if (free === -1) break;
       this.slots[free] = entry.type;
+      this.counts[free] = defaultCount(entry.type);
       n++;
     }
     if (n > 0) this.emit(`Recuperaste ${n} objeto${n === 1 ? '' : 's'}`);
@@ -520,20 +667,40 @@ export class ItemSystem {
       const distXZ = Math.hypot(dx, dz);
 
       if (distXZ < 1.45 && dy >= -0.5 && dy <= 2.2) {
-        const free = this.slots.indexOf(null);
-        if (free === -1) {
+        const info = ITEM_INFO[p.type];
+        if (UNIQUE.includes(p.type) && this.has(p.type)) {
           if (p.fullWarnCooldown <= 0) {
-            this.emit('¡Mochila llena (5/5)! Usa o tira un objeto primero');
-            p.fullWarnCooldown = 2.5;
+            this.emit(`Ya tienes ${p.type === 'resortera' ? 'una resortera' : 'una antorcha'}`);
+            p.fullWarnCooldown = 4;
           }
           continue;
         }
-        this.slots[free] = p.type;
+        const amount = PICKUP_AMOUNT[p.type] ?? 1;
+        const max = STACK_MAX[p.type];
+        // Stackable: top up a slot that already has some
+        let slot = -1;
+        if (max !== undefined) {
+          slot = this.slots.findIndex((t, i) => t === p.type && this.counts[i] < max);
+        }
+        if (slot !== -1) {
+          this.counts[slot] = Math.min(max!, this.counts[slot] + amount);
+        } else {
+          slot = this.slots.indexOf(null);
+          if (slot === -1) {
+            if (p.fullWarnCooldown <= 0) {
+              this.emit('¡Mochila llena (5/5)! Usa o tira un objeto primero');
+              p.fullWarnCooldown = 2.5;
+            }
+            continue;
+          }
+          this.slots[slot] = p.type;
+          this.counts[slot] = max !== undefined ? Math.min(max, amount) : defaultCount(p.type);
+        }
         p.available = false;
-        p.respawnTimer = p.oneShot ? 1e9 : p.type === 'llave' ? 6 : RESPAWN_SECONDS;
+        p.respawnTimer = p.oneShot ? 1e9 : p.type === 'llave' ? 6 : RESPAWN_BY_TYPE[p.type] ?? RESPAWN_SECONDS;
         soundManager.playCollectible();
-        const info = ITEM_INFO[p.type];
-        this.emit(`Guardaste: ${info.name} (tecla ${free + 1})`);
+        const extra = max !== undefined ? ` (${this.total(p.type)})` : '';
+        this.emit(`Guardaste: ${info.name}${extra} (tecla ${slot + 1})`);
       }
     }
   }

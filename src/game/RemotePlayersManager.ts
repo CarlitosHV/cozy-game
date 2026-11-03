@@ -11,6 +11,8 @@ import { sanitizeAppearance } from './character';
 import { createPlayerCharacter, PlayerCharacterModel } from './models';
 import { multiplayerClient, RemotePlayer } from '../services/multiplayerClient';
 import { apiClient } from '../services/apiClient';
+import { createBoneCage } from './bossModels';
+import { makeLabel } from './combatFx';
 
 interface RemotePlayerEntity {
   userId: string;
@@ -23,6 +25,9 @@ interface RemotePlayerEntity {
   targetYaw: number;
   anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall';
   lastSeen: number;
+  /** Boss fights: caught by a dancing skeleton (shows a bone cage + "¡Ayuda!") */
+  grabbed: boolean;
+  cage?: THREE.Group;
 }
 
 function createNameTagSprite(username: string): THREE.Sprite {
@@ -253,6 +258,7 @@ export class RemotePlayersManager {
           targetYaw: Number.isFinite(p.yaw) ? p.yaw : 0,
           anim: p.anim || 'idle',
           lastSeen: performance.now(),
+          grabbed: false,
         };
         this.players.set(p.userId, entity);
       } catch (err) {
@@ -276,6 +282,27 @@ export class RemotePlayersManager {
       entity.nameTag.material.dispose();
       this.players.delete(userId);
     }
+  }
+
+  /** Positions of everyone else in the room (boss fights: rescues, host choice). */
+  public getPlayersInfo(): { userId: string; username: string; pos: THREE.Vector3; grabbed: boolean }[] {
+    return [...this.players.values()].map((e) => ({ userId: e.userId, username: e.username, pos: e.currentPos, grabbed: e.grabbed }));
+  }
+
+  /** Shows/hides the bone cage on a friend caught by a skeleton. */
+  public setGrabbed(userId: string, on: boolean) {
+    const e = this.players.get(userId);
+    if (!e) return;
+    e.grabbed = on;
+    if (on && !e.cage) {
+      const cage = createBoneCage(0.7, 1.9);
+      const label = makeLabel('¡Ayuda!');
+      label.position.y = 2.9;
+      cage.add(label);
+      e.model.group.add(cage);
+      e.cage = cage;
+    }
+    if (e.cage) e.cage.visible = on;
   }
 
   public clearAll() {

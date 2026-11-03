@@ -14,13 +14,15 @@ import { createProceduralTextures, ProceduralTextures } from './textures';
 import { WeatherSystem } from './weather';
 import { AetherStalker } from './enemies';
 import { CompanionPowerSystem } from './companionPowers';
-import { ItemSystem, ItemType, ItemUseContext } from './items';
+import { ItemSystem, ItemType, ItemUseContext, ITEM_INFO } from './items';
 import { buildAeroWorld } from './levelAero';
 import { buildCosmicWorld } from './levelCosmic';
 import { buildSwampWorld } from './levelSwamp';
 import { makeGlowTexture } from './levelKit';
-import { LEVELS, markLevelComplete, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo } from './progress';
+import { LEVELS, markLevelComplete, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel } from './progress';
 import { generateLevel } from './levelGen';
+import { generateBossArena } from './bossArena';
+import { CombatStatus, CombatSystem } from './combat';
 import { PuzzleSystem } from './puzzles';
 import { CompanionStyle } from './character';
 import { RemotePlayersManager } from './RemotePlayersManager';
@@ -100,6 +102,10 @@ export class GameEngine {
   public puzzleSystem: PuzzleSystem = new PuzzleSystem();
   /** 3D online multiplayer avatars */
   public remotePlayers!: RemotePlayersManager;
+  /** Boss fights: life bar, tools, the boss itself (null on other levels) */
+  public combat: CombatSystem | null = null;
+  private lookRaise = 0;
+  private darkBase: { dir: number; hemi: number; fogDensity: number; fogColor: THREE.Color; exposure: number } | null = null;
 
   // Levels
   public currentLevel: number = 1;
@@ -304,6 +310,11 @@ export class GameEngine {
       setJumpMultiplier: (m: number) => {
         this.physics.jumpMultiplier = m;
       },
+      tool: (type: ItemType) => {
+        if (this.combat) return this.combat.tool(type);
+        this.itemSystem.notify(`${ITEM_INFO[type].name}: sirve en las luchas contra jefes`);
+        return 'none';
+      },
     };
 
     // 8. Weather System
@@ -326,6 +337,11 @@ export class GameEngine {
       if (data.levelId !== this.currentLevel) return;
       this.puzzleSystem.setBlockRemote(data.blockIndex, data.x, data.y, data.z);
     };
+    multiplayerClient.onWorldEvent = (data) => {
+      if (data.levelId !== this.currentLevel || !this.combat) return;
+      this.combat.onEvent(data.kind, data.i ?? 0, data.v ?? 0, data.target, data.userId ?? '', false);
+    };
+    this.resetCombat();
     if (this.partyRoomId) {
       multiplayerClient.joinLevel(this.currentLevel, this.partyRoomId);
     }
@@ -348,6 +364,7 @@ export class GameEngine {
 
   /** Time trial budget: open-world levels with orbs are bigger, so they get more time. */
   private timeTrialStart(): number {
+    if (this.world?.boss) return 240;
     const orbs = this.world?.puzzles?.orbs.length ?? 0;
     return orbs > 0 ? 100 + orbs * 25 : 90;
   }
@@ -474,8 +491,8 @@ export class GameEngine {
       case 1:
         return buildCozyParkourWorld(this.levelRoot, this.textures);
       default:
-        // Level 5 and beyond: dynamically generated from the 4 themes
-        return generateLevel(level, this.levelRoot, this.textures);
+        // Level 5 and beyond: generated — an open sandbox zone or a boss arena (random per level)
+        return isBossLevel(level) ? generateBossArena(level, this.levelRoot, this.textures) : generateLevel(level, this.levelRoot, this.textures);
     }
   }
 
@@ -533,6 +550,7 @@ export class GameEngine {
     if (level === this.currentLevel || !isLevelUnlocked(level)) return;
 
     // Tear down the old world
+    this.disposeCombat();
     if (this.stalker) {
       this.stalker.dispose();
       this.stalker = null;
@@ -573,6 +591,7 @@ export class GameEngine {
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.load(this.world.puzzles, this.world.platforms);
     this.reapplySharedWorld();
+    this.resetCombat();
 
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
     const cp0 = this.world.checkpoints[0];
@@ -643,6 +662,7 @@ export class GameEngine {
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.reset();
     this.reapplySharedWorld();
+    this.resetCombat();
     soundManager.init();
     soundManager.resume();
     if (mode) {
@@ -706,9 +726,125 @@ export class GameEngine {
   }
 
   /** Multiplayer: apply the party's shared progress (orbs found, rock positions) to this level. */
-  private applySharedWorld(data: { orbs: number[]; blocks: { index: number; x: number; y: number; z: number }[] }) {
+  private applySharedWorld(data: {
+    orbs: number[];
+    blocks: { index: number; x: number; y: number; z: number }[];
+    events?: { kind: string; i?: number; v?: number; target?: string; userId?: string }[];
+  }) {
     for (const i of data.orbs) this.puzzleSystem.collectOrbRemote(i, null, null);
     for (const b of data.blocks) this.puzzleSystem.setBlockRemote(b.index, b.x, b.y, b.z, true);
+    if (this.combat && data.events) {
+      for (const e of data.events) this.combat.onEvent(e.kind, e.i ?? 0, e.v ?? 0, e.target, e.userId ?? '', true);
+    }
+  }
+
+  // ---------------------------------------------------------------- Boss fights
+  private disposeCombat() {
+    if (!this.combat) return;
+    this.combat.dispose();
+    this.combat = null;
+    this.applyDarkness(0);
+  }
+
+  /** (Re)starts the boss fight of the current level, keeping what the party already did. */
+  private resetCombat() {
+    this.disposeCombat();
+    const setup = this.world.boss;
+    if (!setup) return;
+    // Start looking at the boss
+    this.cameraYaw = Math.atan2(setup.home.x - setup.spawn.x, setup.home.z - setup.spawn.z);
+    this.combat = new CombatSystem(setup, {
+      root: this.levelRoot,
+      textures: this.textures,
+      items: this.itemSystem,
+      physics: () => this.physics,
+      playerModel: () => this.playerModel,
+      appearance: () => this.playerAppearance,
+      cameraYaw: () => this.cameraYaw,
+      notify: (text) => this.itemSystem.notify(text),
+      send: (kind, i, v, target) => {
+        if (this.partyRoomId) multiplayerClient.sendEvent(this.currentLevel, kind, i, v, target);
+      },
+      isHost: () => this.isPartyHost(),
+      myId: () => apiClient.getCurrentUser()?._id ?? null,
+      remotes: () => (this.partyRoomId ? this.remotePlayers.getPlayersInfo() : []),
+      setRemoteGrabbed: (userId, on) => this.remotePlayers.setGrabbed(userId, on),
+      openPortal: () => {
+        this.world.victoryPortal = setup.portal;
+        this.world.summitPosition = setup.portalPos.clone();
+      },
+      closePortal: () => {
+        this.world.victoryPortal = undefined;
+        this.world.summitPosition = new THREE.Vector3(0, -999, 0);
+      },
+      unlockMovement: () => {
+        this.physics.isMovementLocked = this.isUIModalOpen || this.gameState === 'paused' || this.gameState === 'victory';
+      },
+    });
+    if (this.partyRoomId) {
+      const ws = multiplayerClient.getWorldState(this.currentLevel);
+      if (ws?.events) for (const e of ws.events) this.combat.onEvent(e.kind, e.i ?? 0, e.v ?? 0, e.target, e.userId ?? '', true);
+    }
+  }
+
+  /** In a party, the player with the smallest id decides shared random events (cow abductions…). */
+  private isPartyHost(): boolean {
+    if (!this.partyRoomId) return true;
+    const me = apiClient.getCurrentUser()?._id;
+    if (!me) return true;
+    const ids = this.remotePlayers.getPlayersInfo().map((p) => p.userId);
+    return ids.every((id) => me <= id);
+  }
+
+  /** Life bar, boss bar and hint for the HUD (null outside boss fights). */
+  public getCombatStatus(): CombatStatus | null {
+    return this.combat ? this.combat.getStatus() : null;
+  }
+
+  /** Key F / HUD button: swing the bat if you carry one. */
+  public quickAttack() {
+    if (this.gameState !== 'playing') return;
+    const slot = this.itemSystem.slotOf('bate');
+    if (slot === -1) {
+      this.itemSystem.notify(this.combat ? 'No tienes bate: búscalo en la arena' : 'El bate sirve en las luchas contra jefes');
+      return;
+    }
+    this.itemSystem.use(slot, this.itemCtx);
+  }
+
+  /** Dracula's darkness: dims the sun, sky light and fog towards black. */
+  private applyDarkness(d: number) {
+    const fog = this.scene.fog as THREE.FogExp2 | null;
+    if (d <= 0.002) {
+      if (this.darkBase) {
+        this.dirLight.intensity = this.darkBase.dir;
+        this.hemiLight.intensity = this.darkBase.hemi;
+        if (fog) {
+          fog.density = this.darkBase.fogDensity;
+          fog.color.copy(this.darkBase.fogColor);
+        }
+        this.renderer.toneMappingExposure = this.darkBase.exposure;
+        this.darkBase = null;
+      }
+      return;
+    }
+    if (!this.darkBase) {
+      this.darkBase = {
+        dir: this.dirLight.intensity,
+        hemi: this.hemiLight.intensity,
+        fogDensity: fog?.density ?? 0,
+        fogColor: fog ? fog.color.clone() : new THREE.Color(0),
+        exposure: this.renderer.toneMappingExposure,
+      };
+    }
+    const b = this.darkBase;
+    this.dirLight.intensity = b.dir * (1 - 0.92 * d);
+    this.hemiLight.intensity = b.hemi * (1 - 0.88 * d);
+    if (fog) {
+      fog.density = b.fogDensity + 0.03 * d;
+      fog.color.copy(b.fogColor).lerp(new THREE.Color(0x05030a), d);
+    }
+    this.renderer.toneMappingExposure = b.exposure * (1 - 0.35 * d);
   }
 
   /** After a restart or a level load, keep what the party already achieved. */
@@ -732,6 +868,7 @@ export class GameEngine {
   }
 
   public returnToTitle() {
+    this.resetCombat();
     multiplayerClient.leaveRoom();
     this.partyRoomId = null;
     this.remotePlayers?.clearAll();
@@ -838,6 +975,7 @@ export class GameEngine {
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.reset();
     this.reapplySharedWorld();
+    this.resetCombat();
     this.gameState = 'playing';
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
@@ -1033,6 +1171,9 @@ export class GameEngine {
     }
     if (e.code === 'KeyG' && !e.repeat) {
       this.activateCompanionPower();
+    }
+    if (e.code === 'KeyF' && !e.repeat) {
+      this.quickAttack();
     }
     const slotMatch = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);
     if (slotMatch && !e.repeat && !e.shiftKey) {
@@ -1609,6 +1750,11 @@ export class GameEngine {
       });
     }
 
+    // 6c. Boss fight (life, tools, the boss) — after physics so it can hold a grabbed player
+    if (this.combat && this.gameState === 'playing') {
+      this.combat.update(dt, time, this.currentInput);
+    }
+
     if (this.physics.collectedCount !== prevCollectibles) {
       this.callbacks.onCollectiblesChange(
         this.physics.collectedCount,
@@ -1621,6 +1767,7 @@ export class GameEngine {
 
     // 7. Update Weather & Background Clouds
     this.weatherSystem.update(dt, this.physics.position, time);
+    this.applyDarkness(this.combat?.darkness ?? 0);
 
     // 7b. Mobile / Touchscreen: Camera smoothly follows behind character
     const inputMagnitude = Math.hypot(this.currentInput.forward, this.currentInput.right);
@@ -1685,7 +1832,16 @@ export class GameEngine {
 
     // 8. Damped Third-Person Camera Follow
     const playerPos = this.physics.position;
-    this.targetLookAt.set(playerPos.x, playerPos.y + 1.1, playerPos.z);
+    // Boss fights: tilt the view up when the boss is high above (bird on its tower, the UFO…)
+    let raise = 0;
+    const focus = this.combat?.focus;
+    if (focus) {
+      const dy = focus.y + 1.5 - (playerPos.y + 1.1);
+      const dxz = Math.hypot(focus.x - playerPos.x, focus.z - playerPos.z);
+      if (dy > 2 && dxz < 40) raise = THREE.MathUtils.clamp(dy * 0.32, 0, 3.6) * THREE.MathUtils.clamp((40 - dxz) / 10, 0, 1);
+    }
+    this.lookRaise = THREE.MathUtils.damp(this.lookRaise, raise, 2.5, dt);
+    this.targetLookAt.set(playerPos.x, playerPos.y + 1.1 + this.lookRaise, playerPos.z);
 
     const cosPitch = Math.cos(this.cameraPitch);
     const sinPitch = Math.sin(this.cameraPitch);
@@ -1852,6 +2008,7 @@ export class GameEngine {
     window.removeEventListener('mouseup', this.handleMouseUp);
     dom.removeEventListener('wheel', this.handleWheel);
 
+    this.disposeCombat();
     this.remotePlayers?.clearAll();
     multiplayerClient.disconnect();
     this.stalker?.dispose();

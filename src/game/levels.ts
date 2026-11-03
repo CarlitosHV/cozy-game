@@ -4,6 +4,7 @@
  * Features solid physical colliders for trees, checkpoint shrines, bells, and obstacles,
  * and perfectly tuned reachable jump trajectories.
  */
+import type { BossSetup } from './bossArena';
 import * as THREE from 'three';
 import { EnemyManager } from './enemies';
 import {
@@ -103,6 +104,8 @@ export interface WorldBuildResult {
   puzzles?: PuzzleData;
   /** Hidden interactable for the Monse easter egg (early levels) */
   easterEgg?: { position: THREE.Vector3; radius: number };
+  /** "Lucha contra jefes" levels: the arena's boss (see bossArena.ts / combat.ts) */
+  boss?: BossSetup;
 }
 
 export function buildCozyParkourWorld(

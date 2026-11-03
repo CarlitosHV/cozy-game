@@ -56,6 +56,7 @@ import {
   Gem,
   Landmark,
   Heart,
+  Skull,
   Users,
   Gamepad2,
   Lock,
@@ -88,7 +89,8 @@ import {
   multiplayerClient,
   InviteReceivedPayload,
 } from '../services/multiplayerClient';
-import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus } from '../game/items';
+import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus, STACK_MAX, DURABILITY } from '../game/items';
+import type { CombatStatus } from '../game/combat';
 import type { ItemType } from '../game/items';
 import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
 import { ItemThumb } from './ItemThumb';
@@ -796,6 +798,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         prev &&
         prev.eventId === st.eventId &&
         prev.slots.every((v, i) => v === st.slots[i]) &&
+        prev.counts.every((v, i) => v === st.counts[i]) &&
         Math.ceil(prev.superJumpLeft) === Math.ceil(st.superJumpLeft)
           ? prev
           : st
@@ -803,6 +806,44 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       if (st.eventId !== lastItemEventRef.current) {
         lastItemEventRef.current = st.eventId;
         if (st.eventText) showToast(st.eventText, 2200);
+      }
+    };
+    read();
+    const id = window.setInterval(read, 100);
+    return () => window.clearInterval(id);
+  }, [engine, gameState]);
+
+  // Boss fights: life bar, boss bar, hint, darkness, hurt flash
+  const [combat, setCombat] = useState<CombatStatus | null>(null);
+  const [hurtFlash, setHurtFlash] = useState(false);
+  const lastHurtRef = useRef<number>(0);
+  useEffect(() => {
+    if (!engine || gameState !== 'playing') return;
+    const read = () => {
+      const st = engine.getCombatStatus();
+      setCombat((prev) => {
+        if (!st) return null;
+        if (
+          prev &&
+          prev.hp === st.hp &&
+          prev.bossHp === st.bossHp &&
+          prev.hint === st.hint &&
+          prev.defeated === st.defeated &&
+          prev.portalOpen === st.portalOpen &&
+          Math.abs(prev.darkness - st.darkness) < 0.02 &&
+          (prev.grabbed?.count ?? -1) === (st.grabbed?.count ?? -1) &&
+          prev.bossName === st.bossName
+        )
+          return prev;
+        return st;
+      });
+      if (st && st.hurtId !== lastHurtRef.current) {
+        const hurt = st.hurtId > lastHurtRef.current;
+        lastHurtRef.current = st.hurtId;
+        if (hurt) {
+          setHurtFlash(true);
+          window.setTimeout(() => setHurtFlash(false), 280);
+        }
       }
     };
     read();
@@ -965,6 +1006,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const isPortraitPlay = isPortrait;
   const compactControls = isMobileUi && isPortraitPlay;
   const filledSlots = inventory?.slots.filter(Boolean).length ?? 0;
+  /** Small badge with the stack size (piedras ×7) or uses left (bate 9) */
+  const slotBadge = (i: number) => {
+    const t = inventory?.slots[i];
+    if (!t || !inventory) return null;
+    const n = inventory.counts[i] ?? 1;
+    if (STACK_MAX[t] !== undefined) return `×${n}`;
+    if (DURABILITY[t] !== undefined) return `${n}`;
+    return null;
+  };
   const showPortraitHint =
     isMobileUi &&
     isPortraitPlay &&
@@ -2048,6 +2098,86 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* ======================================================== */}
       {/* 2. PLAYING / ACTIVE STATUS CLUSTERS (World-Matched UI)  */}
       {/* ======================================================== */}
+      {gameState === 'playing' && combat && combat.darkness > 0.02 && (
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            opacity: Math.min(1, combat.darkness),
+            background: inventory?.slots.includes('antorcha')
+              ? 'radial-gradient(circle at 50% 58%, rgba(8,4,16,0) 0%, rgba(8,4,16,0.25) 18%, rgba(8,4,16,0.82) 42%, rgba(4,2,8,0.95) 75%)'
+              : 'radial-gradient(circle at 50% 58%, rgba(8,4,16,0.35) 0%, rgba(8,4,16,0.85) 22%, rgba(4,2,8,0.97) 60%)',
+          }}
+        />
+      )}
+      {gameState === 'playing' && hurtFlash && (
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ background: 'radial-gradient(circle at 50% 50%, rgba(220,38,38,0) 45%, rgba(220,38,38,0.45) 100%)' }}
+        />
+      )}
+      {gameState === 'playing' && combat && (
+        <div
+          className={`absolute pointer-events-none z-20 flex flex-col gap-1.5 ${
+            isMobileUi ? 'right-2 top-[3.4rem] w-[min(44vw,240px)] pr-safe' : 'left-1/2 -translate-x-1/2 top-14 w-[min(92vw,460px)]'
+          }`}
+        >
+          {/* Boss bar */}
+          <div className={`rounded-2xl bg-stone-950/80 border border-rose-500/50 shadow-lg backdrop-blur-md ${isMobileUi ? 'px-2 py-1.5' : 'px-3 py-2'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className={`flex items-center gap-1.5 font-bold text-rose-100 truncate ${isMobileUi ? 'text-[10px]' : 'text-xs'}`}>
+                <Skull className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                {isMobileUi ? combat.bossShort : combat.bossName}
+              </span>
+              <span className="text-[10px] font-mono text-rose-200 tabular-nums">
+                {combat.defeated ? '¡Derrotado!' : `${Math.max(0, Math.round((combat.bossHp / combat.bossMax) * 100))}%`}
+              </span>
+            </div>
+            <div className="mt-1 h-2.5 rounded-full bg-stone-800 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-rose-600 via-rose-500 to-orange-400 transition-[width] duration-300"
+                style={{ width: `${Math.max(0, Math.min(100, (combat.bossHp / combat.bossMax) * 100))}%` }}
+              />
+            </div>
+            {combat.bossMax <= 8 && (
+              <div className="mt-1 flex gap-1">
+                {Array.from({ length: combat.bossMax }, (_, i) => (
+                  <span key={i} className={`h-1.5 flex-1 rounded-full ${i < combat.bossHp ? 'bg-rose-400' : 'bg-stone-700'}`} />
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Player life */}
+          <div className={`rounded-2xl bg-stone-950/75 border border-emerald-500/40 shadow-lg backdrop-blur-md flex items-center gap-2 ${isMobileUi ? 'px-2 py-1' : 'px-3 py-1.5'}`}>
+            <Heart className={`w-4 h-4 shrink-0 ${combat.hp <= 30 ? 'text-rose-400 animate-pulse' : 'text-emerald-400'}`} fill="currentColor" />
+            <div className="flex-1 h-2.5 rounded-full bg-stone-800 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-[width] duration-200 ${
+                  combat.hp <= 30 ? 'bg-gradient-to-r from-rose-600 to-rose-400' : 'bg-gradient-to-r from-emerald-600 to-lime-400'
+                }`}
+                style={{ width: `${(combat.hp / combat.maxHp) * 100}%` }}
+              />
+            </div>
+            <span className="text-[10px] font-mono text-emerald-100 tabular-nums">
+              {combat.hp}/{combat.maxHp}
+            </span>
+          </div>
+          {/* What to do now */}
+          {(combat.hint || combat.portalOpen) && (
+            <div
+              className={`rounded-xl text-center font-semibold shadow-md backdrop-blur-md ${
+                combat.grabbed
+                  ? 'bg-rose-600/90 text-white border border-rose-300 animate-pulse'
+                  : combat.portalOpen
+                    ? 'bg-sky-900/85 text-sky-100 border border-sky-400/60'
+                    : 'bg-stone-900/75 text-amber-100 border border-stone-700/70'
+              } ${isMobileUi ? 'text-[10px] px-2 py-1' : 'text-[11px] px-3 py-1.5'}`}
+            >
+              {combat.portalOpen ? '¡Ganaste! Entra al portal del centro' : combat.hint}
+            </div>
+          )}
+        </div>
+      )}
+
       {gameState === 'playing' && (
         <>
           {/* Top-Left Cluster: Mode Badge, Checkpoint, Collectibles, Time/Radar */}
@@ -2059,9 +2189,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   {checkpointName}
                 </span>
                 <span className="text-[10px] text-cozy-muted truncate inline-flex items-center">
-                  {orbs.total > 0 ? (
+                  {orbs.total > 0 || combat ? (
                     <>
                       Nivel {engine?.currentLevel ?? 1}
+                      {combat && ' · Lucha contra jefe'}
                       {orbs.total > 0 && <HelpTip label={TIPS.orbes} />}
                     </>
                   ) : (
@@ -2163,14 +2294,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
             {/* Sun Crystals / Acorns Collectibles & Timer */}
             <div className={`flex items-center rounded-xl cozy-chip text-xs ${isMobileUi ? 'gap-2 px-2 py-1' : 'gap-3 px-3 py-1.5'}`}>
-              <div className="flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider hidden sm:inline">Reliquias:</span>
-                <span className="tabular-nums font-semibold text-amber-300">
-                  {collectedCount}/{totalCollectibles}
-                </span>
-              </div>
-              <div className="w-[1px] h-3 bg-stone-700/60" />
+              {!combat && (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider hidden sm:inline">Reliquias:</span>
+                    <span className="tabular-nums font-semibold text-amber-300">
+                      {collectedCount}/{totalCollectibles}
+                    </span>
+                  </div>
+                  <div className="w-[1px] h-3 bg-stone-700/60" />
+                </>
+              )}
               <div className="flex items-center gap-1 font-mono text-stone-300">
                 <Timer className="w-3 h-3 text-stone-400" />
                 <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider hidden sm:inline font-ui">Tiempo:</span>
@@ -2350,6 +2485,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                             <span className="flex-1 min-w-0">
                               <span className="block text-xs font-semibold truncate text-stone-100">
                                 {info ? info.name : 'Vacío'}
+                                {slotBadge(i) && <span className="ml-1 text-amber-300">{slotBadge(i)}</span>}
                               </span>
                               {info && (
                                 <span className="block text-[10px] text-stone-400 truncate">{info.desc}</span>
@@ -2370,7 +2506,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                               {item ? <ItemThumb type={item} className="w-5 h-5" /> : null}
                             </span>
                             <div className="flex-1 min-w-0">
-                              <div className="text-xs font-semibold truncate">{info ? info.name : 'Vacío'}</div>
+                              <div className="text-xs font-semibold truncate">
+                                {info ? info.name : 'Vacío'}
+                                {slotBadge(i) && <span className="ml-1 text-amber-300">{slotBadge(i)}</span>}
+                              </div>
                               {info && <div className="text-[10px] text-stone-400 leading-snug">{info.desc}</div>}
                             </div>
                             {info && (
@@ -2491,7 +2630,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   })()}
                   {!isMobileUi && (
                     <p className="mt-2 text-[10px] text-stone-400 leading-snug">
-                      Recoge bayas y nueces en las islas. 1–5 usan · Mayús+1–5 tiran. Las llaves se usan solas en puertas.
+                      Recoge bayas y nueces en las islas. 1–5 usan · Mayús+1–5 tiran · F batea. Las llaves se usan solas en puertas.
                     </p>
                   )}
                 </div>
@@ -2543,6 +2682,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                         style={info ? { boxShadow: `inset 0 -3px 0 ${info.color}` } : undefined}
                       >
                         <span className="absolute top-0.5 left-1 text-[9px] font-mono text-stone-500">{i + 1}</span>
+                        {slotBadge(i) && (
+                          <span className="absolute -top-1.5 -right-1.5 min-w-[1.15rem] h-[1.05rem] px-1 rounded-full bg-amber-400 text-stone-950 text-[9px] font-black flex items-center justify-center leading-none shadow">
+                            {slotBadge(i)}
+                          </span>
+                        )}
                         {item ? <ItemThumb type={item} className="w-4 h-4" /> : null}
                         <span className="text-[8px] font-semibold text-stone-300 leading-none mt-0.5 max-w-[2.4rem] truncate">
                           {info ? info.name.split(' ')[0] : '—'}
@@ -2591,6 +2735,37 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       {power.state === 'hungry' && 'Hambre'}
                     </span>
                   </button>
+                )}
+
+                {combat && inventory && !combat.defeated && (
+                  <div className="flex flex-wrap justify-end gap-1.5 max-w-[11rem]">
+                    {(['bate', 'resortera', 'red', 'bomba', 'luz'] as ItemType[]).map((t) => {
+                      const slot = inventory.slots.indexOf(t);
+                      if (slot === -1) return null;
+                      if (t === 'resortera' && !inventory.slots.includes('piedra')) return null;
+                      const label = t === 'bate' ? 'Batear' : t === 'resortera' ? 'Disparar' : 'Lanzar';
+                      return (
+                        <button
+                          key={t}
+                          onTouchStart={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            engine?.useItem(slot);
+                          }}
+                          onClick={() => engine?.useItem(slot)}
+                          className={`relative rounded-2xl bg-stone-900/85 border-2 flex flex-col items-center justify-center shadow-lg active:scale-90 transition-transform cursor-pointer touch-none select-none ${
+                            compactControls ? 'w-11 h-11' : 'w-12 h-12'
+                          }`}
+                          style={{ borderColor: ITEM_INFO[t].color, touchAction: 'none' }}
+                          title={ITEM_INFO[t].name}
+                          aria-label={`${label}: ${ITEM_INFO[t].name}`}
+                        >
+                          <ItemThumb type={t} className="w-5 h-5" />
+                          <span className="text-[8px] font-bold text-stone-200 leading-none mt-0.5">{label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
 
                 <button

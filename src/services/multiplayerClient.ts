@@ -60,6 +60,18 @@ export interface WorldStatePayload {
   levelId: number;
   orbs: number[];
   blocks: WorldBlockPos[];
+  /** Boss fights: shared events so far (damage, heals…) */
+  events?: WorldEventPayload[];
+}
+/** Boss fights: something that happened to the shared boss/arena (damage, nets, candelabra…) */
+export interface WorldEventPayload {
+  userId?: string;
+  username?: string;
+  levelId: number;
+  kind: string;
+  i?: number;
+  v?: number;
+  target?: string;
 }
 export interface WorldOrbPayload {
   userId: string;
@@ -121,9 +133,10 @@ class MultiplayerClient {
   public onWorldState?: (data: WorldStatePayload) => void;
   public onWorldOrb?: (data: WorldOrbPayload) => void;
   public onWorldBlock?: (data: WorldBlockPayload) => void;
+  public onWorldEvent?: (data: WorldEventPayload) => void;
 
   /** Latest known shared progress of the party, so it can be re-applied after a restart */
-  private world: { levelId: number; orbs: Set<number>; blocks: Map<number, WorldBlockPos> } | null = null;
+  private world: { levelId: number; orbs: Set<number>; blocks: Map<number, WorldBlockPos>; events: WorldEventPayload[] } | null = null;
   private lastBlockSend = new Map<number, number>();
 
   private lastSyncTime: number = 0;
@@ -289,8 +302,15 @@ class MultiplayerClient {
         levelId: data.levelId,
         orbs: new Set(Array.isArray(data.orbs) ? data.orbs : []),
         blocks: new Map((Array.isArray(data.blocks) ? data.blocks : []).map((b) => [b.index, b])),
+        events: Array.isArray(data.events) ? data.events.slice(-400) : [],
       };
       this.onWorldState?.(data);
+    });
+
+    this.socket.on('world:event', (data: WorldEventPayload) => {
+      if (!data || typeof data.kind !== 'string' || typeof data.levelId !== 'number') return;
+      this.remember(this.rememberWorld(data.levelId), data);
+      this.onWorldEvent?.(data);
     });
 
     this.socket.on('world:orb', (data: WorldOrbPayload) => {
@@ -354,14 +374,30 @@ class MultiplayerClient {
   }
 
   private rememberWorld(levelId: number) {
-    if (!this.world || this.world.levelId !== levelId) this.world = { levelId, orbs: new Set(), blocks: new Map() };
+    if (!this.world || this.world.levelId !== levelId) this.world = { levelId, orbs: new Set(), blocks: new Map(), events: [] };
     return this.world;
   }
 
   /** Shared progress known for a level while in a party (null when there is none). */
   public getWorldState(levelId: number): WorldStatePayload | null {
     if (!this.isInPartyRoom() || !this.world || this.world.levelId !== levelId) return null;
-    return { levelId, orbs: [...this.world.orbs], blocks: [...this.world.blocks.values()] };
+    return { levelId, orbs: [...this.world.orbs], blocks: [...this.world.blocks.values()], events: [...this.world.events] };
+  }
+
+  private remember(world: { events: WorldEventPayload[] }, e: WorldEventPayload) {
+    world.events.push(e);
+    if (world.events.length > 400) world.events.splice(0, world.events.length - 400);
+  }
+
+  /** Client -> Server: world:event — boss fight events shared with the party */
+  public sendEvent(levelId: number, kind: string, i?: number, v?: number, target?: string): void {
+    if (!this.socket?.connected || !this.isInPartyRoom()) return;
+    const e: WorldEventPayload = { levelId, kind };
+    if (typeof i === 'number' && Number.isFinite(i)) e.i = Math.round(i);
+    if (typeof v === 'number' && Number.isFinite(v)) e.v = +v.toFixed(3);
+    if (typeof target === 'string') e.target = target;
+    this.remember(this.rememberWorld(levelId), e);
+    this.socket.emit('world:event', e);
   }
 
   /** Client -> Server: world:orb — this player found an orb */
