@@ -28,6 +28,9 @@ interface RemotePlayerEntity {
   /** Boss fights: caught by a dancing skeleton (shows a bone cage + "¡Ayuda!") */
   grabbed: boolean;
   cage?: THREE.Group;
+  /** Boss fights: fainted, lying on the floor waiting for CPR */
+  down: boolean;
+  downLabel?: THREE.Sprite;
 }
 
 function createNameTagSprite(username: string): THREE.Sprite {
@@ -259,6 +262,7 @@ export class RemotePlayersManager {
           anim: p.anim || 'idle',
           lastSeen: performance.now(),
           grabbed: false,
+          down: false,
         };
         this.players.set(p.userId, entity);
       } catch (err) {
@@ -278,6 +282,10 @@ export class RemotePlayersManager {
   private removePlayer(userId: string) {
     const entity = this.players.get(userId);
     if (entity) {
+      if (entity.downLabel) {
+        this.scene.remove(entity.downLabel);
+        entity.downLabel.material.dispose();
+      }
       this.scene.remove(entity.model.group);
       entity.nameTag.material.dispose();
       this.players.delete(userId);
@@ -285,8 +293,25 @@ export class RemotePlayersManager {
   }
 
   /** Positions of everyone else in the room (boss fights: rescues, host choice). */
-  public getPlayersInfo(): { userId: string; username: string; pos: THREE.Vector3; grabbed: boolean }[] {
-    return [...this.players.values()].map((e) => ({ userId: e.userId, username: e.username, pos: e.currentPos, grabbed: e.grabbed }));
+  public getPlayersInfo(): { userId: string; username: string; pos: THREE.Vector3; grabbed: boolean; down: boolean }[] {
+    return [...this.players.values()].map((e) => ({ userId: e.userId, username: e.username, pos: e.currentPos, grabbed: e.grabbed, down: e.down }));
+  }
+
+  /** A friend fainted in a boss fight: lay them down with a "¡RCP!" sign until revived. */
+  public setDown(userId: string, on: boolean) {
+    const e = this.players.get(userId);
+    if (!e) return;
+    e.down = on;
+    if (on && !e.downLabel) {
+      e.downLabel = makeLabel('¡Hazme RCP!');
+      this.scene.add(e.downLabel);
+    }
+    if (e.downLabel) e.downLabel.visible = on;
+    e.nameTag.visible = !on;
+    if (!on) {
+      e.model.group.rotation.x = 0;
+      e.model.group.rotation.order = 'XYZ';
+    }
   }
 
   /** Shows/hides the bone cage on a friend caught by a skeleton. */
@@ -303,6 +328,14 @@ export class RemotePlayersManager {
       e.cage = cage;
     }
     if (e.cage) e.cage.visible = on;
+  }
+
+  /** Leaving a boss fight: nobody is caged or lying down any more. */
+  public clearCombatMarks() {
+    for (const [id, e] of this.players) {
+      if (e.grabbed) this.setGrabbed(id, false);
+      if (e.down) this.setDown(id, false);
+    }
   }
 
   public clearAll() {
@@ -326,6 +359,12 @@ export class RemotePlayersManager {
       while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
       entity.currentYaw += dyaw * lerpFactor;
       entity.model.group.rotation.y = entity.currentYaw;
+      if (entity.down) {
+        entity.model.group.rotation.order = 'YXZ';
+        entity.model.group.rotation.x = -Math.PI / 2;
+        entity.model.group.position.y += 0.3;
+        if (entity.downLabel) entity.downLabel.position.set(entity.currentPos.x, entity.currentPos.y + 1.6 + Math.sin(this.windTime * 4) * 0.08, entity.currentPos.z);
+      }
 
       // Animate limbs & companion
       let speed = 0;

@@ -2165,7 +2165,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {(combat.hint || combat.portalOpen) && (
             <div
               className={`rounded-xl text-center font-semibold shadow-md backdrop-blur-md ${
-                combat.grabbed
+                combat.urgent
                   ? 'bg-rose-600/90 text-white border border-rose-300 animate-pulse'
                   : combat.portalOpen
                     ? 'bg-sky-900/85 text-sky-100 border border-sky-400/60'

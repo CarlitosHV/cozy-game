@@ -3,9 +3,12 @@
  *  - Player life bar (100). Boss attacks, minions and shockwaves take life away; at 0 you
  *    faint and go back to the entrance with full life. Hamburguesas (+40) and papitas (+20)
  *    lying around the arena heal you (only when you are hurt) and come back after a while.
+ *  - Parties: a player who faints stays down where they fell; a friend who stands next to
+ *    them for a few seconds gives them CPR and they get up with half their life. If nobody
+ *    comes in time (or everybody is down) they wake up at the entrance as usual.
  *  - Tools from the backpack: the slingshot shoots stones, the net and bombs are lobbed and
  *    light orbs are thrown — all at the target marked by the reticle (the one closest to
- *    where the camera looks). The bat hits what is in front of you (key F).
+ *    where the camera looks). The bat hits what is in front of you (key V).
  *  - Falling on a minion's (or a stunned boss') head also hits it.
  *  - Parties: boss damage / healing and key moments (nets, candelabra, abductions,
  *    rescues) are shared through multiplayer "world events" so everybody fights the same boss.
@@ -45,6 +48,8 @@ export interface RemoteInfo {
   username: string;
   pos: THREE.Vector3;
   grabbed: boolean;
+  /** Fainted, waiting for CPR */
+  down: boolean;
 }
 
 export interface CombatDeps {
@@ -63,6 +68,7 @@ export interface CombatDeps {
   myId: () => string | null;
   remotes: () => RemoteInfo[];
   setRemoteGrabbed: (userId: string, on: boolean) => void;
+  setRemoteDown: (userId: string, on: boolean) => void;
   openPortal: () => void;
   closePortal: () => void;
   /** Gives movement back to the player (unless a menu is open) */
@@ -83,6 +89,10 @@ export interface CombatStatus {
   portalOpen: boolean;
   /** Increments every time the player gets hurt (HUD flash) */
   hurtId: number;
+  /** Fainted in a party, waiting for a friend's CPR */
+  down: boolean;
+  /** Red, pulsing hint (grabbed, fainted) */
+  urgent: boolean;
 }
 
 interface Shot {
@@ -132,6 +142,11 @@ const SHOT_SPEC: Record<ShotKind, { speed: number; g: number; radius: number; ra
 
 const FOOD_HEAL = { burger: 40, fries: 20 };
 const FOOD_RESPAWN = 25;
+/** Seconds a fainted player waits for CPR before waking up at the entrance */
+const DOWN_WAIT = 25;
+/** Seconds of CPR needed (standing next to the friend) */
+const CPR_TIME = 3;
+const CPR_RANGE = 1.9;
 
 export class CombatSystem {
   public readonly setup: BossSetup;
@@ -166,6 +181,10 @@ export class CombatSystem {
   private defeatTimer = -1;
   private msgCooldown: Record<string, number> = {};
   private stompCooldown = 0;
+  /** Fainted in a party: seconds left to be revived */
+  private downT = -1;
+  /** CPR being given to a friend */
+  private cpr: { userId: string; username: string; k: number; puff: number; active: boolean } | null = null;
   private _v = new THREE.Vector3();
   private _w = new THREE.Vector3();
 
@@ -231,7 +250,7 @@ export class CombatSystem {
 
   /** Hurts the player (ignored while blinking after a hit). Knocks them away from `from`. */
   damagePlayer(amount: number, from: THREE.Vector3 | null, force = 10, up = 6): boolean {
-    if (this.invuln > 0 || this.defeated) return false;
+    if (this.invuln > 0 || this.defeated || this.isDown) return false;
     const ph = this.physics;
     this.hp = Math.max(0, this.hp - amount);
     this.hurtId++;
@@ -249,12 +268,75 @@ export class CombatSystem {
     return true;
   }
 
+  get isDown(): boolean {
+    return this.downT >= 0;
+  }
+
+  /** Someone in the party who is up and could give CPR */
+  private rescuerAvailable(): boolean {
+    return this.deps.remotes().some((r) => !r.down);
+  }
+
   private faint() {
     if (this.grab) this.releaseGrab('other');
+    if (this.rescuerAvailable()) {
+      // Stay down where you fell until a friend gives you CPR
+      this.downT = DOWN_WAIT;
+      this.hp = 0;
+      this.cpr = null;
+      const ph = this.physics;
+      ph.velocity.set(0, Math.min(0, ph.velocity.y), 0);
+      ph.isMovementLocked = true;
+      const me = this.deps.myId();
+      if (me) this.deps.send('down', 0, 1, me);
+      this.deps.notify('¡Te desmayaste! Un amigo puede hacerte RCP');
+      return;
+    }
+    this.wakeAtEntrance();
+  }
+
+  private wakeAtEntrance() {
+    const wasDown = this.isDown;
+    this.downT = -1;
+    this.layDown(false);
+    this.deps.unlockMovement();
+    if (wasDown) {
+      const me = this.deps.myId();
+      if (me) this.deps.send('down', 0, 0, me);
+    }
     this.deps.notify('¡Te desmayaste! Vuelves a la entrada con la vida llena');
     this.physics.respawnAtCheckpoint(0, true);
     this.hp = this.maxHp;
     this.invuln = 2;
+  }
+
+  /** A friend finished CPR on you: up again with half your life. */
+  private revive(by: string) {
+    if (!this.isDown) return;
+    this.downT = -1;
+    this.layDown(false);
+    this.deps.unlockMovement();
+    this.hp = Math.round(this.maxHp / 2);
+    this.invuln = 2.5;
+    this.physics.velocity.set(0, 6, 0);
+    this.physics.isGrounded = false;
+    const me = this.deps.myId();
+    if (me) this.deps.send('down', 0, 0, me);
+    soundManager.playCollectible();
+    this.deps.notify(`¡${by} te revivió con RCP! Tienes la mitad de tu vida`);
+  }
+
+  /** Lying on the floor (fainted) or standing. */
+  private layDown(on: boolean) {
+    const g = this.deps.playerModel().group;
+    if (on) {
+      g.rotation.order = 'YXZ';
+      g.rotation.x = -Math.PI / 2;
+      g.position.y += 0.3;
+    } else {
+      g.rotation.x = 0;
+      g.rotation.order = 'XYZ';
+    }
   }
 
   /** Instant hit in an area (rock impact, laser, slam). */
@@ -322,7 +404,7 @@ export class CombatSystem {
 
   /** Something grabs the player (dancing skeletons). */
   grabPlayer(holder: Grab['holder'], need: number): boolean {
-    if (this.grab || this.invuln > 0 || this.defeated) return false;
+    if (this.grab || this.invuln > 0 || this.defeated || this.isDown) return false;
     this.grab = { holder, count: 0, need };
     this.physics.velocity.set(0, 0, 0);
     this.physics.isMovementLocked = true;
@@ -352,6 +434,10 @@ export class CombatSystem {
   // ------------------------------------------------------------------ tools
   /** Called by the backpack when a combat item is used. */
   tool(type: ItemType): ToolResult {
+    if (this.isDown) {
+      this.say('Estás desmayado: espera a que un amigo te haga RCP', 'down-tool', 2);
+      return 'none';
+    }
     if (this.grab) {
       this.say('¡Primero suéltate! (pulsa saltar)', 'grab-tool', 1.5);
       return 'none';
@@ -472,6 +558,19 @@ export class CombatSystem {
       if (target && target === this.deps.myId() && this.grab) this.releaseGrab('friend');
       return;
     }
+    if (kind === 'down') {
+      if (target && target !== this.deps.myId()) this.deps.setRemoteDown(target, v === 1);
+      return;
+    }
+    if (kind === 'revive') {
+      if (target && target === this.deps.myId()) {
+        const who = this.deps.remotes().find((r) => r.userId === from);
+        this.revive(who?.username || 'Un amigo');
+      } else if (target) {
+        this.deps.setRemoteDown(target, false);
+      }
+      return;
+    }
     this.boss.onEvent(kind, i, v, from);
   }
 
@@ -505,8 +604,11 @@ export class CombatSystem {
 
     this.boss.update(dt, time);
 
+    this.updateDown(dt);
+    this.updateCpr(dt);
+
     // Stomps: falling on a head
-    if (!this.grab && ph.velocity.y < -1 && this.stompCooldown <= 0) {
+    if (!this.grab && !this.isDown && ph.velocity.y < -1 && this.stompCooldown <= 0) {
       for (const t of this.targets) {
         if (!t.accepts.includes('stomp') || t.top === undefined) continue;
         const dxz = Math.hypot(p.x - t.pos.x, p.z - t.pos.z);
@@ -542,7 +644,8 @@ export class CombatSystem {
 
     // Blink while invulnerable
     const model = this.deps.playerModel();
-    model.group.visible = this.invuln > 0 ? Math.floor(this.invuln * 12) % 2 === 0 : true;
+    model.group.visible = this.invuln > 0 && !this.isDown ? Math.floor(this.invuln * 12) % 2 === 0 : true;
+    if (this.isDown) this.layDown(true);
 
     // Darkness & torch
     this.darkness = THREE.MathUtils.damp(this.darkness, this.darknessTarget, 2.2, dt);
@@ -659,7 +762,7 @@ export class CombatSystem {
       f.phase += dt;
       f.group.position.y = f.base.y + Math.sin(f.phase * 2.4) * 0.15;
       f.group.rotation.y += dt * 1.3;
-      if (this.hp >= this.maxHp || this.grab) continue;
+      if (this.hp >= this.maxHp || this.grab || this.isDown) continue;
       const dxz = Math.hypot(p.x - f.base.x, p.z - f.base.z);
       const dy = f.base.y - p.y;
       if (dxz < 1.4 && dy > -0.6 && dy < 2.2) {
@@ -742,7 +845,78 @@ export class CombatSystem {
     this.prevJump = jump;
   }
 
+  /** Fainted: wait for CPR (or wake up at the entrance when nobody can come). */
+  private updateDown(dt: number) {
+    if (!this.isDown) return;
+    this.downT -= dt;
+    const ph = this.physics;
+    ph.isMovementLocked = true;
+    ph.velocity.x = 0;
+    ph.velocity.z = 0;
+    if (this.downT <= 0 || !this.rescuerAvailable()) this.wakeAtEntrance();
+  }
+
+  /** Standing next to a fainted friend gives them CPR. */
+  private updateCpr(dt: number) {
+    if (this.isDown || this.grab || this.defeated) {
+      this.cpr = null;
+      return;
+    }
+    const p = this.playerPos;
+    let best: RemoteInfo | null = null;
+    let bestD = CPR_RANGE;
+    for (const r of this.deps.remotes()) {
+      if (!r.down) continue;
+      const d = Math.hypot(r.pos.x - p.x, r.pos.z - p.z);
+      if (d < bestD && Math.abs(r.pos.y - p.y) < 1.6) {
+        bestD = d;
+        best = r;
+      }
+    }
+    if (!best) {
+      // Pushed away (a rock, a wave…): the progress fades slowly instead of starting over
+      const c = this.cpr;
+      if (c) {
+        c.active = false;
+        c.k -= dt * 0.35;
+        const still = this.deps.remotes().some((r) => r.userId === c.userId && r.down);
+        if (c.k <= 0 || !still) this.cpr = null;
+      }
+      return;
+    }
+    if (!this.cpr || this.cpr.userId !== best.userId) this.cpr = { userId: best.userId, username: best.username, k: 0, puff: 0, active: true };
+    const c = this.cpr;
+    c.active = true;
+    c.k += dt / CPR_TIME;
+    c.puff -= dt;
+    const model = this.deps.playerModel();
+    model.group.rotation.y = Math.atan2(best.pos.x - p.x, best.pos.z - p.z);
+    if (c.puff <= 0) {
+      c.puff = 0.5;
+      soundManager.playJump();
+      this.addEffect(puffEffect(this.deps.root, best.pos.clone().add(this._w.set(0, 0.6, 0)), 'rgba(244,114,182,0.9)', 1.2, 0.35));
+    }
+    if (c.k >= 1) {
+      this.deps.send('revive', 0, 0, best.userId);
+      this.deps.setRemoteDown(best.userId, false);
+      soundManager.playCollectible();
+      this.deps.notify(`¡Reviviste a ${best.username}!`);
+      this.cpr = null;
+    }
+  }
+
   getStatus(): CombatStatus {
+    let hint = this.defeated ? `¡Venciste a ${this.setup.short}!` : this.boss.hint();
+    let urgent = !!this.grab;
+    if (this.isDown) {
+      hint = `¡Te desmayaste! Espera a que un amigo te haga RCP (${Math.ceil(this.downT)} s)`;
+      urgent = true;
+    } else if (this.cpr?.active) {
+      hint = `Haciendo RCP a ${this.cpr.username}… ${Math.min(99, Math.round(this.cpr.k * 100))}% (no te muevas)`;
+    } else if (!this.defeated) {
+      const fallen = this.deps.remotes().find((r) => r.down);
+      if (fallen) hint = `¡${fallen.username} se desmayó! Ve y quédate a su lado para hacerle RCP`;
+    }
     return {
       hp: Math.round(this.hp),
       maxHp: this.maxHp,
@@ -750,12 +924,14 @@ export class CombatSystem {
       bossShort: this.setup.short,
       bossHp: this.boss.hp,
       bossMax: this.boss.maxHp,
-      hint: this.defeated ? `¡Venciste a ${this.setup.short}!` : this.boss.hint(),
+      hint,
       darkness: this.darkness,
       grabbed: this.grab ? { count: this.grab.count, need: this.grab.need } : null,
       defeated: this.defeated,
       portalOpen: this.portalOpen,
       hurtId: this.hurtId,
+      down: this.isDown,
+      urgent,
     };
   }
 
@@ -763,6 +939,13 @@ export class CombatSystem {
     if (this.grab) {
       this.grab = null;
       this.deps.unlockMovement();
+    }
+    if (this.isDown) {
+      this.downT = -1;
+      this.layDown(false);
+      this.deps.unlockMovement();
+      const me = this.deps.myId();
+      if (me) this.deps.send('down', 0, 0, me);
     }
     this.boss.dispose();
     for (const s of this.shots) this.deps.root.remove(s.mesh);

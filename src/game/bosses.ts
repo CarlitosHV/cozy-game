@@ -1,6 +1,7 @@
 /**
  * The six bosses of "Lucha contra jefes" (one per world):
- *   bird     Plumarroca      — throws rocks from the top of a tower; climb up and hit it (3-4 hits).
+ *   bird     Plumarroca      — throws rocks from its towers and flies off when someone gets close;
+ *                              knock it down mid-flight with the slingshot, then hit it on the floor.
  *   glitch   ERR0R.exe       — spawns glitch copies of the player; their light orbs hurt it.
  *   ufo      Nave Nodriza    — lasers from the sky; slingshot its glass; net the cows it abducts.
  *   skeleton Huesudo         — dancing skeletons carry players to its mouth; feed it bombs.
@@ -165,18 +166,26 @@ export abstract class BossController {
 class BirdBoss extends BossController {
   private m: BirdModel;
   private perch = 0;
-  private state: 'perched' | 'flying' = 'perched';
+  /**
+   * perched  — throws rocks; flies away as soon as someone gets close (or a stone startles it)
+   * flying   — between towers: a slingshot stone knocks it down
+   * falling  — tumbling to the floor
+   * grounded — dizzy on the floor: hit it with the bat or stomp it; then it flies away again
+   */
+  private state: 'perched' | 'flying' | 'falling' | 'grounded' = 'perched';
   private from = V();
   private to = V();
   private flyT = 0;
+  private flyDur = 3;
   private throwT = 3;
-  private gustT = -1;
-  private gustWarn = -1;
-  private stunT = 0;
+  private relocateT = 12;
+  private groundT = 0;
+  private waitHost = 0;
   private hitCd = 0;
   private yaw = 0;
   private rocks: { mesh: THREE.Mesh; from: THREE.Vector3; to: THREE.Vector3; t: number; dur: number }[] = [];
   private center = V();
+  private stars = new THREE.Group();
 
   constructor(c: CombatSystem) {
     super(c, c.setup.diff >= 0.5 ? 4 : 3);
@@ -184,16 +193,101 @@ class BirdBoss extends BossController {
     this.group.add(this.m.group);
     this.scaleBase = 0.9;
     this.group.position.copy(this.s.perches[0]);
+    // Dizzy stars shown while it lies on the floor
+    const starM = new THREE.MeshBasicMaterial({ color: 0xfde047 });
+    for (let k = 0; k < 5; k++) {
+      const st = new THREE.Mesh(new THREE.OctahedronGeometry(0.22), starM);
+      const a = (k / 5) * Math.PI * 2;
+      st.position.set(Math.cos(a) * 1.1, 0, Math.sin(a) * 1.1);
+      this.stars.add(st);
+    }
+    this.stars.position.y = 3.2;
+    this.stars.visible = false;
+    this.group.add(this.stars);
+    this.relocateT = 11 - 3 * this.s.diff;
   }
 
-  private perchFor(hp: number) {
-    return (this.maxHp - hp) % this.s.perches.length;
+  private near(pos: THREE.Vector3, r: number): boolean {
+    return this.c.playerPos.distanceTo(pos) < r;
   }
 
-  private onPerch(): boolean {
-    const p = this.c.playerPos;
+  /** Someone climbs towards the nest: it feels them and leaves. */
+  private sensesLocal(): boolean {
     const top = this.s.perches[this.perch];
-    return Math.hypot(p.x - top.x, p.z - top.z) < 3.4 && p.y > top.y - 0.8;
+    return this.near(top, 7.5);
+  }
+
+  private otherPerch(avoid: number): number {
+    const n = this.s.perches.length;
+    const p = this.c.playerPos;
+    // Prefer the tower farthest from the local player
+    let best = (avoid + 1) % n;
+    let bestD = -1;
+    for (let k = 0; k < n; k++) {
+      if (k === avoid) continue;
+      const d = p.distanceTo(this.s.perches[k]) + Math.random() * 6;
+      if (d > bestD) {
+        bestD = d;
+        best = k;
+      }
+    }
+    return best;
+  }
+
+  private flyTo(perch: number, send: boolean) {
+    if (this.dead) return;
+    this.state = 'flying';
+    this.flyT = 0;
+    this.from.copy(this.group.position);
+    this.to.copy(this.s.perches[perch]);
+    this.flyDur = 3.0 + (1 - this.s.diff) * 0.6;
+    this.perch = perch;
+    this.stars.visible = false;
+    this.m.group.rotation.set(0, 0, 0);
+    if (send) this.c.deps.send('fly', perch, 0);
+    if (this.has('resortera')) this.c.say('¡Plumarroca vuela! Dispárale con la resortera', 'bird-fly', 6);
+  }
+
+  private knockDown(send: boolean) {
+    if (this.dead || this.state !== 'flying') return;
+    this.state = 'falling';
+    this.flyT = 0;
+    this.from.copy(this.group.position);
+    // Land on the floor below it, away from the towers and inside the arena
+    const h = this.s.half - 2.5;
+    const land = V(THREE.MathUtils.clamp(this.from.x, -h, h), this.s.floorY, THREE.MathUtils.clamp(this.from.z, -h, h));
+    for (const t of this.s.perches) {
+      const dx = land.x - t.x;
+      const dz = land.z - t.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 6) {
+        const k = d > 0.01 ? 6 / d : 0;
+        land.x = d > 0.01 ? t.x + dx * k : t.x + 6;
+        land.z = d > 0.01 ? t.z + dz * k : t.z;
+      }
+    }
+    this.to.copy(land);
+    soundManager.playEnemyBonk();
+    if (send) this.c.deps.send('fall', this.perch, 0);
+    this.c.say('¡La derribaste! Corre y golpéala en el suelo', 'bird-down', 2);
+  }
+
+  onEvent(kind: string, i: number) {
+    if (kind === 'fly') {
+      if (this.state === 'flying' && this.perch === i) return;
+      if (i >= 0 && i < this.s.perches.length) this.flyTo(i, false);
+    } else if (kind === 'fall') {
+      this.knockDown(false);
+    }
+  }
+
+  onHurt(amount: number) {
+    super.onHurt(amount);
+    // Back to the towers after each hit (everybody computes the same tower from the life left)
+    if (this.hp > 0 && (this.state === 'grounded' || this.state === 'falling')) {
+      this.state = 'grounded';
+      this.groundT = Math.min(this.groundT, 0.6);
+    }
   }
 
   update(dt: number, time: number) {
@@ -201,7 +295,6 @@ class BirdBoss extends BossController {
     this.updatePending(dt);
     this.updateRocks(dt);
     this.hitCd -= dt;
-    this.stunT -= dt;
     const pos = this.group.position;
     this.center.copy(pos).add(V(0, 1.5, 0));
     const p = this.c.playerPos;
@@ -219,63 +312,78 @@ class BirdBoss extends BossController {
       return;
     }
 
-    // Wing flapping
-    const flap = this.state === 'flying' ? Math.sin(time * 14) * 0.7 : this.gustWarn >= 0 ? -1.1 : Math.sin(time * 2) * 0.12;
+    // Wings
+    const flap =
+      this.state === 'flying' ? Math.sin(time * 14) * 0.7 : this.state === 'grounded' ? -0.9 + Math.sin(time * 3) * 0.1 : this.state === 'falling' ? Math.sin(time * 30) * 0.9 : Math.sin(time * 2) * 0.12;
     this.m.wings[0].rotation.z = flap;
     this.m.wings[1].rotation.z = -flap;
-    this.m.head.rotation.x = this.stunT > 0 ? Math.sin(time * 9) * 0.3 : 0;
-
-    const wanted = this.perchFor(this.hp);
-    if (this.state === 'perched' && wanted !== this.perch) {
-      this.state = 'flying';
-      this.flyT = 0;
-      this.from.copy(pos);
-      this.to.copy(this.s.perches[wanted]);
-      this.perch = wanted;
-      this.gustT = -1;
-      this.gustWarn = -1;
-    }
+    this.m.head.rotation.x = this.state === 'grounded' ? Math.sin(time * 6) * 0.35 : 0;
 
     if (this.state === 'flying') {
-      this.flyT += dt / 2.2;
+      this.flyT += dt / this.flyDur;
       const k = Math.min(1, this.flyT);
       pos.lerpVectors(this.from, this.to, ease(k));
-      pos.y += Math.sin(Math.PI * k) * 6;
+      pos.y += Math.sin(Math.PI * k) * 7;
       this.yaw = turnTo(this.yaw, Math.atan2(this.to.x - this.from.x, this.to.z - this.from.z), 5, dt);
       this.group.rotation.y = this.yaw;
       if (k >= 1) {
         this.state = 'perched';
-        this.throwT = 1.4;
+        this.throwT = 1.6;
+        this.relocateT = 11 - 3 * this.s.diff + Math.random() * 3;
       }
       return;
     }
 
+    if (this.state === 'falling') {
+      this.flyT += dt / 0.9;
+      const k = Math.min(1, this.flyT);
+      pos.lerpVectors(this.from, this.to, k * k);
+      this.m.group.rotation.z = Math.sin(k * Math.PI) * 1.2;
+      if (k >= 1) {
+        this.state = 'grounded';
+        this.groundT = 6.5 - 1.5 * this.s.diff;
+        this.waitHost = 0;
+        this.m.group.rotation.set(0, 0, 0.5);
+        this.stars.visible = true;
+        soundManager.playWoodRattle();
+        this.c.addEffect(puffEffect(this.root, pos.clone().add(V(0, 0.5, 0)), 'rgba(214,200,180,0.9)', 4, 0.5));
+        this.c.strike(pos, 2.4, 10, 9, 6);
+      }
+      return;
+    }
+
+    if (this.state === 'grounded') {
+      this.stars.rotation.y += dt * 3;
+      this.groundT -= dt;
+      if (this.groundT <= 0) {
+        // Everybody wakes it towards the same tower; the host announces it in case clocks drift
+        const next = (this.perch + 1 + (this.maxHp - this.hp)) % this.s.perches.length;
+        this.waitHost += dt;
+        if (this.c.deps.isHost() || this.waitHost > 2) this.flyTo(next === this.perch ? (next + 1) % this.s.perches.length : next, this.c.deps.isHost());
+      }
+      return;
+    }
+
+    // Perched
     this.yaw = turnTo(this.yaw, Math.atan2(p.x - pos.x, p.z - pos.z), 4, dt);
     this.group.rotation.y = this.yaw;
-    const diff = this.s.diff;
-    if (this.onPerch()) {
-      // Close up: wing gusts push you off the tower
-      if (this.gustT < 0 && this.gustWarn < 0) this.gustT = 1.7 + (1 - diff) * 1.0;
-      if (this.gustWarn >= 0) {
-        this.gustWarn -= dt;
-        if (this.gustWarn < 0) {
-          soundManager.playWindGust();
-          if (Math.hypot(p.x - pos.x, p.z - pos.z) < 4.6) this.c.damagePlayer(10, pos, 15, 8);
-          this.gustT = 2.6 - diff * 0.6;
-        }
-      } else if (this.stunT <= 0) {
-        this.gustT -= dt;
-        if (this.gustT <= 0) this.gustWarn = 0.8;
+    if (this.sensesLocal()) {
+      this.c.say('¡Plumarroca te sintió y se fue volando!', 'bird-sense', 4);
+      this.flyTo(this.otherPerch(this.perch), true);
+      return;
+    }
+    if (this.c.deps.isHost()) {
+      this.relocateT -= dt;
+      if (this.relocateT <= 0) {
+        this.flyTo(this.otherPerch(this.perch), true);
+        return;
       }
-    } else {
-      this.gustT = -1;
-      this.gustWarn = -1;
-      if (this.stunT <= 0) this.throwT -= dt;
-      if (this.throwT <= 0) {
-        this.throwRock(0);
-        if (diff > 0.55) this.throwRock(2.6);
-        this.throwT = 2.5 - 1.0 * diff;
-      }
+    }
+    this.throwT -= dt;
+    if (this.throwT <= 0) {
+      this.throwRock(0);
+      if (this.s.diff > 0.55) this.throwRock(2.6);
+      this.throwT = 2.6 - 1.0 * this.s.diff;
     }
   }
 
@@ -316,38 +424,67 @@ class BirdBoss extends BossController {
   }
 
   targets(out: AimTarget[]) {
-    if (this.dead || this.state === 'flying') return;
+    if (this.dead || this.state === 'falling') return;
+    if (this.state === 'grounded') {
+      out.push({
+        pos: this.center,
+        radius: 1.6,
+        accepts: ['bate', 'stomp', 'piedra'],
+        top: this.group.position.y + 2.6,
+        priority: 0.5,
+        hit: (kind) => this.hit(kind),
+      });
+      return;
+    }
+    // Perched or flying: only stones reach it
     out.push({
       pos: this.center,
-      radius: 1.5,
-      accepts: ['bate', 'piedra', 'stomp'],
-      top: this.group.position.y + 2.0,
+      radius: this.state === 'flying' ? 1.9 : 1.5,
+      accepts: ['piedra'],
+      priority: this.state === 'flying' ? 0.6 : 0,
       hit: (kind) => this.hit(kind),
     });
   }
 
   private hit(kind: HitKind) {
-    if (this.dead || this.state === 'flying') return;
+    if (this.dead) return;
+    if (this.state === 'flying') {
+      if (kind === 'piedra') this.knockDown(true);
+      return;
+    }
+    if (this.state === 'perched') {
+      if (kind === 'piedra') {
+        this.c.say('¡La espantaste! Ahora dale en el aire', 'bird-scare', 3);
+        this.flyTo(this.otherPerch(this.perch), true);
+      }
+      return;
+    }
+    if (this.state !== 'grounded') return;
     if (kind === 'piedra') {
-      this.stunT = 1.8;
-      this.c.say('¡Plumarroca está aturdida! Sube y golpéala', 'bird-stun', 4);
+      this.c.say('¡Está en el suelo! Golpéala con el bate o cáele encima', 'bird-bat', 3);
       return;
     }
     if (this.hitCd > 0) return;
     this.hitCd = 1.0;
     this.c.damageBoss(1);
-    if (!this.dead && this.hp > 0) this.c.say('¡Golpe! Plumarroca vuela a otra torre', 'bird-hit', 2);
+    if (!this.dead && this.hp > 0) this.c.say('¡Golpe! Plumarroca se despierta y vuelve a las torres', 'bird-hit', 2);
   }
 
   hint(): string {
-    if (this.state === 'flying') return 'Plumarroca vuela a otra torre…';
-    if (this.onPerch()) return this.has('bate') ? '¡Golpéala con el bate (V) o cáele encima!' : '¡Cáele encima de un salto! (o trae un bate)';
-    return 'Esquiva las piedras y sube por los escalones de la torre donde está Plumarroca';
+    const sling = this.has('resortera');
+    const stones = this.has('piedra');
+    if (this.state === 'grounded' || this.state === 'falling')
+      return this.has('bate') ? '¡Cayó! Golpéala con el bate (V) o cáele encima' : '¡Cayó! Cáele encima de un salto (o trae un bate)';
+    if (this.state === 'flying') return sling && stones ? '¡Está volando! Dispárale con la resortera para derribarla' : '¡Está volando! Con la resortera y piedras puedes derribarla';
+    if (!sling) return 'Busca la resortera: Plumarroca huye si te acercas, hay que derribarla en el aire';
+    if (!stones) return 'Junta piedras para la resortera y esquiva las rocas que lanza';
+    return 'Esquiva las rocas. Dispárale para espantarla y dale otra vez cuando esté volando';
   }
 
   onDefeat(instant: boolean) {
     super.onDefeat(instant);
     this.clearPending();
+    this.stars.visible = false;
     this.from.copy(this.group.position);
     const top = this.s.perches[this.perch];
     this.to.set(top.x * 0.6, this.s.floorY, top.z * 0.6);

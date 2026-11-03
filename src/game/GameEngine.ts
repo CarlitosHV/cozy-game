@@ -105,6 +105,7 @@ export class GameEngine {
   /** Boss fights: life bar, tools, the boss itself (null on other levels) */
   public combat: CombatSystem | null = null;
   private lookRaise = 0;
+  private lookBack = 0;
   private darkBase: { dir: number; hemi: number; fogDensity: number; fogColor: THREE.Color; exposure: number } | null = null;
 
   // Levels
@@ -743,6 +744,7 @@ export class GameEngine {
     if (!this.combat) return;
     this.combat.dispose();
     this.combat = null;
+    this.remotePlayers?.clearCombatMarks();
     this.applyDarkness(0);
   }
 
@@ -769,6 +771,7 @@ export class GameEngine {
       myId: () => apiClient.getCurrentUser()?._id ?? null,
       remotes: () => (this.partyRoomId ? this.remotePlayers.getPlayersInfo() : []),
       setRemoteGrabbed: (userId, on) => this.remotePlayers.setGrabbed(userId, on),
+      setRemoteDown: (userId, on) => this.remotePlayers.setDown(userId, on),
       openPortal: () => {
         this.world.victoryPortal = setup.portal;
         this.world.summitPosition = setup.portalPos.clone();
@@ -1832,22 +1835,32 @@ export class GameEngine {
 
     // 8. Damped Third-Person Camera Follow
     const playerPos = this.physics.position;
-    // Boss fights: tilt the view up when the boss is high above (bird on its tower, the UFO…)
+    // Boss fights: when the boss is high above (bird on its tower, the UFO…) pull the camera back
+    // and tilt it up a little — never so much that you lose sight of yourself and the ground
+    // around you, where the warnings for falling rocks and lasers appear.
     let raise = 0;
+    let back = 0;
     const focus = this.combat?.focus;
     if (focus) {
       const dy = focus.y + 1.5 - (playerPos.y + 1.1);
       const dxz = Math.hypot(focus.x - playerPos.x, focus.z - playerPos.z);
-      if (dy > 2 && dxz < 40) raise = THREE.MathUtils.clamp(dy * 0.32, 0, 3.6) * THREE.MathUtils.clamp((40 - dxz) / 10, 0, 1);
+      if (dy > 2 && dxz < 40) {
+        const fade = THREE.MathUtils.clamp((40 - dxz) / 10, 0, 1);
+        raise = THREE.MathUtils.clamp(dy * 0.12, 0, 1.1) * fade;
+        back = THREE.MathUtils.clamp(dy * 0.22, 0, 2.6) * fade;
+      }
     }
-    this.lookRaise = THREE.MathUtils.damp(this.lookRaise, raise, 2.5, dt);
+    // Slow, smooth changes so the view doesn't bob around while dodging
+    this.lookRaise = THREE.MathUtils.damp(this.lookRaise, raise, 1.2, dt);
+    this.lookBack = THREE.MathUtils.damp(this.lookBack, back, 1.2, dt);
     this.targetLookAt.set(playerPos.x, playerPos.y + 1.1 + this.lookRaise, playerPos.z);
 
+    const camDist = Math.min(14, this.cameraDistance + this.lookBack);
     const cosPitch = Math.cos(this.cameraPitch);
     const sinPitch = Math.sin(this.cameraPitch);
-    const offsetX = Math.sin(this.cameraYaw) * cosPitch * this.cameraDistance;
-    const offsetZ = Math.cos(this.cameraYaw) * cosPitch * this.cameraDistance;
-    const offsetY = sinPitch * this.cameraDistance;
+    const offsetX = Math.sin(this.cameraYaw) * cosPitch * camDist;
+    const offsetZ = Math.cos(this.cameraYaw) * cosPitch * camDist;
+    const offsetY = sinPitch * camDist;
 
     this.targetCameraPos.set(
       playerPos.x - offsetX,

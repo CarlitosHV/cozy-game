@@ -62,13 +62,13 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
   bird: {
     name: 'Plumarroca, el Ave de Piedra',
     short: 'Plumarroca',
-    desc: 'Un ave gigante lanza piedras desde lo alto de las torres.',
+    desc: 'Un ave gigante lanza piedras desde lo alto de las torres y huye si te acercas.',
     steps: [
-      'Plumarroca lanza piedras: mira las sombras rojas en el suelo y esquívalas',
-      'Sube por los escalones de la torre donde está posada',
-      'Golpéala con el bate o cáele encima de un salto',
-      'Cada golpe la hace volar a otra torre: ¡síguela!',
-      'Con la resortera puedes aturdirla un momento desde abajo',
+      'Plumarroca lanza piedras: mira los círculos rojos en el suelo y esquívalos',
+      'Si te acercas a su torre, te siente y se va volando a otra',
+      'Toma la resortera y junta piedras: dispárale para espantarla',
+      'Cuando esté volando, dale con la resortera: ¡cae al suelo mareada!',
+      'Corre y golpéala con el bate o cáele encima antes de que despierte',
     ],
   },
   glitch: {
