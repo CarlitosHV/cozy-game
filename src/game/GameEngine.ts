@@ -14,7 +14,7 @@ import { createProceduralTextures, ProceduralTextures } from './textures';
 import { WeatherSystem } from './weather';
 import { AetherStalker } from './enemies';
 import { CompanionPowerSystem } from './companionPowers';
-import { ItemSystem, ItemUseContext } from './items';
+import { ItemSystem, ItemType, ItemUseContext } from './items';
 import { buildAeroWorld } from './levelAero';
 import { buildCosmicWorld } from './levelCosmic';
 import { buildSwampWorld } from './levelSwamp';
@@ -42,6 +42,18 @@ const atmos = (level: number) => THEME_ATMOS[themeForLevel(level)];
 
 export type GameMode = 'free' | 'time_trial' | 'chase';
 export type GameState = 'title' | 'playing' | 'paused' | 'victory' | 'photo_mode' | 'game_over';
+export type CharacterPreviewFocus = 'full' | 'head' | 'torso' | 'feet' | 'companion';
+
+const PREVIEW_FOCUS: Record<
+  CharacterPreviewFocus,
+  { lookY: number; camY: number; dist: number; pitch: number }
+> = {
+  full: { lookY: 0.7, camY: 0.95, dist: 2.55, pitch: 0.08 },
+  head: { lookY: 1.0, camY: 1.08, dist: 1.35, pitch: 0.18 },
+  torso: { lookY: 0.58, camY: 0.82, dist: 2.05, pitch: 0.05 },
+  feet: { lookY: 0.18, camY: 0.48, dist: 1.65, pitch: -0.12 },
+  companion: { lookY: 1.12, camY: 1.2, dist: 1.9, pitch: 0.16 },
+};
 
 export interface WeatherNotice {
   weather: WeatherType;
@@ -122,6 +134,10 @@ export class GameEngine {
   public isTouchDevice: boolean = false;
   public autoChaseCamera: boolean = true;
   public isUIModalOpen: boolean = false;
+  /** When true, Escape will not toggle pause (HUD overlays handle Esc first). */
+  public pauseToggleBlocked: boolean = false;
+  /** Private party room from invite:result (`party_*`). Null = public level room. */
+  private partyRoomId: string | null = null;
   private reverseRunTimer: number = 0;
   private directionTurnCooldown: number = 0;
   private lastInputVector = new THREE.Vector2();
@@ -131,7 +147,19 @@ export class GameEngine {
   public characterPreview: boolean = false;
   private previewBlend: number = 0;
   private previewYaw: number = 0;
-  private previewDistance: number = 2.35;
+  private previewPitch: number = 0.08;
+  private previewPitchUser: number = 0;
+  private previewZoom: number = 1;
+  private previewFocus: CharacterPreviewFocus = 'full';
+  private previewLookY: number = PREVIEW_FOCUS.full.lookY;
+  private previewCamY: number = PREVIEW_FOCUS.full.camY;
+  private previewBaseDistance: number = PREVIEW_FOCUS.full.dist;
+  private previewTargetLookY: number = PREVIEW_FOCUS.full.lookY;
+  private previewTargetCamY: number = PREVIEW_FOCUS.full.camY;
+  private previewTargetDist: number = PREVIEW_FOCUS.full.dist;
+  private previewTargetPitch: number = PREVIEW_FOCUS.full.pitch;
+  private previewIdleSpin: boolean = true;
+  private previewSpinResumeAt: number = 0;
   private viewOffsetActive: boolean = false;
   private _orbitPos = new THREE.Vector3();
   private _orbitLook = new THREE.Vector3();
@@ -286,7 +314,9 @@ export class GameEngine {
 
     // 8b. Online Multiplayer Remote Players Manager
     this.remotePlayers = new RemotePlayersManager(this.scene, this.textures);
-    multiplayerClient.joinLevel(this.currentLevel);
+    if (this.partyRoomId) {
+      multiplayerClient.joinLevel(this.currentLevel, this.partyRoomId);
+    }
 
     // 9. Input & Window Listeners
     this.setupListeners();
@@ -298,7 +328,7 @@ export class GameEngine {
 
     // Report initial state
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
-    this.callbacks.onCheckpointChange('Sunrise Meadow', 1);
+    this.callbacks.onCheckpointChange('Pradera del Amanecer', 1);
 
     // Start render loop
     this.startLoop();
@@ -362,11 +392,39 @@ export class GameEngine {
   /** Toggles the close-up turntable camera used while the Character Creator is open. */
   public setCharacterPreview(enabled: boolean) {
     if (enabled && !this.characterPreview) {
-      // Start on a friendly 3/4 front view of the character
-      this.previewYaw = this.playerModel.group.rotation.y + 0.45;
-      this.previewDistance = 2.35;
+      this.previewYaw = this.playerModel.group.rotation.y + Math.PI + 0.35;
+      this.previewZoom = 1;
+      this.previewIdleSpin = true;
+      this.setCharacterPreviewFocus('full', true);
     }
     this.characterPreview = enabled;
+  }
+
+  /** Frames a body region while customizing (head, clothes, boots, companion…). */
+  public setCharacterPreviewFocus(focus: CharacterPreviewFocus, instant: boolean = false) {
+    this.previewFocus = focus;
+    const preset = PREVIEW_FOCUS[focus];
+    this.previewTargetLookY = preset.lookY;
+    this.previewTargetCamY = preset.camY;
+    this.previewTargetDist = preset.dist;
+    this.previewTargetPitch = preset.pitch;
+    this.previewPitchUser = 0;
+    if (instant) {
+      this.previewLookY = preset.lookY;
+      this.previewCamY = preset.camY;
+      this.previewBaseDistance = preset.dist;
+      this.previewPitch = preset.pitch;
+      this.previewZoom = 1;
+    } else {
+      this.previewZoom = THREE.MathUtils.clamp(this.previewZoom, 0.8, 1.25);
+    }
+  }
+
+  /** Manual zoom for the creator (wheel / pinch / UI buttons). */
+  public adjustCharacterPreviewZoom(delta: number) {
+    this.previewZoom = THREE.MathUtils.clamp(this.previewZoom + delta, 0.6, 1.85);
+    this.previewIdleSpin = false;
+    this.previewSpinResumeAt = performance.now() + 2200;
   }
 
   /** Uses the companion's temporary power (key G or the HUD button). */
@@ -485,7 +543,11 @@ export class GameEngine {
     // Build the new one
     this.currentLevel = level;
     this.remotePlayers?.clearAll();
-    multiplayerClient.joinLevel(level);
+    if (this.partyRoomId) {
+      multiplayerClient.joinLevel(level, this.partyRoomId);
+    } else {
+      multiplayerClient.leaveRoom();
+    }
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(level);
@@ -526,12 +588,35 @@ export class GameEngine {
   }
 
   public discardItem(slot: number) {
-    this.itemSystem.discard(slot);
+    return this.itemSystem.discard(slot);
+  }
+
+  public restoreItem(slot: number, type: ItemType) {
+    return this.itemSystem.restore(slot, type);
+  }
+
+  public useAllItemsOfType(type: ItemType) {
+    if (this.gameState !== 'playing') return 0;
+    return this.itemSystem.useAllOfType(type, this.itemCtx);
+  }
+
+  public discardAllOfType(type: ItemType) {
+    return this.itemSystem.discardAllOfType(type);
+  }
+
+  public restoreItems(entries: { slot: number; type: ItemType }[]) {
+    return this.itemSystem.restoreMany(entries);
   }
 
   public startGame(mode?: GameMode, level?: number) {
     if (level !== undefined) this.loadLevel(level);
     this.beginRun(mode, true);
+    if (this.partyRoomId) {
+      multiplayerClient.joinLevel(this.currentLevel, this.partyRoomId);
+    } else {
+      multiplayerClient.leaveRoom();
+      this.remotePlayers?.clearAll();
+    }
   }
 
   private beginRun(mode: GameMode | undefined, freshBackpack: boolean) {
@@ -604,7 +689,23 @@ export class GameEngine {
     }
   }
 
+  public setPartyRoom(roomId: string | null, joinNow = true) {
+    this.partyRoomId = roomId;
+    if (!roomId) {
+      multiplayerClient.leaveRoom();
+      this.remotePlayers?.clearAll();
+      return;
+    }
+    multiplayerClient.setPartyRoomId(roomId);
+    if (joinNow) {
+      multiplayerClient.joinLevel(this.currentLevel, roomId);
+    }
+  }
+
   public returnToTitle() {
+    multiplayerClient.leaveRoom();
+    this.partyRoomId = null;
+    this.remotePlayers?.clearAll();
     this.gameState = 'title';
     this.physics.respawnAtCheckpoint(0, true);
     this.resetCompanionPowers();
@@ -878,7 +979,10 @@ export class GameEngine {
         this.exitPhotoMode();
         return;
       }
-      this.setPaused(this.gameState !== 'paused');
+      if (this.pauseToggleBlocked) return;
+      if (this.gameState === 'playing' || this.gameState === 'paused') {
+        this.setPaused(this.gameState !== 'paused');
+      }
     }
     if (e.code === 'KeyP') {
       if (this.gameState === 'photo_mode') {
@@ -888,18 +992,14 @@ export class GameEngine {
       }
     }
     if (e.code === 'KeyR') {
-      if (this.gameState === 'photo_mode') return;
+      if (this.gameState !== 'playing') return;
       this.physics.respawnAtCheckpoint();
-    }
-    if (e.code === 'KeyM') {
-      soundManager.setMuted(!soundManager.getMuted());
     }
     if (e.code === 'KeyG' && !e.repeat) {
       this.activateCompanionPower();
     }
-    // Backpack slots 1-5
     const slotMatch = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);
-    if (slotMatch && !e.repeat) {
+    if (slotMatch && !e.repeat && !e.shiftKey) {
       this.useItem(parseInt(slotMatch[1], 10) - 1);
     }
   };
@@ -956,6 +1056,9 @@ export class GameEngine {
 
     if (this.gameState === 'title' && this.characterPreview) {
       this.previewYaw -= dx * 0.008;
+      this.previewPitchUser = THREE.MathUtils.clamp(this.previewPitchUser - dy * 0.004, -0.4, 0.45);
+      this.previewIdleSpin = false;
+      this.previewSpinResumeAt = performance.now() + 2200;
       return;
     }
 
@@ -975,7 +1078,7 @@ export class GameEngine {
 
   private handleWheel = (e: WheelEvent) => {
     if (this.gameState === 'title' && this.characterPreview) {
-      this.previewDistance = Math.max(1.6, Math.min(4.5, this.previewDistance + e.deltaY * 0.003));
+      this.adjustCharacterPreviewZoom(e.deltaY * 0.0012);
       return;
     }
     if (this.gameState === 'photo_mode') {
@@ -1021,7 +1124,9 @@ export class GameEngine {
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const dist = Math.hypot(dx, dy);
       const pinchDelta = (this.initialPinchDist - dist) * 0.02;
-      if (this.gameState === 'photo_mode') {
+      if (this.gameState === 'title' && this.characterPreview) {
+        this.adjustCharacterPreviewZoom(pinchDelta * 0.08);
+      } else if (this.gameState === 'photo_mode') {
         this.photoDistance = Math.max(1.8, Math.min(16.0, this.photoDistance + pinchDelta));
       } else {
         this.cameraDistance = Math.max(3.0, Math.min(12.0, this.cameraDistance + pinchDelta));
@@ -1041,6 +1146,9 @@ export class GameEngine {
 
         if (this.gameState === 'title' && this.characterPreview) {
           this.previewYaw -= dx * 0.009;
+          this.previewPitchUser = THREE.MathUtils.clamp(this.previewPitchUser - dy * 0.005, -0.4, 0.45);
+          this.previewIdleSpin = false;
+          this.previewSpinResumeAt = performance.now() + 2200;
         } else if (this.gameState === 'photo_mode') {
           this.photoYaw += dx * 0.007;
           this.photoPitch = Math.max(-0.45, Math.min(1.25, this.photoPitch - dy * 0.006));
@@ -1154,29 +1262,44 @@ export class GameEngine {
       // Character Creator: blend smoothly into a close-up turntable around the player
       this.previewBlend = THREE.MathUtils.damp(this.previewBlend, this.characterPreview ? 1 : 0, 4.0, dt);
       if (this.previewBlend > 0.001) {
-        if (this.characterPreview && !this.isMouseDragging) this.previewYaw += dt * 0.3;
+        if (!this.previewIdleSpin && performance.now() >= this.previewSpinResumeAt && !this.isMouseDragging) {
+          this.previewIdleSpin = true;
+        }
+        if (this.characterPreview && this.previewIdleSpin && !this.isMouseDragging) {
+          this.previewYaw += dt * 0.22;
+        }
+
+        this.previewLookY = THREE.MathUtils.damp(this.previewLookY, this.previewTargetLookY, 5.5, dt);
+        this.previewCamY = THREE.MathUtils.damp(this.previewCamY, this.previewTargetCamY, 5.5, dt);
+        this.previewBaseDistance = THREE.MathUtils.damp(this.previewBaseDistance, this.previewTargetDist, 5.2, dt);
+        this.previewPitch = THREE.MathUtils.damp(this.previewPitch, this.previewTargetPitch, 4.2, dt);
+        const pitch = this.previewPitch + this.previewPitchUser;
+
         const p = this.physics.position;
         const h = this.playerAppearance.height;
         const w = this.container.clientWidth;
         const hgt = this.container.clientHeight;
         const portrait = hgt > w;
-        const dist = this.previewDistance * (portrait ? 1.1 : 1.0);
-        this._previewPos.set(
-          p.x + Math.sin(this.previewYaw) * dist,
-          p.y + 0.95 * h + dist * 0.12,
-          p.z + Math.cos(this.previewYaw) * dist
-        );
-        this._previewLook.set(p.x, p.y + 0.68 * h, p.z);
+        const dist = this.previewBaseDistance * this.previewZoom * (portrait ? 1.12 : 1.0);
+        const lookY = p.y + this.previewLookY * h;
+        const camY = p.y + this.previewCamY * h + Math.sin(pitch) * dist * 0.55;
+        const planar = Math.cos(pitch) * dist;
 
-        const e = this.previewBlend * this.previewBlend * (3 - 2 * this.previewBlend); // smoothstep
+        this._previewPos.set(
+          p.x + Math.sin(this.previewYaw) * planar,
+          camY,
+          p.z + Math.cos(this.previewYaw) * planar
+        );
+        this._previewLook.set(p.x, lookY, p.z);
+
+        const e = this.previewBlend * this.previewBlend * (3 - 2 * this.previewBlend);
         this.camera.position.lerpVectors(this._orbitPos, this._previewPos, e);
         this.camera.lookAt(this._orbitLook.lerp(this._previewLook, e));
 
-        // Shift the framing so the character isn't hidden behind the creator panel
         if (portrait) {
           this.camera.setViewOffset(w, hgt, 0, hgt * 0.27 * e, w, hgt);
         } else {
-          this.camera.setViewOffset(w, hgt, w * 0.17 * e, 0, w, hgt);
+          this.camera.setViewOffset(w, hgt, w * 0.18 * e, 0, w, hgt);
         }
         this.viewOffsetActive = true;
       } else {
@@ -1555,7 +1678,7 @@ export class GameEngine {
       this.remotePlayers.update(dt);
     }
 
-    if (this.gameState === 'playing') {
+    if (this.gameState === 'playing' && this.partyRoomId) {
       const speed = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
       let anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall' = 'idle';
       if (!this.physics.isGrounded) {

@@ -363,7 +363,7 @@ export class CompanionPowerSystem {
         if (st && !st.isStunned && st.position.distanceTo(physics.position) < 4.5) {
           st.isStunned = true;
           st.stunTimer = 3;
-          this.emit('¡Jade espantó al Acechador! 🐉');
+          this.emit('¡Jade espantó al Acechador!');
         }
       }
 

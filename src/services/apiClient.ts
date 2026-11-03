@@ -5,6 +5,7 @@
  *  - Auth: Register, Login, Refresh, Logout (Bearer token + Refresh Token)
  *  - Player: /player/me, /player/appearance, /player/inventory, /player/complete-level
  *  - Leaderboard: /leaderboard/:levelId
+ *  - Friends: /friends, /friends/requests, /friends/search, request/accept/decline, DELETE /:userId
  *  - System: /system/health
  */
 
@@ -55,6 +56,29 @@ export interface LeaderboardEntry {
   username: string;
   timeSeconds: number;
   collectiblesFound: number;
+}
+
+export type FriendRelationship = 'none' | 'friends' | 'outgoing_request' | 'incoming_request';
+
+export interface FriendUser {
+  _id: string;
+  username: string;
+  displayName: string;
+  role?: string;
+  online?: boolean;
+}
+
+export interface FriendRequestItem {
+  _id: string;
+  status: string;
+  createdAt: string;
+  fromUser: FriendUser | null;
+}
+
+export interface FriendSearchResult extends FriendUser {
+  online?: boolean;
+  relationship: FriendRelationship;
+  requestId: string | null;
 }
 
 export interface LevelCompletionResult {
@@ -232,9 +256,9 @@ class ApiClient {
       const json = await response.json().catch(() => null);
 
       if (!response.ok) {
-        const errorMsg = json?.message || json?.error || `HTTP ${response.status}: Error en el servidor`;
+        const raw = json?.message || json?.error || '';
         const code = json?.code || response.status.toString();
-        const err = new Error(errorMsg);
+        const err = new Error(typeof raw === 'string' ? raw : '');
         (err as unknown as { code: string; status: number }).code = code;
         (err as unknown as { status: number }).status = response.status;
         throw err;
@@ -243,8 +267,11 @@ class ApiClient {
       return json as T;
     } catch (err: unknown) {
       if ((err as Error)?.name === 'TypeError' && (err as Error)?.message?.includes('fetch')) {
-        const offlineErr = new Error(`No se pudo conectar al servidor backend (${this.baseUrl}). Verifica que esté iniciado.`);
+        const offlineErr = new Error(
+          'No hay conexión ahora. Revisa tu internet e inténtalo de nuevo — tus datos siguen escritos.'
+        );
         (offlineErr as unknown as { code: string }).code = 'SERVER_OFFLINE';
+        (offlineErr as unknown as { status: number }).status = 0;
         throw offlineErr;
       }
       throw err;
@@ -486,7 +513,87 @@ class ApiClient {
     return res;
   }
 
-  // --- System Diagnostics (Specification 4) ---
+  // --- Friends (Specification 4) ---
+
+  /** GET /api/v1/friends */
+  public async listFriends(): Promise<FriendUser[]> {
+    const res = await this.request<{
+      status: string;
+      data: { friends: FriendUser[] };
+    }>('/friends', { method: 'GET' }, true);
+    return res.data.friends ?? [];
+  }
+
+  /** GET /api/v1/friends/requests */
+  public async listFriendRequests(): Promise<FriendRequestItem[]> {
+    const res = await this.request<{
+      status: string;
+      data: { requests: FriendRequestItem[] };
+    }>('/friends/requests', { method: 'GET' }, true);
+    return res.data.requests ?? [];
+  }
+
+  /** GET /api/v1/friends/search?q= */
+  public async searchFriends(query: string): Promise<FriendSearchResult[]> {
+    const q = encodeURIComponent(query.trim());
+    const res = await this.request<{
+      status: string;
+      data: { results: FriendSearchResult[] };
+    }>(`/friends/search?q=${q}`, { method: 'GET' }, true);
+    return res.data.results ?? [];
+  }
+
+  /** POST /api/v1/friends/request */
+  public async sendFriendRequest(username: string): Promise<{ status: string; message?: string }> {
+    const res = await this.request<{
+      status: string;
+      message?: string;
+      data: { request: { status: string } };
+    }>(
+      '/friends/request',
+      {
+        method: 'POST',
+        body: JSON.stringify({ username: username.trim().toLowerCase() }),
+      },
+      true
+    );
+    return { status: res.data.request?.status ?? 'pending', message: res.message };
+  }
+
+  /** POST /api/v1/friends/accept */
+  public async acceptFriendRequest(requestId: string): Promise<FriendUser | null> {
+    const res = await this.request<{
+      status: string;
+      data: { friend: FriendUser | null };
+    }>(
+      '/friends/accept',
+      {
+        method: 'POST',
+        body: JSON.stringify({ requestId }),
+      },
+      true
+    );
+    return res.data.friend ?? null;
+  }
+
+  /** POST /api/v1/friends/decline */
+  public async declineFriendRequest(requestId: string): Promise<void> {
+    await this.request(
+      '/friends/decline',
+      {
+        method: 'POST',
+        body: JSON.stringify({ requestId }),
+      },
+      true
+    );
+  }
+
+  /** DELETE /api/v1/friends/:userId */
+  public async removeFriend(userId: string): Promise<void> {
+    await this.request(`/friends/${encodeURIComponent(userId)}`, { method: 'DELETE' }, true);
+  }
+
+  // --- System Diagnostics (Specification 5) ---
 
   /**
    * GET /api/v1/system/health

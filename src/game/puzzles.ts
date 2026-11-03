@@ -2,7 +2,7 @@
  * Puzzle mechanics for generated levels:
  *  - Push blocks: walk into a rock to push it; climb on it to reach high ledges.
  *    Falls with gravity and respawns if it drops into the void.
- *  - Doors: tall locked gates that open when you arrive with a key 🔑 in the backpack.
+ *  - Doors: tall locked gates that open when you arrive with a key in the backpack.
  *  - Key carriers: enemies holding a key — stomp on them to make them drop it.
  *  - Sentinels: watchtowers sweeping a cone of light; if it spots you, you're sent
  *    back to the zone entrance. Hide behind walls and move when it looks away.

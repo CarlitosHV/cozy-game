@@ -140,7 +140,7 @@ export function outfitStylesFor(body: BodyType) {
 export const EYE_STYLES: { id: EyeStyle; name: string }[] = [
   { id: 'redondos', name: 'Redondos' },
   { id: 'grandes', name: 'Brillantes' },
-  { id: 'felices', name: 'Felices ^^' },
+  { id: 'felices', name: 'Felices' },
 ];
 
 export const ACCESSORIES: { id: Accessory; name: string }[] = [
@@ -197,6 +197,56 @@ export function generateRandomName(body: BodyType = 'chico'): string {
   base = base.charAt(0).toUpperCase() + base.slice(1);
   const epithets = [...EPITHETS, body === 'chica' ? 'Soñadora' : 'Soñador'];
   return Math.random() < 0.5 ? `${base} ${pick(epithets)}` : base;
+}
+
+export const NAME_SUGGESTIONS: Record<BodyType, string[]> = {
+  chico: ['Nublo', 'Kai del Alba', 'Pepito Rebotahongos', 'Milo Brisa Suave', 'Tomi Cazaestrellas'],
+  chica: ['Luna', 'Mika del Prado', 'Nina Saltanubes', 'Sira de las Brumas', 'Vera Soñadora'],
+};
+
+const COLOR_LABELS: Record<string, string> = {
+  '#fde3d3': 'Piel clara',
+  '#fed0bb': 'Piel melocotón',
+  '#f1c09a': 'Piel arena',
+  '#e0a77e': 'Piel miel',
+  '#c68a5e': 'Piel canela',
+  '#a86d45': 'Piel bronce',
+  '#7d4f32': 'Piel cacao',
+  '#5a3824': 'Piel ébano',
+  '#1f1a17': 'Pelo negro',
+  '#3b2a20': 'Pelo café',
+  '#543825': 'Pelo castaño',
+  '#8a5a34': 'Pelo cobrizo',
+  '#c98b4a': 'Pelo rubio oscuro',
+  '#e8c37a': 'Pelo rubio',
+  '#f2efe6': 'Pelo platino',
+  '#b33c2e': 'Pelo rojo',
+  '#e58fb1': 'Pelo rosa',
+  '#7fb7d9': 'Pelo azul',
+  '#8f7cc4': 'Pelo lila',
+  '#6fa88a': 'Pelo menta',
+  '#2b2d42': 'Tinta',
+  '#3d312a': 'Nogal',
+  '#5e4636': 'Roble',
+  '#8a6a4f': 'Cuero',
+  '#6b2f2a': 'Terracota',
+  '#3f4a3c': 'Musgo oscuro',
+  '#db6b50': 'Coral',
+  '#e07a5f': 'Salmón',
+  '#f2cc8f': 'Crema',
+  '#e9c46a': 'Mostaza',
+  '#81b29a': 'Salvia',
+  '#588157': 'Bosque',
+  '#3d5a80': 'Azul noche',
+  '#98c1d9': 'Cielo',
+  '#6d597a': 'Lavanda',
+  '#b56576': 'Rosa viejo',
+  '#f4f1de': 'Marfil',
+};
+
+export function colorLabel(hex: string): string {
+  const key = hex.toLowerCase();
+  return COLOR_LABELS[key] ?? hex.toUpperCase();
 }
 
 /** Picks a color from the palette that differs from all colors in `avoid`. */
@@ -258,20 +308,38 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType): Charact
     typeof v === 'number' && isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
 
   if (typeof r.name === 'string' && r.name.trim()) out.name = r.name.slice(0, 24);
+  if (typeof r.displayName === 'string' && r.displayName.trim()) out.name = r.displayName.slice(0, 24);
   if (isHex(r.skinColor)) out.skinColor = r.skinColor;
   if (isHex(r.hairColor)) out.hairColor = r.hairColor;
   if (isHex(r.hatColor)) out.hatColor = r.hatColor;
   if (isHex(r.sweaterColor)) out.sweaterColor = r.sweaterColor;
+  if (isHex(r.shirtColor)) out.sweaterColor = r.shirtColor;
   if (isHex(r.detailColor)) out.detailColor = r.detailColor;
+  if (isHex(r.pantsColor)) out.detailColor = r.pantsColor;
   if (oneOf(r.outfitStyle, outfitStylesFor(body))) out.outfitStyle = r.outfitStyle;
   if (isHex(r.scarfColor)) out.scarfColor = r.scarfColor;
   if (isHex(r.bootColor)) out.bootColor = r.bootColor;
+  if (isHex(r.shoesColor)) out.bootColor = r.shoesColor;
   if (oneOf(r.hairStyle, hairStylesFor(body))) out.hairStyle = r.hairStyle;
+  else if (r.hairStyle === 'ponytail') out.hairStyle = 'coleta';
+  else if (r.hairStyle === 'cozy_messy' || r.hairStyle === 'short_crop') out.hairStyle = 'flequillo';
   if (oneOf(r.hatStyle, hatStylesFor(body))) out.hatStyle = r.hatStyle;
+  else if (typeof r.hat === 'string') {
+    if (r.hat === 'none' || r.hat === 'ninguno') out.hatStyle = 'ninguno';
+    else if (r.hat.includes('beanie') || r.hat.includes('gorro')) out.hatStyle = 'gorro';
+    else if (r.hat.includes('cap') || r.hat.includes('gorra')) out.hatStyle = 'gorra';
+  }
   if (oneOf(r.eyeStyle, EYE_STYLES)) out.eyeStyle = r.eyeStyle;
+  else if (typeof r.eyesStyle === 'string') {
+    if (r.eyesStyle.includes('big') || r.eyesStyle.includes('grand')) out.eyeStyle = 'grandes';
+    else if (r.eyesStyle.includes('happy') || r.eyesStyle.includes('felic')) out.eyeStyle = 'felices';
+    else out.eyeStyle = 'redondos';
+  }
   if (oneOf(r.accessory, ACCESSORIES)) out.accessory = r.accessory;
+  else if (typeof r.glasses === 'string' && r.glasses !== 'none') out.accessory = 'lentes';
   if (oneOf(r.companion, COMPANIONS) && isCompanionUnlocked(r.companion)) out.companion = r.companion;
   if (typeof r.backpack === 'boolean') out.backpack = r.backpack;
+  else if (typeof r.backpack === 'string') out.backpack = r.backpack !== 'none';
   out.height = clamp(r.height, 0.88, 1.12, out.height);
   out.build = clamp(r.build, 0.88, 1.15, out.build);
   return out;

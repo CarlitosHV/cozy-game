@@ -43,7 +43,7 @@ export function levelInfo(level: number): LevelInfo {
   return {
     id: level,
     name: t.name,
-    desc: level <= 4 ? t.desc : `Nivel generado · ${t.desc}`,
+    desc: level <= 4 ? t.desc : t.desc,
     theme,
     accent: t.accent,
     generated: level > 4,
@@ -114,8 +114,8 @@ export function levelHowTo(level: number): LevelHowTo {
     goal: 'Reúne los orbes y conquista la fortaleza',
     steps: [
       'Explora el mundo abierto con calma',
-      'Encuentra los orbes 🔮 siguiendo sus rayos de luz',
-      'Algunos orbes están en bóvedas: busca una llave 🔑',
+      'Encuentra los orbes siguiendo sus rayos de luz',
+      'Algunos orbes están en bóvedas: busca una llave',
       'Con todos los orbes se abre la fortaleza del centro',
       'Entra y sube la espiral hasta la cima para ganar',
     ],

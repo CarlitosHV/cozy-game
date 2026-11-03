@@ -12,7 +12,7 @@ export default function App() {
   const engineRef = useRef<GameEngine | null>(null);
 
   const [gameState, setGameState] = useState<GameState>('title');
-  const [checkpointName, setCheckpointName] = useState<string>('Sunrise Meadow');
+  const [checkpointName, setCheckpointName] = useState<string>('Pradera del Amanecer');
   const [checkpointIndex, setCheckpointIndex] = useState<number>(1);
   const [collectedCount, setCollectedCount] = useState<number>(0);
   const [totalCollectibles, setTotalCollectibles] = useState<number>(10);
@@ -75,7 +75,7 @@ export default function App() {
     };
   }, []);
 
-  const toggleFullscreen = async () => {
+  const toggleFullscreen = async (): Promise<boolean> => {
     try {
       const doc = document as any;
       const docEl = document.documentElement as any;
@@ -95,6 +95,8 @@ export default function App() {
           await docEl.mozRequestFullScreen();
         } else if (docEl.msRequestFullscreen) {
           await docEl.msRequestFullscreen();
+        } else {
+          return false;
         }
       } else {
         if (doc.exitFullscreen) {
@@ -105,10 +107,14 @@ export default function App() {
           await doc.mozCancelFullScreen();
         } else if (doc.msExitFullscreen) {
           await doc.msExitFullscreen();
+        } else {
+          return false;
         }
       }
+      return true;
     } catch (err) {
       console.warn('Fullscreen toggle failed:', err);
+      return false;
     }
   };
 
@@ -178,7 +184,7 @@ export default function App() {
 
   return (
     <div
-      className="relative w-screen h-screen overflow-hidden bg-stone-950 select-none"
+      className="relative w-screen h-screen overflow-hidden bg-[#8eb8cb] select-none font-ui"
       style={{ width: '100vw', height: '100dvh' }}
     >
       <div

@@ -1,9 +1,4 @@
-/**
- * Character Creator: live 3D character generator shown from the title screen.
- * Every change rebuilds the player model in the engine so the turntable preview
- * updates instantly. Includes a harmonious random generator and undo history.
- */
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Dices,
   Shuffle,
@@ -22,7 +17,11 @@ import {
   Mars,
   Venus,
   Lock,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
+import type { CharacterPreviewFocus } from '../game/GameEngine';
+import { UI, BTN } from '../ui/labels';
 import {
   BodyType,
   BODY_TYPES,
@@ -41,20 +40,64 @@ import {
   CompanionStyle,
   generateRandomAppearance,
   generateRandomName,
+  NAME_SUGGESTIONS,
+  colorLabel,
 } from '../game/character';
 import { COMPANION_POWERS } from '../game/companionPowers';
 import { isCompanionUnlocked, unlockLevelFor } from '../game/progress';
+import { ConfirmDialog, ConfirmRequest } from './ConfirmDialog';
+import { FieldError, RequirementList } from './FieldHints';
+import { RecentChips, SuggestionList } from './RecentChips';
+import {
+  CHARACTER_NAME_MAX,
+  characterNameRequirements,
+  isCharacterNameValid,
+  sanitizeCharacterNameInput,
+} from '../ui/validation';
+import { characterNameHint } from '../ui/errors';
+import { isTypingTarget } from '../ui/shortcuts';
+import { getRecent, pushRecent, RECENT_KEYS } from '../ui/recentMemory';
 
 type Tab = 'cuerpo' | 'pelo' | 'ropa' | 'companero';
 
 interface CharacterCreatorProps {
   appearance: CharacterAppearance;
   onChange: (next: CharacterAppearance) => void;
-  /** Switches to the other character; each one keeps its own saved look */
   onSwitchBody: (body: BodyType) => void;
   onClose: () => void;
+  onCancel?: () => void;
   portrait: boolean;
+  onFocusChange?: (focus: CharacterPreviewFocus) => void;
+  onZoom?: (delta: number) => void;
 }
+
+const TAB_FOCUS: Record<Tab, CharacterPreviewFocus> = {
+  cuerpo: 'full',
+  pelo: 'head',
+  ropa: 'torso',
+  companero: 'companion',
+};
+
+const FIELD_FOCUS: Partial<Record<keyof CharacterAppearance, CharacterPreviewFocus>> = {
+  skinColor: 'head',
+  eyeStyle: 'head',
+  accessory: 'head',
+  height: 'full',
+  build: 'full',
+  hairStyle: 'head',
+  hairColor: 'head',
+  outfitStyle: 'torso',
+  sweaterColor: 'torso',
+  detailColor: 'torso',
+  hatStyle: 'head',
+  hatColor: 'head',
+  scarfColor: 'torso',
+  bootColor: 'feet',
+  backpack: 'torso',
+  companion: 'companion',
+  name: 'full',
+  bodyType: 'full',
+};
 
 const TABS: { id: Tab; name: string; icon: React.ReactNode }[] = [
   { id: 'cuerpo', name: 'Cuerpo', icon: <Smile className="w-3.5 h-3.5" /> },
@@ -104,14 +147,15 @@ export const COMPANION_ICONS: Record<CompanionStyle, React.ReactNode> = {
 
 // ---------- Small building blocks ----------
 
-const Section: React.FC<{ title: string; children: React.ReactNode; aside?: React.ReactNode }> = ({
-  title,
-  children,
-  aside,
-}) => (
-  <div className="flex flex-col gap-2">
+const Section: React.FC<{
+  title: string;
+  children: React.ReactNode;
+  aside?: React.ReactNode;
+  onFocus?: () => void;
+}> = ({ title, children, aside, onFocus }) => (
+  <div className="flex flex-col gap-2" onPointerDownCapture={onFocus}>
     <div className="flex items-center justify-between">
-      <span className="text-[10px] text-amber-300 font-bold uppercase tracking-wider">{title}</span>
+      <span className="text-[10px] text-cozy-accent-deep font-bold uppercase tracking-wider">{title}</span>
       {aside}
     </div>
     {children}
@@ -126,48 +170,53 @@ const Swatches: React.FC<{
 }> = ({ colors, value, onPick, label }) => {
   const isCustom = !colors.includes(value.toLowerCase());
   return (
-    <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={label}>
-      {colors.map((c) => {
-        const selected = value.toLowerCase() === c.toLowerCase();
-        return (
-          <button
-            key={c}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            aria-label={c}
-            onClick={() => onPick(c)}
-            className={`w-7 h-7 rounded-full border transition-transform cursor-pointer active:scale-90 ${
-              selected
-                ? 'border-amber-300 ring-2 ring-amber-400/70 ring-offset-2 ring-offset-stone-900 scale-110'
-                : 'border-stone-950/40 hover:scale-110'
-            }`}
-            style={{ backgroundColor: c }}
+    <div>
+      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={label}>
+        {colors.map((c) => {
+          const selected = value.toLowerCase() === c.toLowerCase();
+          return (
+            <button
+              key={c}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-label={colorLabel(c)}
+              title={colorLabel(c)}
+              onClick={() => onPick(c)}
+              className={`w-7 h-7 rounded-full border transition-transform cursor-pointer active:scale-90 ${
+                selected
+                  ? 'border-cozy-accent ring-2 ring-cozy-accent/50 ring-offset-2 ring-offset-cozy-panel scale-110'
+                  : 'border-black/10 hover:scale-110'
+              }`}
+              style={{ backgroundColor: c }}
+            />
+          );
+        })}
+        <label
+          title="Color personalizado"
+          className={`relative w-7 h-7 rounded-full border cursor-pointer overflow-hidden transition-transform hover:scale-110 ${
+            isCustom
+              ? 'border-cozy-accent ring-2 ring-cozy-accent/50 ring-offset-2 ring-offset-cozy-panel scale-110'
+              : 'border-black/10'
+          }`}
+          style={{
+            background: isCustom
+              ? value
+              : 'conic-gradient(#f87171, #fbbf24, #a3e635, #34d399, #38bdf8, #a78bfa, #f472b6, #f87171)',
+          }}
+        >
+          <input
+            type="color"
+            value={value}
+            onChange={(e) => onPick(e.target.value)}
+            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+            aria-label={`${label}: color personalizado`}
           />
-        );
-      })}
-      {/* Custom color picker */}
-      <label
-        title="Color personalizado"
-        className={`relative w-7 h-7 rounded-full border cursor-pointer overflow-hidden transition-transform hover:scale-110 ${
-          isCustom
-            ? 'border-amber-300 ring-2 ring-amber-400/70 ring-offset-2 ring-offset-stone-900 scale-110'
-            : 'border-stone-950/40'
-        }`}
-        style={{
-          background: isCustom
-            ? value
-            : 'conic-gradient(#f87171, #fbbf24, #a3e635, #34d399, #38bdf8, #a78bfa, #f472b6, #f87171)',
-        }}
-      >
-        <input
-          type="color"
-          value={value}
-          onChange={(e) => onPick(e.target.value)}
-          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-          aria-label={`${label}: color personalizado`}
-        />
-      </label>
+        </label>
+      </div>
+      <p className="mt-1.5 text-[10px] text-cozy-muted">
+        Elegido: <span className="font-semibold text-cozy-ink">{colorLabel(value)}</span>
+      </p>
     </div>
   );
 };
@@ -192,8 +241,8 @@ function Chips<T extends string>({
             onClick={() => onPick(o.id)}
             className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer active:scale-95 ${
               selected
-                ? 'bg-amber-500 text-stone-950 border-amber-400 shadow-md shadow-amber-900/30'
-                : 'bg-stone-800/70 text-stone-200 border-stone-700 hover:border-stone-500 hover:bg-stone-800'
+                ? 'cozy-tab-active border-transparent'
+                : 'bg-cozy-panel-deep text-cozy-ink border-cozy-line hover:border-cozy-sky'
             }`}
           >
             {o.name}
@@ -222,9 +271,9 @@ const Slider: React.FC<{
       value={value}
       aria-label={label}
       onChange={(e) => onChange(parseFloat(e.target.value))}
-      className="w-full accent-amber-500 cursor-pointer"
+      className="w-full accent-cozy-accent cursor-pointer"
     />
-    <div className="flex justify-between text-[10px] text-stone-400">
+    <div className="flex justify-between text-[10px] text-cozy-muted">
       <span>{leftLabel}</span>
       <span>{rightLabel}</span>
     </div>
@@ -233,20 +282,38 @@ const Slider: React.FC<{
 
 // ---------- Main component ----------
 
-export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, onChange, onSwitchBody, onClose, portrait }) => {
+export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
+  appearance,
+  onChange,
+  onSwitchBody,
+  onClose,
+  onCancel,
+  portrait,
+  onFocusChange,
+  onZoom,
+}) => {
   const [tab, setTab] = useState<Tab>('cuerpo');
   const [history, setHistory] = useState<CharacterAppearance[]>([]);
+  const [nameTouched, setNameTouched] = useState(false);
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+  const [recentNames, setRecentNames] = useState<string[]>(() => getRecent(RECENT_KEYS.characterNames));
   const lastKeyRef = useRef<string | null>(null);
 
-  /**
-   * Applies a change. Consecutive edits of the same field (e.g. dragging a slider
-   * or a color picker) collapse into a single undo step.
-   */
+  useEffect(() => {
+    onFocusChange?.('full');
+  }, []);
+
+  const focus = (next: CharacterPreviewFocus) => {
+    onFocusChange?.(next);
+  };
+
   const apply = (next: CharacterAppearance, key: string) => {
     if (key !== lastKeyRef.current || key === 'random' || key === 'reset') {
       setHistory((h) => [...h.slice(-29), appearance]);
     }
     lastKeyRef.current = key;
+    const part = FIELD_FOCUS[key as keyof CharacterAppearance];
+    if (part) focus(part);
     onChange(next);
   };
 
@@ -262,54 +329,183 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
   };
 
   const body = appearance.bodyType;
-  const randomize = () => apply(generateRandomAppearance(body), 'random');
-  const randomizeLook = () => apply(generateRandomAppearance(body, appearance.name), 'random');
-  const reset = () => apply(defaultAppearanceFor(body), 'reset');
+  const nameReqs = characterNameRequirements(appearance.name);
+  const nameValid = isCharacterNameValid(appearance.name);
+  const nameError = nameTouched ? characterNameHint(appearance.name) : null;
+
+  const randomize = () => {
+    focus('full');
+    apply(generateRandomAppearance(body), 'random');
+  };
+  const randomizeLook = () => {
+    focus('full');
+    apply(generateRandomAppearance(body, appearance.name), 'random');
+  };
+  const reset = () => {
+    focus('full');
+    apply(defaultAppearanceFor(body), 'reset');
+  };
+
+  const requestRandomize = () => {
+    setConfirmRequest({
+      title: '¿Cambiar todo al azar?',
+      message: 'Se reemplazan nombre y apariencia. Podrás deshacer si te arrepientes.',
+      confirmLabel: 'Al azar',
+      cancelLabel: UI.cancel,
+      onConfirm: randomize,
+    });
+  };
+
+  const requestRandomizeLook = () => {
+    setConfirmRequest({
+      title: '¿Cambiar solo la apariencia?',
+      message: 'Se mantiene el nombre y se genera un look nuevo.',
+      confirmLabel: 'Cambiar look',
+      cancelLabel: UI.cancel,
+      onConfirm: randomizeLook,
+    });
+  };
+
+  const requestReset = () => {
+    setConfirmRequest({
+      title: '¿Volver al personaje inicial?',
+      message: 'Se pierde el look actual. Podrás deshacer después.',
+      confirmLabel: 'Restablecer',
+      cancelLabel: UI.cancel,
+      tone: 'danger',
+      onConfirm: reset,
+    });
+  };
 
   const switchBody = (next: BodyType) => {
     if (next === body) return;
-    // Undo history belongs to the character being edited
-    setHistory([]);
+    setHistory((h) => [...h.slice(-29), appearance]);
     lastKeyRef.current = null;
+    focus('full');
     onSwitchBody(next);
   };
+
+  const requestSwitchBody = (next: BodyType) => {
+    if (next === body) return;
+    setConfirmRequest({
+      title: '¿Cambiar de personaje?',
+      message: 'Pasarás a otra silueta y el look actual se reemplaza.',
+      confirmLabel: 'Cambiar',
+      cancelLabel: UI.cancel,
+      onConfirm: () => switchBody(next),
+    });
+  };
+
+  const finish = () => {
+    setNameTouched(true);
+    if (!nameValid) return;
+    const trimmed = appearance.name.trim();
+    if (trimmed !== appearance.name) {
+      apply({ ...appearance, name: trimmed }, 'name');
+    }
+    setRecentNames(pushRecent(RECENT_KEYS.characterNames, trimmed));
+    onClose();
+  };
+
+  const selectTab = (next: Tab) => {
+    setTab(next);
+    focus(TAB_FOCUS[next]);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (confirmRequest) return;
+      if (isTypingTarget(e.target)) {
+        if (e.code === 'Enter' && !e.shiftKey) {
+          (e.target as HTMLElement).blur();
+        }
+        return;
+      }
+      if (e.code === 'Escape' && onCancel) {
+        e.preventDefault();
+        onCancel();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.code === 'KeyZ') {
+        e.preventDefault();
+        undo();
+        return;
+      }
+      const tabMatch = /^(?:Digit|Numpad)([1-4])$/.exec(e.code);
+      if (tabMatch && !e.metaKey && !e.ctrlKey) {
+        const idx = parseInt(tabMatch[1], 10) - 1;
+        const next = TABS[idx];
+        if (next) selectTab(next.id);
+        return;
+      }
+      if (e.code === 'Enter') {
+        e.preventDefault();
+        finish();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [confirmRequest, history, appearance.name, nameValid, onCancel]);
 
   const panelPosition = portrait
     ? 'inset-x-0 bottom-0 max-h-[56%] rounded-t-3xl border-t'
     : 'right-0 top-0 bottom-0 w-[min(390px,46vw)] border-l';
 
   return (
-    <div className="absolute inset-0 pointer-events-none text-stone-100">
-      {/* Floating title over the 3D preview */}
+    <div className="absolute inset-0 pointer-events-none text-cozy-ink">
       <div
         className={`absolute flex flex-col gap-1 ${
           portrait ? 'top-4 inset-x-4 items-center text-center' : 'top-6 left-6 max-w-[40%]'
         }`}
       >
-        <span className={`inline-flex items-center gap-1.5 ${portrait ? 'self-center' : 'self-start'} px-3 py-1 rounded-full bg-stone-900/75 border border-stone-700/60 text-[10px] tracking-wider text-amber-200 font-semibold`}>
-          <Sparkles className="w-3 h-3 text-amber-400" />
+        <span className={`inline-flex items-center gap-1.5 ${portrait ? 'self-center' : 'self-start'} px-3 py-1 rounded-full cozy-chip text-[10px] tracking-wider text-cozy-accent-deep font-semibold`}>
+          <Sparkles className="w-3 h-3 text-cozy-accent-deep" />
           <span>Generador de personajes</span>
         </span>
         <h2
-          className="text-2xl sm:text-3xl font-bold text-amber-50 drop-shadow-[0_2px_8px_rgba(0,0,0,0.55)] truncate max-w-full"
-          style={{ fontFamily: "'Playfair Display', serif" }}
+          className="text-2xl sm:text-3xl font-display font-bold text-white drop-shadow-[0_2px_10px_rgba(61,74,82,0.45)] truncate max-w-full"
+          style={{ fontFamily: 'Fraunces, serif' }}
         >
           {appearance.name || 'Sin nombre'}
         </h2>
         <span
-          className={`${portrait ? 'self-center' : 'self-start'} px-2.5 py-0.5 rounded-full bg-stone-900/60 text-[10px] text-stone-200`}
+          className={`${portrait ? 'self-center' : 'self-start'} px-2.5 py-0.5 rounded-full cozy-chip text-[10px] text-cozy-muted`}
         >
-          {portrait ? 'Desliza para girar' : 'Arrastra para girar · rueda para acercar'}
+          {portrait ? 'Desliza para girar · pellizca para acercar' : 'Arrastra para girar · rueda para acercar'}
         </span>
+        {onZoom && (
+          <div className={`${portrait ? 'self-center' : 'self-start'} pointer-events-auto flex items-center gap-1.5 mt-1`}>
+            <button
+              type="button"
+              onClick={() => onZoom(-0.12)}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-xl cozy-chip text-cozy-ink cursor-pointer text-[10px] font-semibold"
+              title="Acercar"
+              aria-label="Acercar"
+            >
+              <ZoomIn className="w-4 h-4" />
+              <span>Acercar</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onZoom(0.12)}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-xl cozy-chip text-cozy-ink cursor-pointer text-[10px] font-semibold"
+              title="Alejar"
+              aria-label="Alejar"
+            >
+              <ZoomOut className="w-4 h-4" />
+              <span>Alejar</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Editor panel */}
       <div
-        className={`absolute ${panelPosition} pointer-events-auto flex flex-col bg-stone-900/92 border-stone-700/70 backdrop-blur-md shadow-2xl`}
+        className={`absolute ${panelPosition} pointer-events-auto flex flex-col cozy-panel backdrop-blur-md`}
       >
         {/* Character selector + name + randomizers */}
-        <div className="flex flex-col gap-3 p-4 pb-3 border-b border-stone-800">
-          <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-stone-950/70 border border-stone-800" role="radiogroup" aria-label="Personaje">
+        <div className="flex flex-col gap-3 p-4 pb-3 border-b border-cozy-line">
+          <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-cozy-panel-deep border border-cozy-line" role="radiogroup" aria-label="Personaje">
             {BODY_TYPES.map((b) => {
               const selected = body === b.id;
               const Icon = b.id === 'chica' ? Venus : Mars;
@@ -319,13 +515,13 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  onClick={() => switchBody(b.id)}
+                  onClick={() => requestSwitchBody(b.id)}
                   className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-bold transition-all cursor-pointer ${
                     selected
                       ? b.id === 'chica'
-                        ? 'bg-rose-400 text-stone-950 shadow-md shadow-rose-950/40'
-                        : 'bg-sky-400 text-stone-950 shadow-md shadow-sky-950/40'
-                      : 'text-stone-400 hover:text-stone-100'
+                        ? 'bg-cozy-blush text-white shadow-md'
+                        : 'bg-cozy-sky text-white shadow-md'
+                      : 'text-cozy-muted hover:text-cozy-ink'
                   }`}
                 >
                   <Icon className="w-4 h-4" />
@@ -334,42 +530,83 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
               );
             })}
           </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={appearance.name}
-              maxLength={24}
-              placeholder={body === 'chica' ? 'Nombre de tu viajera' : 'Nombre de tu viajero'}
-              onChange={(e) => set('name', e.target.value)}
-              className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-stone-950/70 border border-stone-700 focus:border-amber-400 focus:outline-none text-sm font-semibold text-stone-100 placeholder:text-stone-500 select-text"
-              aria-label="Nombre del personaje"
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[11px] font-bold text-cozy-muted uppercase tracking-wider">
+                Nombre
+              </label>
+              <span className="text-[10px] text-cozy-soft">
+                {appearance.name.length}/{CHARACTER_NAME_MAX}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={appearance.name}
+                maxLength={CHARACTER_NAME_MAX}
+                placeholder={body === 'chica' ? 'Nombre de tu viajera' : 'Nombre de tu viajero'}
+                onChange={(e) => set('name', sanitizeCharacterNameInput(e.target.value))}
+                onBlur={() => setNameTouched(true)}
+                className="flex-1 min-w-0 px-3 py-2 rounded-xl cozy-input text-sm font-semibold placeholder:text-cozy-soft select-text"
+                aria-label="Nombre del personaje"
+                aria-invalid={Boolean(nameError)}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  set('name', generateRandomName(body));
+                  setNameTouched(true);
+                }}
+                title="Nombre aleatorio"
+                aria-label="Nombre aleatorio"
+                className="p-2 rounded-xl cozy-btn text-cozy-accent-deep cursor-pointer active:scale-95"
+              >
+                <Dices className="w-4 h-4" />
+              </button>
+            </div>
+            <RecentChips
+              label="Nombres recientes"
+              items={recentNames}
+              onPick={(value) => {
+                set('name', sanitizeCharacterNameInput(value));
+                setNameTouched(true);
+              }}
             />
-            <button
-              type="button"
-              onClick={() => set('name', generateRandomName(body))}
-              title="Nombre aleatorio"
-              aria-label="Nombre aleatorio"
-              className="p-2 rounded-xl bg-stone-800 border border-stone-700 hover:border-amber-400 text-amber-300 cursor-pointer active:scale-95"
-            >
-              <Dices className="w-4 h-4" />
-            </button>
+            <RecentChips
+              label="Sugerencias"
+              items={NAME_SUGGESTIONS[body]}
+              onPick={(value) => {
+                set('name', sanitizeCharacterNameInput(value));
+                setNameTouched(true);
+              }}
+            />
+            <SuggestionList
+              query={appearance.name}
+              options={[...recentNames, ...NAME_SUGGESTIONS[body]]}
+              onPick={(value) => {
+                set('name', sanitizeCharacterNameInput(value));
+                setNameTouched(true);
+              }}
+            />
+            <RequirementList items={nameReqs} show={nameTouched || appearance.name.length > 0} />
+            <FieldError message={nameError} />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={randomize}
-              className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 text-stone-950 font-bold text-xs shadow-lg shadow-amber-950/30 cursor-pointer active:scale-95"
+              onClick={requestRandomize}
+              className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl cozy-btn-primary font-bold text-xs cursor-pointer active:scale-95"
             >
               <Dices className="w-4 h-4" />
               ¡Generar al azar!
             </button>
             <button
               type="button"
-              onClick={randomizeLook}
-              className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-stone-800 border border-stone-700 hover:border-amber-400 text-stone-100 font-semibold text-xs cursor-pointer active:scale-95"
+              onClick={requestRandomizeLook}
+              className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl cozy-btn font-semibold text-xs cursor-pointer active:scale-95"
               title="Cambia la apariencia y conserva el nombre"
             >
-              <Shuffle className="w-4 h-4 text-amber-300" />
+              <Shuffle className="w-4 h-4 text-cozy-accent-deep" />
               Solo apariencia
             </button>
           </div>
@@ -383,11 +620,11 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
               type="button"
               role="tab"
               aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
+              onClick={() => selectTab(t.id)}
               className={`flex-1 flex items-center justify-center gap-1 px-2 py-2 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer ${
                 tab === t.id
-                  ? 'bg-stone-800 text-amber-300 border border-stone-600'
-                  : 'text-stone-400 hover:text-stone-200 border border-transparent'
+                  ? 'bg-cozy-panel-deep text-cozy-accent-deep border border-cozy-line'
+                  : 'text-cozy-muted hover:text-cozy-ink border border-transparent'
               }`}
             >
               {t.icon}
@@ -400,16 +637,16 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
         <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-5 overscroll-contain touch-pan-y">
           {tab === 'cuerpo' && (
             <>
-              <Section title="Tono de piel">
+              <Section title="Tono de piel" onFocus={() => focus('head')}>
                 <Swatches label="Tono de piel" colors={SKIN_TONES} value={appearance.skinColor} onPick={(c) => set('skinColor', c)} />
               </Section>
-              <Section title="Ojos">
+              <Section title="Ojos" onFocus={() => focus('head')}>
                 <Chips options={EYE_STYLES} value={appearance.eyeStyle} onPick={(v) => set('eyeStyle', v)} />
               </Section>
-              <Section title="Detalle">
+              <Section title="Detalle" onFocus={() => focus('head')}>
                 <Chips options={ACCESSORIES} value={appearance.accessory} onPick={(v) => set('accessory', v)} />
               </Section>
-              <Section title="Estatura">
+              <Section title="Estatura" onFocus={() => focus('full')}>
                 <Slider
                   label="Estatura"
                   value={appearance.height}
@@ -420,7 +657,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
                   rightLabel="Alto"
                 />
               </Section>
-              <Section title="Complexión">
+              <Section title="Complexión" onFocus={() => focus('full')}>
                 <Slider
                   label="Complexión"
                   value={appearance.build}
@@ -436,10 +673,10 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
 
           {tab === 'pelo' && (
             <>
-              <Section title="Peinado">
+              <Section title="Peinado" onFocus={() => focus('head')}>
                 <Chips options={hairStylesFor(body)} value={appearance.hairStyle} onPick={(v) => set('hairStyle', v)} />
               </Section>
-              <Section title="Color de pelo">
+              <Section title="Color de pelo" onFocus={() => focus('head')}>
                 <Swatches label="Color de pelo" colors={HAIR_COLORS} value={appearance.hairColor} onPick={(c) => set('hairColor', c)} />
               </Section>
             </>
@@ -447,28 +684,28 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
 
           {tab === 'ropa' && (
             <>
-              <Section title="Estilo de ropa">
+              <Section title="Estilo de ropa" onFocus={() => focus('torso')}>
                 <Chips options={outfitStylesFor(body)} value={appearance.outfitStyle} onPick={(v) => set('outfitStyle', v)} />
               </Section>
-              <Section title="Color de la ropa">
+              <Section title="Color de la ropa" onFocus={() => focus('torso')}>
                 <Swatches label="Color de la ropa" colors={CLOTH_COLORS} value={appearance.sweaterColor} onPick={(c) => set('sweaterColor', c)} />
               </Section>
-              <Section title="Color de detalles">
+              <Section title="Color de detalles" onFocus={() => focus('torso')}>
                 <Swatches label="Color de detalles" colors={CLOTH_COLORS} value={appearance.detailColor} onPick={(c) => set('detailColor', c)} />
               </Section>
-              <Section title="Para la cabeza">
+              <Section title="Para la cabeza" onFocus={() => focus('head')}>
                 <Chips options={hatStylesFor(body)} value={appearance.hatStyle} onPick={(v) => set('hatStyle', v)} />
               </Section>
-              <Section title="Color del gorro y puños">
+              <Section title="Color del gorro y puños" onFocus={() => focus('head')}>
                 <Swatches label="Color del gorro" colors={CLOTH_COLORS} value={appearance.hatColor} onPick={(c) => set('hatColor', c)} />
               </Section>
-              <Section title="Bufanda">
+              <Section title="Bufanda" onFocus={() => focus('torso')}>
                 <Swatches label="Bufanda" colors={CLOTH_COLORS} value={appearance.scarfColor} onPick={(c) => set('scarfColor', c)} />
               </Section>
-              <Section title="Botas">
+              <Section title="Botas" onFocus={() => focus('feet')}>
                 <Swatches label="Botas" colors={BOOT_COLORS} value={appearance.bootColor} onPick={(c) => set('bootColor', c)} />
               </Section>
-              <Section title="Equipo">
+              <Section title="Equipo" onFocus={() => focus('torso')}>
                 <button
                   type="button"
                   role="switch"
@@ -476,17 +713,17 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
                   onClick={() => set('backpack', !appearance.backpack)}
                   className={`flex items-center gap-3 p-3 rounded-2xl border text-left cursor-pointer transition-colors ${
                     appearance.backpack
-                      ? 'bg-amber-950/40 border-amber-500/60'
-                      : 'bg-stone-800/60 border-stone-700 hover:border-stone-500'
+                      ? 'bg-[#fff1de] border-[#f0c48a]'
+                      : 'cozy-panel-soft hover:border-cozy-sky'
                   }`}
                 >
-                  <Backpack className={`w-5 h-5 ${appearance.backpack ? 'text-amber-300' : 'text-stone-400'}`} />
+                  <Backpack className={`w-5 h-5 ${appearance.backpack ? 'text-cozy-accent-deep' : 'text-cozy-muted'}`} />
                   <div className="flex-1">
                     <div className="text-xs font-bold">Mochila de aventurero</div>
-                    <div className="text-[10px] text-stone-400">Con petate, cantimplora y farolito</div>
+                    <div className="text-[10px] text-cozy-muted">Con petate, cantimplora y farolito</div>
                   </div>
                   <span
-                    className={`w-9 h-5 rounded-full p-0.5 transition-colors ${appearance.backpack ? 'bg-amber-500' : 'bg-stone-600'}`}
+                    className={`w-9 h-5 rounded-full p-0.5 transition-colors ${appearance.backpack ? 'bg-cozy-accent' : 'bg-cozy-soft'}`}
                   >
                     <span
                       className={`block w-4 h-4 rounded-full bg-white transition-transform ${
@@ -500,7 +737,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
           )}
 
           {tab === 'companero' && (
-            <Section title="Compañero flotante">
+            <Section title="Compañero flotante" onFocus={() => focus('companion')}>
               <div className="grid grid-cols-2 gap-2">
                 {COMPANIONS.map((c) => {
                   const selected = appearance.companion === c.id;
@@ -510,19 +747,19 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
                     return (
                       <div
                         key={c.id}
-                        className="flex flex-col gap-1 p-3 rounded-2xl border border-dashed border-stone-700 bg-stone-950/50 text-left opacity-80"
+                        className="flex flex-col gap-1 p-3 rounded-2xl border border-dashed border-cozy-line bg-cozy-panel-deep text-left opacity-80"
                         aria-disabled="true"
                       >
-                        <span className="flex items-center gap-1.5 text-stone-500">
+                        <span className="flex items-center gap-1.5 text-cozy-soft">
                           {COMPANION_ICONS[c.id]}
                           <Lock className="w-3.5 h-3.5" />
                         </span>
-                        <span className="text-xs font-bold text-stone-300">{c.name}</span>
-                        <span className="text-[10px] text-amber-300/90 leading-snug">
+                        <span className="text-xs font-bold text-cozy-muted">{c.name}</span>
+                        <span className="text-[10px] text-cozy-accent-deep/90 leading-snug">
                           Completa el nivel {lvl} para desbloquearlo
                         </span>
                         {COMPANION_POWERS[c.id] && (
-                          <span className="text-[10px] leading-snug text-stone-500">
+                          <span className="text-[10px] leading-snug text-cozy-soft">
                             Poder: {COMPANION_POWERS[c.id]!.powerName}
                           </span>
                         )}
@@ -536,16 +773,16 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
                       onClick={() => set('companion', c.id)}
                       className={`flex flex-col gap-1 p-3 rounded-2xl border text-left cursor-pointer transition-all active:scale-95 ${
                         selected
-                          ? 'bg-amber-950/40 border-amber-400 ring-1 ring-amber-400/50'
-                          : 'bg-stone-800/60 border-stone-700 hover:border-stone-500'
+                          ? 'bg-[#fff1de] border-cozy-accent ring-1 ring-cozy-accent/40'
+                          : 'cozy-panel-soft hover:border-cozy-sky'
                       }`}
                     >
-                      <span className={selected ? 'text-amber-300' : 'text-stone-400'}>{COMPANION_ICONS[c.id]}</span>
+                      <span className={selected ? 'text-cozy-accent-deep' : 'text-cozy-muted'}>{COMPANION_ICONS[c.id]}</span>
                       <span className="text-xs font-bold">{c.name}</span>
-                      <span className="text-[10px] text-stone-400 leading-snug">{c.desc}</span>
+                      <span className="text-[10px] text-cozy-muted leading-snug">{c.desc}</span>
                       {COMPANION_POWERS[c.id] && (
-                        <span className="mt-1 text-[10px] leading-snug text-emerald-300">
-                          <strong>Poder (G): {COMPANION_POWERS[c.id]!.powerName}.</strong> {COMPANION_POWERS[c.id]!.desc}
+                        <span className="mt-1 text-[10px] leading-snug text-cozy-moss">
+                          <strong>Poder: {COMPANION_POWERS[c.id]!.powerName}.</strong> {COMPANION_POWERS[c.id]!.desc}
                         </span>
                       )}
                     </button>
@@ -556,37 +793,48 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({ appearance, 
           )}
         </div>
 
-        {/* Footer actions */}
-        <div className="flex items-center gap-2 p-3 border-t border-stone-800 pb-safe">
+        <div className="flex items-center gap-2 p-3 border-t border-cozy-line pb-safe">
           <button
             type="button"
             onClick={undo}
             disabled={!history.length}
-            title="Deshacer"
-            aria-label="Deshacer"
-            className="p-2.5 rounded-xl bg-stone-800 border border-stone-700 text-stone-200 enabled:hover:border-stone-500 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+            title={UI.undo}
+            aria-label={UI.undo}
+            className="p-2.5 rounded-xl cozy-btn enabled:hover:border-cozy-sky disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
           >
             <Undo2 className="w-4 h-4" />
           </button>
           <button
             type="button"
-            onClick={reset}
+            onClick={requestReset}
             title="Restablecer personaje original"
             aria-label="Restablecer"
-            className="p-2.5 rounded-xl bg-stone-800 border border-stone-700 text-stone-200 hover:border-stone-500 cursor-pointer"
+            className="p-2.5 rounded-xl cozy-btn cursor-pointer"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className={BTN.secondary}
+            >
+              {UI.cancel}
+            </button>
+          )}
           <button
             type="button"
-            onClick={onClose}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm cursor-pointer active:scale-95 shadow-lg shadow-amber-950/30"
+            onClick={finish}
+            disabled={!nameValid}
+            className={`flex-1 ${BTN.primary} flex items-center justify-center gap-2 active:scale-95`}
           >
             <Check className="w-4 h-4" />
-            ¡Listo!
+            {UI.done}
           </button>
         </div>
       </div>
+
+      <ConfirmDialog request={confirmRequest} onCancel={() => setConfirmRequest(null)} />
     </div>
   );
 };

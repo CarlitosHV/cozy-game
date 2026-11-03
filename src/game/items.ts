@@ -14,7 +14,6 @@ export type ItemType = 'baya' | 'nuez' | 'llave';
 export interface ItemInfo {
   type: ItemType;
   name: string;
-  emoji: string;
   desc: string;
   color: string;
 }
@@ -23,25 +22,24 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
   baya: {
     type: 'baya',
     name: 'Baya mágica',
-    emoji: '🍓',
     desc: 'Alimenta a tu compañero y recarga su poder.',
     color: '#f9a8d4',
   },
   nuez: {
     type: 'nuez',
     name: 'Nuez energética',
-    emoji: '🌰',
     desc: 'Súper salto: saltas mucho más alto durante 10 segundos.',
     color: '#fcd34d',
   },
   llave: {
     type: 'llave',
     name: 'Llave',
-    emoji: '🗝️',
     desc: 'Abre una puerta cerrada de este nivel. Se usa sola al llegar a la puerta.',
     color: '#facc15',
   },
 };
+
+export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave'];
 
 export const INVENTORY_SIZE = 5;
 const RESPAWN_SECONDS = 30;
@@ -195,11 +193,72 @@ function createItemModel(type: ItemType) {
   return type === 'nuez' ? createWalnutModel() : createBerryModel();
 }
 
+/** The 3D item mesh for world pickups or UI previews (halo optional). */
+export function createItemMesh(type: ItemType, withHalo = false): THREE.Group {
+  const built = createItemModel(type);
+  if (!withHalo) built.group.remove(built.halo);
+  return built.group;
+}
+
 /** The 3D key model (also used on enemies that carry it). */
 export function createKeyMesh(): THREE.Group {
-  const k = createKeyModel();
-  k.group.remove(k.halo);
-  return k.group;
+  return createItemMesh('llave', false);
+}
+
+let itemPreviewUrls: Record<ItemType, string> | null = null;
+
+function disposeObject(root: THREE.Object3D) {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.isMesh) {
+      mesh.geometry?.dispose();
+      const mat = mesh.material;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat?.dispose();
+    }
+  });
+}
+
+/** Renders each item's 3D model once to a transparent PNG for HUD thumbs. */
+export function getItemPreviewUrl(type: ItemType): string {
+  if (typeof document === 'undefined') return '';
+  if (!itemPreviewUrls) {
+    const size = 128;
+    const renderer = new THREE.WebGLRenderer({
+      alpha: true,
+      antialias: true,
+      preserveDrawingBuffer: true,
+      powerPreference: 'low-power',
+    });
+    renderer.setSize(size, size);
+    renderer.setPixelRatio(2);
+    renderer.setClearColor(0x000000, 0);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 20);
+    camera.position.set(0.55, 0.42, 0.85);
+    camera.lookAt(0, 0.02, 0);
+    const key = new THREE.DirectionalLight(0xfff6e8, 1.35);
+    key.position.set(2.2, 3.4, 4);
+    scene.add(key, new THREE.AmbientLight(0xffffff, 0.62));
+    const fill = new THREE.DirectionalLight(0xb8d4ff, 0.45);
+    fill.position.set(-2, 1.2, -1.5);
+    scene.add(fill);
+
+    const urls = {} as Record<ItemType, string>;
+    for (const itemType of ITEM_TYPES) {
+      const mesh = createItemMesh(itemType, false);
+      mesh.scale.setScalar(itemType === 'llave' ? 1.55 : itemType === 'nuez' ? 2.05 : 2.35);
+      if (itemType === 'llave') mesh.rotation.z = -0.35;
+      scene.add(mesh);
+      renderer.render(scene, camera);
+      urls[itemType] = renderer.domElement.toDataURL('image/png');
+      scene.remove(mesh);
+      disposeObject(mesh);
+    }
+    renderer.dispose();
+    itemPreviewUrls = urls;
+  }
+  return itemPreviewUrls[type];
 }
 
 // ---------- System ----------
@@ -326,6 +385,24 @@ export class ItemSystem {
     return this.slots.includes(type);
   }
 
+  public count(type: ItemType): number {
+    let n = 0;
+    for (const slot of this.slots) if (slot === type) n++;
+    return n;
+  }
+
+  /** Uses every slot of a type. Stops early for berries once the companion is full. */
+  public useAllOfType(type: ItemType, ctx: ItemUseContext): number {
+    if (type === 'llave') return 0;
+    let used = 0;
+    for (let i = 0; i < this.slots.length; i++) {
+      if (this.slots[i] !== type) continue;
+      if (this.use(i, ctx)) used++;
+      else if (type === 'baya') break;
+    }
+    return used;
+  }
+
   /** Removes one item of a type from the backpack. Returns false if there wasn't any. */
   public consume(type: ItemType): boolean {
     const i = this.slots.indexOf(type);
@@ -352,12 +429,58 @@ export class ItemSystem {
     this.pickups.push({ type, group, halo, baseY: pos.y, available: true, respawnTimer: 0, phase: 0, fullWarnCooldown: 0, oneShot: true });
   }
 
-  /** Drops (discards) the item in a slot. */
-  public discard(slot: number) {
+  /** Drops (discards) the item in a slot. Returns the removed type. */
+  public discard(slot: number): ItemType | null {
     const type = this.slots[slot];
-    if (!type) return;
+    if (!type) return null;
     this.slots[slot] = null;
     this.emit(`Tiraste: ${ITEM_INFO[type].name}`);
+    return type;
+  }
+
+  /** Puts an item back after discard. Prefers the original slot. */
+  public restore(slot: number, type: ItemType): boolean {
+    if (this.slots[slot] === null) {
+      this.slots[slot] = type;
+      this.emit(`Recuperaste: ${ITEM_INFO[type].name}`);
+      return true;
+    }
+    const free = this.slots.indexOf(null);
+    if (free === -1) {
+      this.emit('Tu mochila está llena; no se pudo recuperar');
+      return false;
+    }
+    this.slots[free] = type;
+    this.emit(`Recuperaste: ${ITEM_INFO[type].name}`);
+    return true;
+  }
+
+  /** Removes every item of a type and returns what was taken (for undo). */
+  public discardAllOfType(type: ItemType): { slot: number; type: ItemType }[] {
+    const removed: { slot: number; type: ItemType }[] = [];
+    for (let i = 0; i < this.slots.length; i++) {
+      if (this.slots[i] !== type) continue;
+      removed.push({ slot: i, type });
+      this.slots[i] = null;
+    }
+    return removed;
+  }
+
+  public restoreMany(entries: { slot: number; type: ItemType }[]): number {
+    let n = 0;
+    for (const entry of entries) {
+      if (this.slots[entry.slot] === null) {
+        this.slots[entry.slot] = entry.type;
+        n++;
+        continue;
+      }
+      const free = this.slots.indexOf(null);
+      if (free === -1) break;
+      this.slots[free] = entry.type;
+      n++;
+    }
+    if (n > 0) this.emit(`Recuperaste ${n} objeto${n === 1 ? '' : 's'}`);
+    return n;
   }
 
   public update(dt: number, playerPos: THREE.Vector3, ctx: ItemUseContext) {

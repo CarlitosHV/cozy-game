@@ -327,7 +327,7 @@ export function buildCozyParkourWorld(
   scene.add(shrine1.group);
   checkpoints.push({
     id: 1,
-    name: 'Sunrise Meadow',
+    name: 'Pradera del Amanecer',
     spawnPos: new THREE.Vector3(0, 0.2, 0),
     shrine: shrine1,
   });
@@ -420,7 +420,7 @@ export function buildCozyParkourWorld(
   scene.add(shrine2.group);
   checkpoints.push({
     id: 2,
-    name: 'Windy Canopy',
+    name: 'Dosel Ventoso',
     spawnPos: new THREE.Vector3(5.0, 7.4, 44.5),
     shrine: shrine2,
   });
@@ -543,7 +543,7 @@ export function buildCozyParkourWorld(
   scene.add(shrine3.group);
   checkpoints.push({
     id: 3,
-    name: 'Celestial Spire',
+    name: 'Aguja Celestial',
     spawnPos: new THREE.Vector3(-17.5, 24.7, 105.0),
     shrine: shrine3,
   });

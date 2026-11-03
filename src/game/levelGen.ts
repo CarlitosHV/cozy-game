@@ -5,7 +5,7 @@
  *  - The land is a 6×6 grid of terrain blocks at different heights (sunken pits, plains,
  *    hills and mesas, 3m apart) joined by staircases, so you can wander anywhere: climb,
  *    drop down, loop around. The connections are checked so every corner can be reached.
- *  - Hidden around the zone are 3-5 orbs 🔮 (each marked by a beam of light): on top of
+ *  - Hidden around the zone are 3-5 orbs (each marked by a beam of light): on top of
  *    spiral towers, on islands in the sky reached with trampolines, at the end of routes
  *    that leave the map (with a portal back), on a pillar you reach by pushing a rock,
  *    inside a locked vault (the key is on a sky island or carried by an enemy) or next to
@@ -445,10 +445,10 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
           if (reward === 'orb') placeOrb(sp.x, last.top, sp.z);
           else {
             items.push({ type: 'llave', pos: new THREE.Vector3(sp.x, last.top + 0.95, sp.z) });
-            hint(new THREE.Vector3(last.x, last.top, last.z), 3.5, '🔑 ¡Una llave! Abre la bóveda donde está encerrado un orbe');
+            hint(new THREE.Vector3(last.x, last.top, last.z), 3.5, '¡Una llave! Abre la bóveda donde está encerrado un orbe');
           }
           collectible(d1.x, d1.top, d1.z, true);
-          hint(new THREE.Vector3(t1.x, t.y, t1.z), 4, '🍄 ¡Rebota en el trampolín para subir a las islas del cielo!');
+          hint(new THREE.Vector3(t1.x, t.y, t1.z), 4, '¡Rebota en el trampolín para subir a las islas del cielo!');
           if (rng() < 0.3 + 0.4 * diff) extra('diver', new THREE.Vector3(d1.x, d1.top, d1.z), 'x', 1.6);
           t.rects.push(foot);
           t.used = true;

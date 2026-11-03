@@ -1,12 +1,13 @@
-/**
- * Leaderboard Modal
- * Adapts to /api/v1/leaderboard/:levelId?mode=time_trial&limit=50
- * Displays high scores, ranks, and times from Redis Sorted Sets.
- */
-
 import React, { useState, useEffect } from 'react';
-import { Trophy, Clock, X, RefreshCw, AlertCircle, Medal } from 'lucide-react';
+import { Trophy, Clock, X, RefreshCw, Medal } from 'lucide-react';
 import { apiClient, LeaderboardEntry } from '../services/apiClient';
+import { useAsyncAction } from '../hooks/useAsyncAction';
+import { ActionFeedbackBanner } from './ActionFeedback';
+import { formatSeconds, friendlyError } from '../utils/locale';
+import { UI, BTN } from '../ui/labels';
+import { isTypingTarget } from '../ui/shortcuts';
+import { levelInfo } from '../game/progress';
+import { EmptyState, HelpTip, TIPS } from './HelpTip';
 
 interface LeaderboardModalProps {
   isOpen: boolean;
@@ -24,100 +25,176 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
   const [levelId, setLevelId] = useState<number>(initialLevelId);
   const [mode, setMode] = useState<'time_trial' | 'free' | 'chase'>(initialMode);
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const loadAction = useAsyncAction();
 
   useEffect(() => {
-    if (isOpen) {
-      fetchLeaderboard();
-    }
+    if (!isOpen) return;
+    setLevelId(initialLevelId);
+    setMode(initialMode);
+  }, [isOpen, initialLevelId, initialMode]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setHasLoadedOnce(false);
+    void fetchLeaderboard(false);
   }, [isOpen, levelId, mode]);
 
-  const fetchLeaderboard = async () => {
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      const res = await apiClient.getLeaderboard(levelId, mode);
-      setEntries(res.leaderboard || []);
-    } catch (err: unknown) {
-      setErrorMsg((err as Error)?.message || 'No se pudo cargar la tabla de clasificación.');
-    } finally {
-      setIsLoading(false);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      const match = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);
+      if (match) {
+        e.preventDefault();
+        setLevelId(parseInt(match[1], 10));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen]);
+
+  const fetchLeaderboard = async (manual: boolean) => {
+    const result = await loadAction.run(
+      async () => {
+        const res = await apiClient.getLeaderboard(levelId, mode);
+        return res.leaderboard || [];
+      },
+      {
+        successMessage: manual ? 'Lista al día' : undefined,
+        silentSuccess: !manual,
+        errorMessage: (err) =>
+          friendlyError(
+            err,
+            'No pudimos cargar el ranking. Revisa tu conexión y toca Actualizar.'
+          ),
+      }
+    );
+
+    if (result.ok) {
+      setEntries(result.result);
+      setHasLoadedOnce(true);
+    } else {
+      setHasLoadedOnce(true);
     }
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/80 backdrop-blur-sm pointer-events-auto select-none font-['Outfit',sans-serif]">
-      <div className="relative w-full max-w-lg rounded-3xl bg-stone-900 border border-amber-600/30 shadow-2xl p-6 text-stone-100 max-h-[90vh] flex flex-col">
-        {/* Header */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 cozy-scrim pointer-events-auto select-none font-ui">
+      <div className="relative w-full max-w-lg rounded-[1.75rem] cozy-panel p-6 max-h-[90vh] flex flex-col">
         <button
           onClick={onClose}
-          className="absolute top-5 right-5 p-1.5 rounded-xl text-stone-400 hover:text-stone-100 hover:bg-stone-800 transition-colors cursor-pointer"
-          aria-label="Cerrar ventana"
+          disabled={loadAction.busy}
+          className="absolute top-5 right-5 p-1.5 rounded-xl text-cozy-soft hover:text-cozy-ink hover:bg-cozy-panel-deep transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label={UI.close}
         >
           <X className="w-5 h-5" />
         </button>
 
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-400/40 flex items-center justify-center text-amber-400 shadow-inner">
+          <div className="w-12 h-12 rounded-2xl bg-[#fff1de] border border-cozy-line flex items-center justify-center text-cozy-accent-deep">
             <Trophy className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-xl font-serif font-bold text-amber-200">Mejores Tiempos Online</h2>
-            <p className="text-xs text-stone-400">Récords validados por el servidor en Redis</p>
+            <h2 className="text-xl font-display font-bold text-cozy-ink inline-flex items-center gap-1">
+              {UI.leaderboard}
+              <HelpTip label={TIPS.ranking} side="bottom" />
+            </h2>
+            <p className="text-xs text-cozy-muted">Quién llegó más rápido</p>
           </div>
         </div>
 
-        {/* Level and Mode Controls */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-4 pb-3 border-b border-stone-800">
-          {/* Level selector */}
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-            {[1, 2, 3, 4, 5].map((lvl) => (
-              <button
-                key={lvl}
-                onClick={() => setLevelId(lvl)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  levelId === lvl
-                    ? 'bg-amber-500 text-stone-950 shadow-md'
-                    : 'bg-stone-950/70 text-stone-400 hover:text-stone-200 border border-stone-800'
-                }`}
-              >
-                Nivel {lvl}
-              </button>
-            ))}
+            {[1, 2, 3, 4, 5].map((lvl) => {
+              const info = levelInfo(lvl);
+              return (
+                <button
+                  key={lvl}
+                  onClick={() => setLevelId(lvl)}
+                  disabled={loadAction.busy}
+                  title={`${info.name} (tecla ${lvl})`}
+                  className={`px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed max-w-[7.5rem] truncate ${
+                    levelId === lvl ? 'cozy-tab-active' : 'cozy-btn text-cozy-muted'
+                  }`}
+                >
+                  {lvl}. {info.name.replace(/^Archipiélago /, '').replace(/^Ruta /, '').replace(/^Valle /, '')}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Refresh button */}
           <button
-            onClick={fetchLeaderboard}
-            disabled={isLoading}
-            className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-300 transition-colors cursor-pointer"
-            title="Actualizar tabla"
+            onClick={() => void fetchLeaderboard(true)}
+            disabled={loadAction.busy}
+            className="px-2.5 py-1.5 rounded-xl cozy-btn text-cozy-accent-deep cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed flex items-center gap-1 text-[10px] font-semibold"
+            title={UI.updateList}
           >
-            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${loadAction.showLoading ? 'animate-spin' : ''}`} />
+            <span>{UI.updateList}</span>
           </button>
         </div>
 
-        {/* Leaderboard Table / Content */}
+        <p className="text-[11px] text-cozy-muted mb-2 truncate">
+          Viendo: Nivel {levelId} · {levelInfo(levelId).name} ·{' '}
+          {mode === 'time_trial' ? 'Contrarreloj' : mode === 'free' ? 'Libre' : 'Persecución'}
+        </p>
+
+        <div className="flex items-center gap-1.5 mb-3 pb-3 border-b border-cozy-line">
+          {(
+            [
+              { id: 'time_trial' as const, label: 'Contrarreloj' },
+              { id: 'free' as const, label: 'Libre' },
+            ] as const
+          ).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setMode(m.id)}
+              disabled={loadAction.busy}
+              className={`px-2.5 py-1 rounded-xl text-[10px] font-bold cursor-pointer disabled:opacity-55 ${
+                mode === m.id ? 'cozy-tab-active' : 'cozy-btn text-cozy-muted'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        <ActionFeedbackBanner
+          className="mb-3"
+          feedback={loadAction.feedback}
+          showLoading={loadAction.showLoading}
+          loadingLabel="Cargando..."
+          onDismiss={loadAction.clearFeedback}
+        />
+
         <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[220px]">
-          {isLoading ? (
-            <div className="flex flex-col items-center justify-center h-48 gap-3 text-stone-400 text-xs">
-              <RefreshCw className="w-6 h-6 animate-spin text-amber-400" />
-              <span>Consultando récords en el servidor...</span>
+          {loadAction.busy && !hasLoadedOnce && !loadAction.showLoading ? (
+            <div className="flex flex-col items-center justify-center h-48 text-cozy-soft text-xs">
+              <span>Un momento...</span>
             </div>
-          ) : errorMsg ? (
-            <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-600/30 text-rose-200 text-xs flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <div className="leading-relaxed">{errorMsg}</div>
+          ) : loadAction.feedback?.type === 'error' && entries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 text-cozy-soft text-xs text-center p-4 gap-3">
+              <Medal className="w-10 h-10 text-cozy-soft stroke-[1.5]" />
+              <p>No pudimos cargar el ranking. Revisa tu conexión y toca Actualizar.</p>
+              <button
+                type="button"
+                onClick={() => void fetchLeaderboard(true)}
+                disabled={loadAction.busy}
+                className={BTN.primary}
+              >
+                {UI.retryLoad}
+              </button>
             </div>
           ) : entries.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 text-stone-500 text-xs text-center p-4">
-              <Medal className="w-10 h-10 text-stone-600 mb-2 stroke-[1.5]" />
-              <p className="font-semibold text-stone-400 mb-1">Aún no hay récords para este nivel</p>
-              <p>¡Sé el primer explorador en completar el nivel para aparecer en la cima!</p>
-            </div>
+            <EmptyState
+              className="h-48"
+              title="Aún no hay tiempos aquí"
+              body="Completa este nivel en modo Contrarreloj estando dentro de tu cuenta. Tu mejor tiempo aparecerá solo."
+            />
           ) : (
             entries.map((entry) => {
               const isFirst = entry.rank === 1;
@@ -129,44 +206,41 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                   key={entry.userId || entry.rank}
                   className={`flex items-center justify-between p-3 rounded-2xl border transition-all ${
                     isFirst
-                      ? 'bg-amber-950/40 border-amber-400/60 shadow-md shadow-amber-500/10'
+                      ? 'bg-[#fff1de] border-[#f0c48a]'
                       : isSecond
-                      ? 'bg-stone-800/80 border-stone-600'
+                      ? 'bg-cozy-panel-deep border-cozy-line'
                       : isThird
-                      ? 'bg-stone-900/90 border-amber-800/40'
-                      : 'bg-stone-950/60 border-stone-800/80'
+                      ? 'bg-[#f7ebe0] border-cozy-line'
+                      : 'cozy-panel-soft'
                   }`}
                 >
                   <div className="flex items-center gap-3">
                     <span
                       className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-black ${
                         isFirst
-                          ? 'bg-amber-400 text-stone-950 shadow'
+                          ? 'bg-cozy-accent text-cozy-accent-ink'
                           : isSecond
-                          ? 'bg-stone-300 text-stone-950'
+                          ? 'bg-[#c9d5dc] text-cozy-ink'
                           : isThird
-                          ? 'bg-amber-700 text-stone-100'
-                          : 'bg-stone-800 text-stone-400 font-mono'
+                          ? 'bg-[#d8b48a] text-white'
+                          : 'bg-cozy-panel-deep text-cozy-muted'
                       }`}
                     >
                       {entry.rank}
                     </span>
                     <div>
-                      <div className="text-xs font-bold text-stone-100 flex items-center gap-1.5">
-                        <span>{entry.username}</span>
-                        {isFirst && <span className="text-amber-400">👑</span>}
-                      </div>
+                      <div className="text-xs font-bold text-cozy-ink">{entry.username}</div>
                       {entry.collectiblesFound > 0 && (
-                        <div className="text-[10px] text-stone-400">
-                          {entry.collectiblesFound} reliquias encontradas
+                        <div className="text-[10px] text-cozy-muted">
+                          {entry.collectiblesFound} reliquias
                         </div>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 text-amber-300 font-mono font-bold text-sm bg-stone-900/90 px-3 py-1.5 rounded-xl border border-stone-800">
-                    <Clock className="w-3.5 h-3.5 text-amber-400" />
-                    <span>{Number(entry.timeSeconds).toFixed(2)}s</span>
+                  <div className="flex items-center gap-1.5 text-cozy-accent-deep font-bold text-sm bg-white/80 px-3 py-1.5 rounded-xl border border-cozy-line">
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>{formatSeconds(entry.timeSeconds)}</span>
                   </div>
                 </div>
               );
@@ -174,14 +248,14 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
           )}
         </div>
 
-        {/* Footer info */}
-        <div className="mt-4 pt-3 border-t border-stone-800 flex items-center justify-between text-[11px] text-stone-400">
-          <span>Tiempos verificados con anti-cheat</span>
+        <div className="mt-4 pt-3 border-t border-cozy-line flex items-center justify-end">
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold text-xs cursor-pointer transition-colors"
+            disabled={loadAction.busy}
+            className={BTN.secondary}
           >
-            Cerrar
+            {UI.cancel}
           </button>
         </div>
       </div>

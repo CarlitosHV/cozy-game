@@ -1,9 +1,6 @@
 /**
  * Socket.io Multiplayer Client for Cozy Leap Online
- * Adheres strictly to Specification 5 in API_ENDPOINTS_b196a80b.md:
- *  - Handshake: auth: { token: accessToken }
- *  - Client -> Server: room:join, player:sync (20-30Hz), companion:power
- *  - Server -> Client: room:state, player:joined, player:moved, player:left, companion:power:broadcast
+ * Spec sections 4–6: rooms, presence, party invites.
  */
 
 import { io, Socket } from 'socket.io-client';
@@ -25,13 +22,40 @@ export interface RemotePlayer {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
+export interface InviteReceivedPayload {
+  inviteId: string;
+  fromUserId: string;
+  fromUsername: string;
+  levelId: number;
+  expiresInSeconds: number;
+}
+
+export interface InviteSentPayload {
+  inviteId: string;
+  toUserId: string;
+  levelId: number;
+  expiresInSeconds: number;
+}
+
+export interface InviteResultPayload {
+  inviteId: string;
+  accepted: boolean;
+  roomId?: string;
+  levelId: number;
+}
+
+export interface SocketErrorPayload {
+  code?: string;
+  message: string;
+}
+
 class MultiplayerClient {
   private socket: Socket | null = null;
   private currentLevelId: number | null = null;
+  private currentRoomId: string | null = null;
   private status: ConnectionStatus = 'disconnected';
   private statusListeners: Set<(status: ConnectionStatus) => void> = new Set();
 
-  // Callbacks for 3D engine
   public onRoomState?: (players: RemotePlayer[]) => void;
   public onPlayerJoined?: (player: RemotePlayer) => void;
   public onPlayerMoved?: (update: {
@@ -43,7 +67,18 @@ class MultiplayerClient {
     anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall';
     action?: string;
   }) => void;
-  public onPlayerLeft?: (userId: string) => void;
+  public onPlayerLeft?: (data: {
+    userId: string;
+    username?: string;
+    displayName?: string;
+    reason?: 'leave' | 'disconnect';
+  }) => void;
+  public onPlayerLeftNotice?: (data: {
+    userId: string;
+    username?: string;
+    displayName?: string;
+    reason?: 'leave' | 'disconnect';
+  }) => void;
   public onCompanionPower?: (data: {
     userId: string;
     username: string;
@@ -51,17 +86,21 @@ class MultiplayerClient {
     position?: { x: number; y: number; z: number };
     timestamp?: string;
   }) => void;
+  public onInviteReceived?: (data: InviteReceivedPayload) => void;
+  public onInviteSent?: (data: InviteSentPayload) => void;
+  public onInviteResult?: (data: InviteResultPayload) => void;
+  public onSocketError?: (data: SocketErrorPayload) => void;
 
-  // Throttle timer for 25Hz broadcast (every 40ms)
   private lastSyncTime: number = 0;
   private syncThrottleMs: number = 40;
 
   constructor() {
-    // Listen to auth changes
     apiClient.onAuthChange((user) => {
       if (!user) {
         this.disconnect();
-      } else if (this.currentLevelId !== null) {
+        this.currentLevelId = null;
+        this.currentRoomId = null;
+      } else {
         this.connect();
       }
     });
@@ -69,6 +108,10 @@ class MultiplayerClient {
 
   public getStatus(): ConnectionStatus {
     return this.status;
+  }
+
+  public getCurrentRoomId(): string | null {
+    return this.currentRoomId;
   }
 
   public onStatusChange(cb: (status: ConnectionStatus) => void): () => void {
@@ -90,13 +133,19 @@ class MultiplayerClient {
     if (this.socket && this.socket.connected) return;
 
     const token = apiClient.getAccessToken();
-    const socketUrl = apiClient.getSocketUrl();
+    if (!token) return;
 
+    const socketUrl = apiClient.getSocketUrl();
     this.setStatus('connecting');
 
     try {
+      if (this.socket) {
+        this.socket.removeAllListeners();
+        this.socket.disconnect();
+      }
+
       this.socket = io(socketUrl, {
-        auth: { token: token || '' },
+        auth: { token },
         transports: ['websocket', 'polling'],
         timeout: 6000,
         reconnection: true,
@@ -113,6 +162,7 @@ class MultiplayerClient {
 
   public disconnect(): void {
     if (this.socket) {
+      this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
     }
@@ -124,9 +174,8 @@ class MultiplayerClient {
 
     this.socket.on('connect', () => {
       this.setStatus('connected');
-      // If we already know what level we're in, rejoin room immediately
-      if (this.currentLevelId !== null) {
-        this.joinLevel(this.currentLevelId);
+      if (this.currentLevelId !== null && this.currentRoomId?.startsWith('party_')) {
+        this.emitJoin(this.currentLevelId, this.currentRoomId);
       }
     });
 
@@ -138,8 +187,13 @@ class MultiplayerClient {
       this.setStatus('error');
     });
 
-    // Specification 5 Events:
-    this.socket.on('room:state', (data: { levelId: number; players: RemotePlayer[]; yourSpawn?: unknown }) => {
+    this.socket.on('room:state', (data: {
+      levelId: number;
+      roomId?: string | null;
+      players: RemotePlayer[];
+      yourSpawn?: unknown;
+    }) => {
+      if (data?.roomId) this.currentRoomId = data.roomId;
       if (this.onRoomState && Array.isArray(data?.players)) {
         this.onRoomState(data.players);
       }
@@ -165,11 +219,21 @@ class MultiplayerClient {
       }
     });
 
-    this.socket.on('player:left', (data: { userId: string } | string) => {
-      const id = typeof data === 'string' ? data : data?.userId;
-      if (this.onPlayerLeft && id) {
-        this.onPlayerLeft(id);
-      }
+    this.socket.on('player:left', (data: {
+      userId: string;
+      username?: string;
+      displayName?: string;
+      reason?: 'leave' | 'disconnect';
+    } | string) => {
+      const payload =
+        typeof data === 'string'
+          ? { userId: data, reason: 'leave' as const }
+          : data?.userId
+            ? data
+            : null;
+      if (!payload) return;
+      this.onPlayerLeft?.(payload);
+      this.onPlayerLeftNotice?.(payload);
     });
 
     this.socket.on('companion:power:broadcast', (data: {
@@ -183,23 +247,88 @@ class MultiplayerClient {
         this.onCompanionPower(data);
       }
     });
+
+    this.socket.on('invite:received', (data: InviteReceivedPayload) => {
+      if (this.onInviteReceived && data?.inviteId) {
+        this.onInviteReceived(data);
+      }
+    });
+
+    this.socket.on('invite:sent', (data: InviteSentPayload) => {
+      if (this.onInviteSent && data?.inviteId) {
+        this.onInviteSent(data);
+      }
+    });
+
+    this.socket.on('invite:result', (data: InviteResultPayload) => {
+      if (this.onInviteResult && data?.inviteId) {
+        this.onInviteResult(data);
+      }
+    });
+
+    this.socket.on('error', (data: SocketErrorPayload) => {
+      if (this.onSocketError && data) {
+        this.onSocketError(data);
+      }
+    });
+  }
+
+  private emitJoin(levelId: number, roomId: string) {
+    if (!this.socket || !this.socket.connected) return;
+    this.socket.emit('room:join', { levelId, roomId });
   }
 
   /**
    * Client -> Server: room:join
+   * Only private party rooms (`party_*`) are allowed. Without roomId, leaves any room.
    */
-  public joinLevel(levelId: number): void {
+  public joinLevel(levelId: number, roomId?: string | null): void {
     this.currentLevelId = levelId;
+    if (!roomId || !roomId.startsWith('party_')) {
+      this.leaveRoom();
+      return;
+    }
+    this.currentRoomId = roomId;
     if (!this.socket || !this.socket.connected) {
       this.connect();
       return;
     }
-    this.socket.emit('room:join', { levelId });
+    this.emitJoin(levelId, roomId);
   }
 
-  /**
-   * Client -> Server: player:sync (Throttled at 20-30Hz)
-   */
+  public leaveRoom(): void {
+    this.currentRoomId = null;
+    if (this.socket?.connected) {
+      this.socket.emit('room:leave');
+    }
+  }
+
+  public clearPartyRoom(): void {
+    this.leaveRoom();
+  }
+
+  public isInPartyRoom(): boolean {
+    return Boolean(this.currentRoomId?.startsWith('party_'));
+  }
+
+  public setPartyRoomId(roomId: string | null): void {
+    this.currentRoomId = roomId;
+  }
+
+  public sendInvite(toUserId: string, levelId: number): void {
+    if (!this.socket || !this.socket.connected) {
+      this.connect();
+    }
+    this.socket?.emit('invite:send', { toUserId, levelId });
+  }
+
+  public respondInvite(inviteId: string, accept: boolean): void {
+    if (!this.socket || !this.socket.connected) {
+      this.connect();
+    }
+    this.socket?.emit('invite:respond', { inviteId, accept });
+  }
+
   public syncPlayer(
     x: number,
     y: number,
@@ -209,6 +338,7 @@ class MultiplayerClient {
     action?: string
   ): void {
     if (!this.socket || !this.socket.connected) return;
+    if (!this.currentRoomId?.startsWith('party_')) return;
 
     const now = performance.now();
     if (now - this.lastSyncTime < this.syncThrottleMs) return;
@@ -224,9 +354,6 @@ class MultiplayerClient {
     });
   }
 
-  /**
-   * Client -> Server: companion:power
-   */
   public triggerCompanionPower(powerType: string): void {
     if (!this.socket || !this.socket.connected) return;
     this.socket.emit('companion:power', { powerType });

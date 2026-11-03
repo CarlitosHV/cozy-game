@@ -1,57 +1,80 @@
-/**
- * AuthModal & Account Manager
- * Adapts to Cozy Leap Online Backend API v1 (/api/v1/auth/* & /api/v1/player/me).
- * Allows logging in, creating an account, testing backend health, and inspecting user status.
- */
-
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   User as UserIcon,
   Mail,
   Lock,
   Eye,
   EyeOff,
-  Server,
-  CheckCircle2,
-  AlertCircle,
   LogOut,
   X,
-  Sparkles,
   ShieldCheck,
   RefreshCw,
 } from 'lucide-react';
 import { apiClient, User, PlayerProfileData } from '../services/apiClient';
+import { useAsyncAction } from '../hooks/useAsyncAction';
+import { ActionFeedbackBanner } from './ActionFeedback';
+import { ConfirmDialog, ConfirmRequest } from './ConfirmDialog';
+import { FieldError, RequirementList } from './FieldHints';
+import { UI, BTN } from '../ui/labels';
+import {
+  DISPLAY_NAME_MAX,
+  emailRequirements,
+  isEmailValid,
+  isPasswordValid,
+  isUsernameValid,
+  passwordRequirements,
+  sanitizeUsernameInput,
+  usernameRequirements,
+} from '../ui/validation';
+import {
+  AuthField,
+  FieldErrors,
+  collectAuthFieldErrors,
+  displayNameHint,
+  emailHint,
+  mapAuthServerError,
+  passwordConfirmHint,
+  passwordHint,
+  usernameHint,
+} from '../ui/errors';
+import { getRecent, pushRecent, RECENT_KEYS } from '../ui/recentMemory';
+import { RecentChips, SuggestionList } from './RecentChips';
+import { HelpTip, TIPS } from './HelpTip';
+import { FriendsPanel } from './FriendsPanel';
+import type { FriendUser } from '../services/apiClient';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   onProfileSynced?: (profile: PlayerProfileData) => void;
+  inviteLevelId?: number;
+  onInviteToPlay?: (friend: FriendUser) => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   onClose,
   onProfileSynced,
+  inviteLevelId = 1,
+  onInviteToPlay,
 }) => {
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
   const [currentUser, setCurrentUser] = useState<User | null>(apiClient.getCurrentUser());
 
-  // Form states
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [submitted, setSubmitted] = useState(false);
+  const [serverErrors, setServerErrors] = useState<FieldErrors>({});
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+  const [recentEmails, setRecentEmails] = useState<string[]>([]);
 
-  // Status & Errors
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
-  // Server health state
-  const [serverUrl, setServerUrl] = useState(apiClient.getBaseUrl());
-  const [showServerConfig, setShowServerConfig] = useState(false);
-  const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline' | 'idle'>('idle');
+  const authAction = useAsyncAction();
+  const logoutAction = useAsyncAction();
 
   useEffect(() => {
     return apiClient.onAuthChange((user) => {
@@ -61,395 +84,509 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      setErrorMsg(null);
-      setSuccessMsg(null);
-      checkServerHealth();
+      authAction.clearFeedback();
+      logoutAction.clearFeedback();
+      setTouched({});
+      setSubmitted(false);
+      setServerErrors({});
+      setConfirmRequest(null);
+      setRecentEmails(getRecent(RECENT_KEYS.emails));
     }
   }, [isOpen]);
 
-  const checkServerHealth = async () => {
-    setServerStatus('checking');
-    try {
-      await apiClient.checkHealth();
-      setServerStatus('online');
-    } catch {
-      setServerStatus('offline');
-    }
+  const markTouched = (field: string) => {
+    setTouched((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
   };
 
-  const handleSaveServerUrl = () => {
-    apiClient.setBaseUrl(serverUrl);
-    checkServerHealth();
-    setSuccessMsg('URL del servidor actualizada');
-    setTimeout(() => setSuccessMsg(null), 2000);
+  const clearServerField = (field: AuthField) => {
+    setServerErrors((prev) => {
+      if (!prev[field] && !prev.form) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
   };
 
-  const validateInputs = (): string | null => {
-    if (activeTab === 'register') {
-      const cleanUsername = username.trim();
-      if (cleanUsername.length < 3 || cleanUsername.length > 20) {
-        return 'El nombre de usuario debe tener entre 3 y 20 caracteres.';
-      }
-      if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
-        return 'El nombre de usuario sólo puede contener letras, números y guión bajo (_).';
-      }
-      if (!email.includes('@') || !email.includes('.')) {
-        return 'Por favor ingresa un correo electrónico válido.';
-      }
-      if (password.length < 8) {
-        return 'La contraseña debe tener al menos 8 caracteres.';
-      }
-      if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
-        return 'La contraseña debe incluir al menos una mayúscula, una minúscula y un número.';
-      }
-    } else {
-      if (!email.trim() || !password) {
-        return 'Por favor completa todos los campos.';
-      }
-    }
-    return null;
-  };
+  const usernameReqs = useMemo(() => usernameRequirements(username), [username]);
+  const emailReqs = useMemo(() => emailRequirements(email), [email]);
+  const passwordReqs = useMemo(() => passwordRequirements(password), [password]);
+
+  const showField = (field: AuthField) => submitted || Boolean(touched[field]);
+
+  const usernameError =
+    activeTab === 'register' && showField('username')
+      ? serverErrors.username || usernameHint(username)
+      : serverErrors.username || null;
+
+  const emailError = showField('email')
+    ? serverErrors.email || emailHint(email)
+    : serverErrors.email || null;
+
+  const passwordError = showField('password')
+    ? serverErrors.password || passwordHint(password, activeTab)
+    : serverErrors.password || null;
+
+  const passwordConfirmError =
+    activeTab === 'register' && showField('passwordConfirm')
+      ? serverErrors.passwordConfirm || passwordConfirmHint(password, passwordConfirm)
+      : serverErrors.passwordConfirm || null;
+
+  const displayNameError =
+    activeTab === 'register' && showField('displayName')
+      ? serverErrors.displayName || displayNameHint(displayName)
+      : serverErrors.displayName || null;
+
+  const formReady =
+    activeTab === 'login'
+      ? isEmailValid(email) && password.length > 0
+      : isUsernameValid(username) &&
+        isEmailValid(email) &&
+        isPasswordValid(password) &&
+        passwordConfirm === password &&
+        displayName.trim().length <= DISPLAY_NAME_MAX;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg(null);
-    setSuccessMsg(null);
+    authAction.clearFeedback();
+    setSubmitted(true);
+    setTouched({
+      username: true,
+      email: true,
+      password: true,
+      passwordConfirm: true,
+      displayName: true,
+    });
 
-    const validationError = validateInputs();
-    if (validationError) {
-      setErrorMsg(validationError);
-      return;
-    }
+    const localErrors = collectAuthFieldErrors({
+      mode: activeTab,
+      username,
+      email,
+      password,
+      passwordConfirm,
+      displayName,
+    });
+    setServerErrors(localErrors);
+    if (Object.keys(localErrors).length > 0 || !formReady) return;
 
-    setIsLoading(true);
-
-    try {
-      if (activeTab === 'register') {
-        await apiClient.register({
-          username: username.trim().toLowerCase(),
-          displayName: displayName.trim() || username.trim(),
-          email: email.trim().toLowerCase(),
-          password,
-        });
-        setSuccessMsg('¡Cuenta creada e iniciada con éxito!');
-      } else {
-        await apiClient.login({
-          email: email.trim().toLowerCase(),
-          password,
-        });
-        setSuccessMsg('¡Sesión iniciada con éxito!');
-      }
-
-      // Sync player profile with the app
-      try {
-        const profile = await apiClient.getMe();
-        if (onProfileSynced) {
-          onProfileSynced(profile);
+    const result = await authAction.run(
+      async () => {
+        if (activeTab === 'register') {
+          await apiClient.register({
+            username: username.trim().toLowerCase(),
+            displayName: displayName.trim() || username.trim(),
+            email: email.trim().toLowerCase(),
+            password,
+          });
+        } else {
+          await apiClient.login({
+            email: email.trim().toLowerCase(),
+            password,
+          });
         }
-      } catch (profileErr) {
-        console.warn('Could not fetch player profile:', profileErr);
-      }
 
-      setTimeout(() => {
-        onClose();
-      }, 900);
-    } catch (err: unknown) {
-      const msg = (err as Error)?.message || 'Ocurrió un error inesperado al conectar con la API.';
-      setErrorMsg(msg);
-    } finally {
-      setIsLoading(false);
+        try {
+          const profile = await apiClient.getMe();
+          if (onProfileSynced) {
+            onProfileSynced(profile);
+          }
+        } catch (profileErr) {
+          console.warn('Could not fetch player profile:', profileErr);
+        }
+      },
+      {
+        successMessage:
+          activeTab === 'register'
+            ? '¡Listo! Bienvenido.'
+            : '¡Qué bueno verte!',
+        silentError: true,
+      }
+    );
+
+    if (result.ok) {
+      setServerErrors({});
+      setRecentEmails(pushRecent(RECENT_KEYS.emails, email.trim().toLowerCase()));
+      window.setTimeout(() => onClose(), 900);
+    } else {
+      setServerErrors(mapAuthServerError(result.error, activeTab));
     }
   };
 
-  const handleLogout = async () => {
-    setIsLoading(true);
-    await apiClient.logout();
-    setIsLoading(false);
-    setSuccessMsg('Has cerrado sesión.');
-    setTimeout(() => setSuccessMsg(null), 1500);
+  const requestLogout = () => {
+    setConfirmRequest({
+      title: '¿Salir de tu cuenta?',
+      message: 'Podrás volver a entrar cuando quieras. Tu progreso guardado se queda en la nube.',
+      confirmLabel: UI.leave,
+      cancelLabel: UI.cancel,
+      tone: 'danger',
+      onConfirm: () => {
+        void logoutAction.run(
+          async () => {
+            await apiClient.logout();
+          },
+          {
+            successMessage: 'Listo. ¡Hasta pronto!',
+            errorMessage: () =>
+              'No se pudo cerrar la sesión. Revisa tu conexión e inténtalo de nuevo.',
+          }
+        );
+      },
+    });
   };
 
   if (!isOpen) return null;
 
+  const busy = authAction.busy || logoutAction.busy;
+  const feedback = authAction.feedback || logoutAction.feedback;
+  const showLoading = authAction.showLoading || logoutAction.showLoading;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/80 backdrop-blur-sm pointer-events-auto select-none font-['Outfit',sans-serif]">
-      <div className="relative w-full max-w-md rounded-3xl bg-stone-900 border border-stone-800 shadow-2xl p-6 text-stone-100 max-h-[92vh] overflow-y-auto">
-        {/* Close Button */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 cozy-scrim pointer-events-auto select-none font-ui">
+      <div className="relative w-full max-w-md rounded-[1.75rem] cozy-panel p-6 max-h-[92vh] overflow-y-auto">
         <button
           onClick={onClose}
-          className="absolute top-5 right-5 p-1.5 rounded-xl text-stone-400 hover:text-stone-100 hover:bg-stone-800 transition-colors cursor-pointer"
-          aria-label="Cerrar ventana"
+          disabled={busy}
+          className="absolute top-5 right-5 p-1.5 rounded-xl text-cozy-soft hover:text-cozy-ink hover:bg-cozy-panel-deep transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label={UI.close}
         >
           <X className="w-5 h-5" />
         </button>
 
-        {/* Modal Header */}
         <div className="flex items-center gap-3 mb-5">
-          <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-400/40 flex items-center justify-center text-amber-400 shadow-inner">
+          <div className="w-12 h-12 rounded-2xl bg-cozy-sky-soft border border-cozy-line flex items-center justify-center text-cozy-sky">
             <UserIcon className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-xl font-serif font-bold text-amber-200">
-              {currentUser ? 'Cuenta de Jugador' : 'Cozy Leap Online'}
+            <h2 className="text-xl font-display font-bold text-cozy-ink">
+              {currentUser ? 'Tu cuenta' : 'Tu aventura'}
             </h2>
-            <div className="flex items-center gap-2 text-xs text-stone-400">
-              <span className={`w-2 h-2 rounded-full ${serverStatus === 'online' ? 'bg-emerald-400 animate-pulse' : serverStatus === 'checking' ? 'bg-amber-400' : 'bg-rose-500'}`} />
-              <span>
-                {serverStatus === 'online' && 'Servidor API Conectado'}
-                {serverStatus === 'checking' && 'Comprobando conexión...'}
-                {serverStatus === 'offline' && 'Servidor API Desconectado'}
-                {serverStatus === 'idle' && 'Estado del servidor'}
-              </span>
-            </div>
+            <p className="text-xs text-cozy-muted">
+              {currentUser ? 'Progreso y personaje guardados' : 'Entra para guardar tu progreso'}
+            </p>
           </div>
         </div>
 
-        {/* Success / Error Alerts */}
-        {errorMsg && (
-          <div className="mb-4 p-3 rounded-2xl bg-rose-950/40 border border-rose-600/40 text-rose-200 text-xs flex items-start gap-2.5">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-            <div className="leading-relaxed">{errorMsg}</div>
-          </div>
-        )}
-
-        {successMsg && (
-          <div className="mb-4 p-3 rounded-2xl bg-emerald-950/40 border border-emerald-600/40 text-emerald-200 text-xs flex items-center gap-2.5">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <div>{successMsg}</div>
+        {(feedback || showLoading || serverErrors.form) && (
+          <div className="mb-4 space-y-2">
+            {serverErrors.form && (
+              <ActionFeedbackBanner
+                feedback={{ type: 'error', message: serverErrors.form }}
+                onDismiss={() =>
+                  setServerErrors((prev) => {
+                    const next = { ...prev };
+                    delete next.form;
+                    return next;
+                  })
+                }
+              />
+            )}
+            <ActionFeedbackBanner
+              feedback={feedback}
+              showLoading={showLoading}
+              loadingLabel={logoutAction.busy ? 'Saliendo...' : 'Un momento...'}
+              onDismiss={() => {
+                authAction.clearFeedback();
+                logoutAction.clearFeedback();
+              }}
+            />
           </div>
         )}
 
         {currentUser ? (
-          /* Profile / Logged In View */
-          <div className="space-y-4">
-            <div className="p-4 rounded-2xl bg-stone-950/60 border border-stone-800 space-y-2">
-              <div className="flex items-center justify-between pb-2 border-b border-stone-800/80">
-                <span className="text-xs text-stone-400">Nombre de Usuario</span>
-                <span className="text-sm font-bold text-amber-300 font-mono">@{currentUser.username}</span>
-              </div>
-              <div className="flex items-center justify-between pb-2 border-b border-stone-800/80">
-                <span className="text-xs text-stone-400">Nombre Visible</span>
-                <span className="text-sm font-semibold text-stone-200">{currentUser.displayName}</span>
-              </div>
-              <div className="flex items-center justify-between pb-2 border-b border-stone-800/80">
-                <span className="text-xs text-stone-400">Correo</span>
-                <span className="text-xs font-mono text-stone-300">{currentUser.email}</span>
-              </div>
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-xs text-stone-400">Rol de Cuenta</span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  {currentUser.role}
-                </span>
-              </div>
+          <div className="flex flex-col gap-5">
+            <div className="space-y-1">
+              <p className="text-sm font-bold text-cozy-ink">
+                {currentUser.displayName || currentUser.username}
+              </p>
+              <p className="text-xs text-cozy-muted">{currentUser.email}</p>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-amber-950/20 border border-amber-600/30 text-amber-200/90 text-xs leading-relaxed flex items-center gap-2.5">
-              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Tu personaje, niveles y mejores tiempos se sincronizan automáticamente con el servidor en tiempo real.</span>
-            </div>
+            {onInviteToPlay && (
+              <FriendsPanel
+                inviteLevelId={inviteLevelId}
+                onInviteToPlay={(friend) => {
+                  onClose();
+                  onInviteToPlay(friend);
+                  onClose();
+                }}
+              />
+            )}
 
-            <div className="pt-2 flex gap-3">
-              <button
-                type="button"
-                onClick={handleLogout}
-                disabled={isLoading}
-                className="flex-1 py-3 rounded-2xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors border border-stone-700/80"
-              >
-                <LogOut className="w-4 h-4 text-stone-400" />
-                <span>Cerrar sesión</span>
-              </button>
+            <div className="flex flex-col gap-3 pt-1 border-t border-cozy-line">
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-xs cursor-pointer transition-colors shadow-lg shadow-amber-950/30"
+                disabled={busy}
+                className={BTN.primary}
               >
-                Volver al juego
+                {UI.keepPlaying}
+              </button>
+              <button
+                type="button"
+                onClick={requestLogout}
+                disabled={busy}
+                className={`${BTN.ghost} flex items-center justify-center gap-2`}
+              >
+                {logoutAction.showLoading ? (
+                  <RefreshCw className="w-4 h-4 animate-spin text-cozy-muted" />
+                ) : (
+                  <LogOut className="w-4 h-4 text-cozy-muted" />
+                )}
+                <span>{logoutAction.busy ? 'Saliendo...' : UI.leave}</span>
               </button>
             </div>
           </div>
         ) : (
-          /* Login / Register Form */
           <>
-            {/* Tab Selector */}
-            <div className="grid grid-cols-2 p-1 rounded-2xl bg-stone-950/80 border border-stone-800 mb-5">
+            <div className="grid grid-cols-2 p-1 rounded-2xl bg-cozy-panel-deep border border-cozy-line mb-5">
               <button
                 type="button"
+                disabled={busy}
                 onClick={() => {
                   setActiveTab('login');
-                  setErrorMsg(null);
+                  authAction.clearFeedback();
+                  setSubmitted(false);
+                  setServerErrors({});
+                  setTouched({});
                 }}
-                className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  activeTab === 'login'
-                    ? 'bg-amber-500 text-stone-950 shadow-md'
-                    : 'text-stone-400 hover:text-stone-200'
+                className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:cursor-not-allowed ${
+                  activeTab === 'login' ? 'cozy-tab-active' : 'text-cozy-muted hover:text-cozy-ink'
                 }`}
               >
-                Iniciar sesión
+                {UI.enter}
               </button>
               <button
                 type="button"
+                disabled={busy}
                 onClick={() => {
                   setActiveTab('register');
-                  setErrorMsg(null);
+                  authAction.clearFeedback();
+                  setSubmitted(false);
+                  setServerErrors({});
+                  setTouched({});
                 }}
-                className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  activeTab === 'register'
-                    ? 'bg-amber-500 text-stone-950 shadow-md'
-                    : 'text-stone-400 hover:text-stone-200'
+                className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:cursor-not-allowed ${
+                  activeTab === 'register' ? 'cozy-tab-active' : 'text-cozy-muted hover:text-cozy-ink'
                 }`}
               >
-                Crear cuenta
+                {UI.createAccount}
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-3.5">
+            <form onSubmit={handleSubmit} className="space-y-3.5" noValidate>
               {activeTab === 'register' && (
                 <>
                   <div>
-                    <label className="block text-[11px] font-bold text-stone-300 uppercase tracking-wider mb-1">
-                      Nombre de usuario (único)
+                    <label className="flex items-center gap-0.5 text-[11px] font-bold text-cozy-muted uppercase tracking-wider mb-1">
+                      Usuario
+                      <HelpTip label={TIPS.usuario} side="bottom" />
                     </label>
                     <div className="relative">
-                      <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-500" />
+                      <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-cozy-soft" />
                       <input
                         type="text"
                         value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        placeholder="saltarin_pro"
-                        required
-                        className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-stone-950/70 border border-stone-800 focus:border-amber-400 focus:outline-none text-stone-100 text-xs font-mono"
+                        onChange={(e) => {
+                          setUsername(sanitizeUsernameInput(e.target.value));
+                          clearServerField('username');
+                        }}
+                        onBlur={() => markTouched('username')}
+                        placeholder="luna_suave"
+                        autoComplete="username"
+                        inputMode="text"
+                        spellCheck={false}
+                        disabled={busy}
+                        aria-invalid={Boolean(usernameError)}
+                        className={`w-full pl-10 pr-4 py-2.5 rounded-xl cozy-input text-xs font-semibold disabled:opacity-60 ${
+                          usernameError ? 'border-cozy-blush' : ''
+                        }`}
                       />
                     </div>
+                    <RequirementList items={usernameReqs} show={username.length > 0 || touched.username || submitted} />
+                    <FieldError message={usernameError} />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-bold text-stone-300 uppercase tracking-wider mb-1">
-                      Nombre visible (opcional)
+                    <label className="flex items-center gap-0.5 text-[11px] font-bold text-cozy-muted uppercase tracking-wider mb-1">
+                      Cómo te ven (opcional)
+                      <HelpTip label={TIPS.displayName} side="bottom" />
                     </label>
                     <input
                       type="text"
                       value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      placeholder="Saltarín Pro"
-                      className="w-full px-4 py-2.5 rounded-xl bg-stone-950/70 border border-stone-800 focus:border-amber-400 focus:outline-none text-stone-100 text-xs"
+                      onChange={(e) => {
+                        setDisplayName(e.target.value.slice(0, DISPLAY_NAME_MAX));
+                        clearServerField('displayName');
+                      }}
+                      onBlur={() => markTouched('displayName')}
+                      placeholder="Luna Suave"
+                      disabled={busy}
+                      maxLength={DISPLAY_NAME_MAX}
+                      aria-invalid={Boolean(displayNameError)}
+                      className={`w-full px-4 py-2.5 rounded-xl cozy-input text-xs disabled:opacity-60 ${
+                        displayNameError ? 'border-cozy-blush' : ''
+                      }`}
                     />
+                    <span className="block mt-1 text-[10px] text-cozy-soft">
+                      {displayName.length}/{DISPLAY_NAME_MAX} · Si lo dejas vacío, usamos tu usuario.
+                    </span>
+                    <FieldError message={displayNameError} />
                   </div>
                 </>
               )}
 
               <div>
-                <label className="block text-[11px] font-bold text-stone-300 uppercase tracking-wider mb-1">
-                  {activeTab === 'login' ? 'Correo o usuario' : 'Correo electrónico'}
+                <label className="block text-[11px] font-bold text-cozy-muted uppercase tracking-wider mb-1">
+                  Correo
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-500" />
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-cozy-soft" />
                   <input
-                    type={activeTab === 'login' ? 'text' : 'email'}
+                    type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder={activeTab === 'login' ? 'saltarin@cozyleap.com' : 'tu_correo@ejemplo.com'}
-                    required
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-stone-950/70 border border-stone-800 focus:border-amber-400 focus:outline-none text-stone-100 text-xs"
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      clearServerField('email');
+                    }}
+                    onBlur={() => markTouched('email')}
+                    placeholder="tu_correo@ejemplo.com"
+                    autoComplete="email"
+                    list="cozy-recent-emails"
+                    inputMode="email"
+                    disabled={busy}
+                    aria-invalid={Boolean(emailError)}
+                    className={`w-full pl-10 pr-4 py-2.5 rounded-xl cozy-input text-xs disabled:opacity-60 ${
+                      emailError ? 'border-cozy-blush' : ''
+                    }`}
                   />
+                  <datalist id="cozy-recent-emails">
+                    {recentEmails.map((item) => (
+                      <option key={item} value={item} />
+                    ))}
+                  </datalist>
                 </div>
+                <RecentChips
+                  label="Correos recientes"
+                  items={recentEmails}
+                  onPick={(value) => {
+                    setEmail(value);
+                    clearServerField('email');
+                    markTouched('email');
+                  }}
+                />
+                <SuggestionList
+                  query={email}
+                  options={recentEmails}
+                  onPick={(value) => {
+                    setEmail(value);
+                    clearServerField('email');
+                    markTouched('email');
+                  }}
+                />
+                <RequirementList
+                  items={emailReqs}
+                  show={activeTab === 'register' && (email.length > 0 || touched.email || submitted)}
+                />
+                <FieldError message={emailError} />
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-stone-300 uppercase tracking-wider mb-1">
-                  Contraseña
+                <label className="block text-[11px] font-bold text-cozy-muted uppercase tracking-wider mb-1">
+                  Clave
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-500" />
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-cozy-soft" />
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      clearServerField('password');
+                    }}
+                    onBlur={() => markTouched('password')}
                     placeholder="••••••••"
-                    required
-                    className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-stone-950/70 border border-stone-800 focus:border-amber-400 focus:outline-none text-stone-100 text-xs"
+                    autoComplete={activeTab === 'login' ? 'current-password' : 'new-password'}
+                    disabled={busy}
+                    aria-invalid={Boolean(passwordError)}
+                    className={`w-full pl-10 pr-10 py-2.5 rounded-xl cozy-input text-xs disabled:opacity-60 ${
+                      passwordError ? 'border-cozy-blush' : ''
+                    }`}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-500 hover:text-stone-300 cursor-pointer"
+                    disabled={busy}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-cozy-soft hover:text-cozy-ink cursor-pointer disabled:opacity-50"
+                    aria-label={showPassword ? 'Ocultar clave' : 'Mostrar clave'}
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
                 {activeTab === 'register' && (
-                  <span className="block mt-1 text-[10px] text-stone-400">
-                    Mínimo 8 caracteres, con 1 mayúscula, 1 minúscula y 1 número.
-                  </span>
+                  <RequirementList items={passwordReqs} show={password.length > 0 || touched.password || submitted} />
                 )}
+                <FieldError message={passwordError} />
               </div>
+
+              {activeTab === 'register' && (
+                <div>
+                  <label className="block text-[11px] font-bold text-cozy-muted uppercase tracking-wider mb-1">
+                    {UI.passwordAgain}
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-cozy-soft" />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={passwordConfirm}
+                      onChange={(e) => {
+                        setPasswordConfirm(e.target.value);
+                        clearServerField('passwordConfirm');
+                      }}
+                      onBlur={() => markTouched('passwordConfirm')}
+                      placeholder="••••••••"
+                      autoComplete="new-password"
+                      disabled={busy}
+                      aria-invalid={Boolean(passwordConfirmError)}
+                      className={`w-full pl-10 pr-4 py-2.5 rounded-xl cozy-input text-xs disabled:opacity-60 ${
+                        passwordConfirmError ? 'border-cozy-blush' : ''
+                      }`}
+                    />
+                  </div>
+                  <FieldError message={passwordConfirmError} />
+                </div>
+              )}
 
               <button
                 type="submit"
-                disabled={isLoading}
-                className="w-full py-3.5 mt-2 rounded-2xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 active:scale-[0.99] text-stone-950 font-bold text-sm shadow-xl shadow-amber-950/40 cursor-pointer transition-all flex items-center justify-center gap-2"
+                disabled={busy}
+                className={`${BTN.primary} mt-2 flex items-center justify-center gap-2 active:scale-[0.99] disabled:active:scale-100`}
               >
-                {isLoading ? (
-                  <RefreshCw className="w-4 h-4 animate-spin text-stone-950" />
+                {authAction.showLoading ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
                 ) : (
-                  <ShieldCheck className="w-4 h-4 text-stone-950 stroke-[2.5]" />
+                  <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
                 )}
-                <span>{activeTab === 'login' ? 'Entrar a la aventura' : 'Registrar y comenzar'}</span>
+                <span>
+                  {authAction.busy
+                    ? 'Un momento...'
+                    : activeTab === 'login'
+                      ? UI.enter
+                      : UI.createAccount}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className={BTN.ghost}
+              >
+                {UI.cancel}
               </button>
             </form>
           </>
         )}
-
-        {/* Server Endpoint Configuration Panel */}
-        <div className="mt-6 pt-4 border-t border-stone-800/80">
-          <button
-            type="button"
-            onClick={() => setShowServerConfig(!showServerConfig)}
-            className="w-full flex items-center justify-between text-xs text-stone-400 hover:text-amber-300 cursor-pointer"
-          >
-            <span className="flex items-center gap-1.5">
-              <Server className="w-3.5 h-3.5" />
-              <span>Configuración de Servidor Backend (API URL)</span>
-            </span>
-            <span className="text-[10px] underline">{showServerConfig ? 'Ocultar' : 'Ajustar'}</span>
-          </button>
-
-          {showServerConfig && (
-            <div className="mt-3 p-3 rounded-2xl bg-stone-950/70 border border-stone-800 space-y-2 text-xs">
-              <label className="block text-[10px] text-stone-400">
-                Dirección Base de la API (por defecto http://localhost:3000/api/v1):
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={serverUrl}
-                  onChange={(e) => setServerUrl(e.target.value)}
-                  className="flex-1 px-3 py-1.5 rounded-xl bg-stone-900 border border-stone-700 text-stone-200 text-xs font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={handleSaveServerUrl}
-                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs cursor-pointer"
-                >
-                  Guardar
-                </button>
-              </div>
-              <div className="flex items-center justify-between pt-1 text-[11px]">
-                <button
-                  type="button"
-                  onClick={checkServerHealth}
-                  className="text-amber-400 hover:underline cursor-pointer flex items-center gap-1"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  <span>Probar salud (/system/health)</span>
-                </button>
-                <span className={serverStatus === 'online' ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
-                  {serverStatus === 'online' ? 'OK 200' : serverStatus === 'offline' ? 'Inalcanzable' : serverStatus}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
       </div>
+
+      <ConfirmDialog request={confirmRequest} onCancel={() => setConfirmRequest(null)} />
     </div>
   );
 };
