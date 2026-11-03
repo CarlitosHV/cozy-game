@@ -39,8 +39,6 @@ import {
   Maximize,
   Minimize,
   RotateCw,
-  Undo2,
-  Redo2,
   Timer,
   Ghost,
   Flame,
@@ -51,6 +49,7 @@ import {
   Backpack as BackpackIcon,
   Trash2,
   ArrowRight,
+  Key,
 } from 'lucide-react';
 import { GameEngine, GameState, GameMode } from '../game/GameEngine';
 import {
@@ -73,7 +72,7 @@ const THEME_COMPANION: Record<ThemeId, CompanionStyle> = {
   garden: 'hada',
   castle: 'serpiente',
 };
-import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus } from '../game/items';
+import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus, ItemType } from '../game/items';
 import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
 import { COMPANION_POWERS, CompanionPowerStatus } from '../game/companionPowers';
 import { BodyType, CharacterAppearance, loadAppearance, loadRoster } from '../game/character';
@@ -177,14 +176,46 @@ interface GameHUDProps {
   onDismissEasterEgg?: () => void;
 }
 
-// --- 360° Analog Virtual Joystick for Mobile Devices ---
+// --- Crisp Cozy Item Icons for Backpack & Quick Slots ---
+const renderItemIcon = (type: ItemType, className: string = 'w-5 h-5') => {
+  if (type === 'llave') {
+    return <Key className={`${className} text-amber-300 drop-shadow`} />;
+  }
+  if (type === 'baya') {
+    return (
+      <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 3c0 2-1 3-2.5 3.5" stroke="#86efac" strokeWidth="2" />
+        <path d="M12 3c1.5 1.5 2.5 2 3.5 1.5" stroke="#86efac" strokeWidth="2" />
+        <circle cx="8.5" cy="11" r="4.2" fill="#f43f5e" stroke="#fda4af" />
+        <circle cx="15.5" cy="11" r="4.2" fill="#ec4899" stroke="#fbcfe8" />
+        <circle cx="12" cy="16.5" r="4.2" fill="#db2777" stroke="#f472b6" />
+        <circle cx="10" cy="10" r="1.1" fill="#ffffff" stroke="none" />
+        <circle cx="14" cy="10" r="1.1" fill="#ffffff" stroke="none" />
+      </svg>
+    );
+  }
+  if (type === 'nuez') {
+    return (
+      <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2.5v3" stroke="#a16207" strokeWidth="2" />
+        <path d="M5.5 8.5c0-1.8 3-3.2 6.5-3.2s6.5 1.4 6.5 3.2c0 1-1 1.8-2 1.8h-9c-1 0-2-.8-2-1.8z" fill="#ca8a04" stroke="#fef08a" />
+        <path d="M6.5 10c0 4.8 2.8 10 5.5 11 2.7-1 5.5-6.2 5.5-11" fill="#eab308" stroke="#fde047" />
+        <path d="M12 10v10.5" stroke="#a16207" strokeDasharray="1 2" />
+      </svg>
+    );
+  }
+  return null;
+};
+
+// --- 360° Analog Virtual Joystick for Mobile Devices with Auto-Sprint ---
 const VirtualJoystick: React.FC<{
-  onMove: (forward: number, right: number) => void;
+  onMove: (forward: number, right: number, isSprint: boolean) => void;
   compact?: boolean;
 }> = ({ onMove, compact = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [knobPos, setKnobPos] = useState({ x: 0, y: 0 });
   const [isActive, setIsActive] = useState(false);
+  const [isSprinting, setIsSprinting] = useState(false);
   const touchIdRef = useRef<number | null>(null);
 
   const maxRadius = compact ? 34 : 45;
@@ -212,7 +243,8 @@ const VirtualJoystick: React.FC<{
     // Deadzone (12% of maxRadius) eliminates noisy twitching when crossing the center
     const deadZone = maxRadius * 0.12;
     if (dist <= deadZone) {
-      onMove(0, 0);
+      setIsSprinting(false);
+      onMove(0, 0, false);
       return;
     }
 
@@ -221,7 +253,11 @@ const VirtualJoystick: React.FC<{
     const magnitude = Math.min(1.0, (dist - deadZone) / activeRadius);
     const normRight = (dx / dist) * magnitude;
     const normForward = (-dy / dist) * magnitude;
-    onMove(normForward, normRight);
+
+    // Automatic Sprint past threshold: pushing the joystick past 68% of range activates sprinting
+    const sprint = magnitude >= 0.68;
+    setIsSprinting(sprint);
+    onMove(normForward, normRight, sprint);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -254,8 +290,9 @@ const VirtualJoystick: React.FC<{
       if (e.changedTouches[i].identifier === touchIdRef.current) {
         touchIdRef.current = null;
         setIsActive(false);
+        setIsSprinting(false);
         setKnobPos({ x: 0, y: 0 });
-        onMove(0, 0);
+        onMove(0, 0, false);
         break;
       }
     }
@@ -265,8 +302,9 @@ const VirtualJoystick: React.FC<{
     const handleReset = () => {
       touchIdRef.current = null;
       setIsActive(false);
+      setIsSprinting(false);
       setKnobPos({ x: 0, y: 0 });
-      onMove(0, 0);
+      onMove(0, 0, false);
     };
 
     window.addEventListener('resize', handleReset);
@@ -277,7 +315,7 @@ const VirtualJoystick: React.FC<{
       window.removeEventListener('resize', handleReset);
       window.removeEventListener('blur', handleReset);
       window.removeEventListener('orientationchange', handleReset);
-      onMove(0, 0);
+      onMove(0, 0, false);
     };
   }, [onMove]);
 
@@ -292,11 +330,22 @@ const VirtualJoystick: React.FC<{
         compact ? 'w-22 h-22 w-[5.5rem] h-[5.5rem]' : 'w-28 h-28 sm:w-32 sm:h-32'
       } ${
         isActive
-          ? 'bg-amber-950/40 border-amber-400 shadow-xl shadow-amber-500/20'
+          ? isSprinting
+            ? 'bg-amber-950/50 border-orange-400 shadow-xl shadow-orange-500/30'
+            : 'bg-amber-950/40 border-amber-400 shadow-xl shadow-amber-500/20'
           : 'bg-stone-900/55 border-stone-700/60 shadow-lg backdrop-blur-sm'
       }`}
       style={{ touchAction: 'none' }}
     >
+      {/* Sprint threshold dashed guide ring */}
+      <div
+        className={`absolute rounded-full pointer-events-none transition-all ${
+          isSprinting
+            ? 'border-2 border-orange-400/70 scale-105 shadow-sm shadow-orange-500/30'
+            : 'border border-stone-600/30 border-dashed'
+        } ${compact ? 'w-[3.8rem] h-[3.8rem]' : 'w-20 h-20 sm:w-22 sm:h-22'}`}
+      />
+
       {!compact && (
         <>
           <span className="absolute top-2 text-[9px] text-stone-500 font-mono">W</span>
@@ -307,15 +356,23 @@ const VirtualJoystick: React.FC<{
       )}
 
       <div
-        className={`rounded-full bg-gradient-to-br from-amber-400 to-amber-600 shadow-md border-2 border-amber-200 pointer-events-none flex items-center justify-center ${
+        className={`rounded-full shadow-md border-2 pointer-events-none flex items-center justify-center transition-all ${
           compact ? 'w-10 h-10' : 'w-12 h-12 sm:w-14 sm:h-14'
+        } ${
+          isSprinting
+            ? 'bg-gradient-to-br from-amber-400 via-orange-500 to-orange-600 border-orange-200 ring-2 ring-orange-400/50 shadow-orange-500/40 scale-105'
+            : 'bg-gradient-to-br from-amber-400 to-amber-600 border-amber-200 shadow-amber-900/30'
         }`}
         style={{
           transform: `translate(${knobPos.x}px, ${knobPos.y}px)`,
           transition: isActive ? 'none' : 'transform 0.15s ease-out',
         }}
       >
-        <div className={`rounded-full bg-amber-100/70 ${compact ? 'w-3 h-3' : 'w-4 h-4'}`} />
+        {isSprinting ? (
+          <Zap className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} text-stone-950 fill-stone-950 animate-pulse`} />
+        ) : (
+          <div className={`rounded-full bg-amber-100/70 ${compact ? 'w-3 h-3' : 'w-4 h-4'}`} />
+        )}
       </div>
     </div>
   );
@@ -448,7 +505,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showLevelBrief, setShowLevelBrief] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
-  const [isSprintActive, setIsSprintActive] = useState(false);
   const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [viewportNarrow, setViewportNarrow] = useState(() =>
@@ -808,9 +864,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     if (engine) engine.warpToCheckpoint(idx);
   };
 
-  const handleJoystickMove = React.useCallback((forward: number, right: number) => {
+  const handleJoystickMove = React.useCallback((forward: number, right: number, sprint?: boolean) => {
     if (engine) {
-      engine.setVirtualInput({ forward, right });
+      engine.setVirtualInput({ forward, right, sprint: Boolean(sprint) });
     }
   }, [engine]);
 
@@ -1541,13 +1597,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                               if (info) engine?.discardItem(i);
                             }}
                             title={info ? `${info.name}: tocar para usar` : `Vacío ${i + 1}`}
-                            className={`relative aspect-square rounded-xl flex items-center justify-center text-lg border transition-transform active:scale-90 cursor-pointer ${
+                            className={`relative aspect-square rounded-xl flex items-center justify-center border transition-transform active:scale-90 cursor-pointer ${
                               info ? 'bg-stone-800 border-stone-600' : 'bg-stone-950/60 border-stone-800 border-dashed'
                             }`}
                             style={info ? { boxShadow: `inset 0 -2px 0 ${info.color}` } : undefined}
                           >
                             <span className="absolute top-0.5 left-1 text-[8px] font-mono text-stone-500">{i + 1}</span>
-                            {info?.emoji}
+                            {item ? renderItemIcon(item, 'w-5 h-5') : null}
                           </button>
                         );
                       })}
@@ -1559,7 +1615,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                         return (
                           <div key={i} className="flex items-center gap-2 p-2 rounded-xl bg-stone-950/60 border border-stone-800">
                             <span className="w-5 text-[10px] font-mono text-stone-500">{i + 1}</span>
-                            <span className="w-8 h-8 flex items-center justify-center text-xl rounded-lg bg-stone-800/80">{info?.emoji ?? ''}</span>
+                            <span className="w-8 h-8 flex items-center justify-center rounded-lg bg-stone-800/80">
+                              {item ? renderItemIcon(item, 'w-5 h-5') : null}
+                            </span>
                             <div className="flex-1 min-w-0">
                               <div className="text-xs font-semibold truncate">{info ? info.name : 'Vacío'}</div>
                               {info && <div className="text-[10px] text-stone-400 leading-snug">{info.desc}</div>}
@@ -1589,7 +1647,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   )}
                   {!isMobileUi && (
                     <p className="mt-2 text-[10px] text-stone-400 leading-snug">
-                      Recoge bayas 🍇 y nueces 🌰 en las islas. Úsalas con las teclas 1–5 o tocando el espacio. Las llaves 🔑 se usan solas al llegar a una puerta.
+                      Recoge bayas y nueces en las islas. Úsalas con las teclas 1–5 o tocando el espacio. Las llaves se usan solas al llegar a una puerta.
                     </p>
                   )}
                 </div>
@@ -1634,13 +1692,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                         key={i}
                         onClick={() => engine?.useItem(i)}
                         title={info ? `${info.name}: ${info.desc} (tecla ${i + 1})` : `Espacio ${i + 1} vacío`}
-                        className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center text-xl border transition-transform active:scale-90 cursor-pointer ${
+                        className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center border transition-transform active:scale-90 cursor-pointer ${
                           info ? 'bg-stone-800 border-stone-600 hover:border-amber-400' : 'bg-stone-950/50 border-stone-800 border-dashed'
                         }`}
                         style={info ? { boxShadow: `inset 0 -3px 0 ${info.color}` } : undefined}
                       >
                         <span className="absolute top-0.5 left-1 text-[9px] font-mono text-stone-500">{i + 1}</span>
-                        {info?.emoji}
+                        {item ? renderItemIcon(item, 'w-5 h-5') : null}
                       </button>
                     );
                   })}
@@ -1654,36 +1712,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {touchControlsEnabled && !isAnyModalOpen && (
             <>
               <div className={`absolute flex flex-col items-start gap-2 pointer-events-auto z-20 pl-safe pb-safe ${compactControls ? 'bottom-3 left-3' : 'bottom-5 left-5 sm:bottom-6 sm:left-6'}`}>
-                <div className="flex items-center gap-2 ml-1">
-                  <button
-                    onTouchStart={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      engine?.rotateCamera(Math.PI / 4);
-                    }}
-                    onClick={() => engine?.rotateCamera(Math.PI / 4)}
-                    className={`${compactControls ? 'w-9 h-9' : 'w-10 h-10'} rounded-full bg-stone-900/70 border border-stone-700/80 text-amber-300 flex items-center justify-center shadow-md active:scale-90 transition-transform cursor-pointer touch-none select-none backdrop-blur-sm`}
-                    style={{ touchAction: 'none' }}
-                    title="Girar cámara izquierda"
-                    aria-label="Girar cámara izquierda"
-                  >
-                    <Undo2 className="w-4 h-4" />
-                  </button>
-                  <button
-                    onTouchStart={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      engine?.rotateCamera(-Math.PI / 4);
-                    }}
-                    onClick={() => engine?.rotateCamera(-Math.PI / 4)}
-                    className={`${compactControls ? 'w-9 h-9' : 'w-10 h-10'} rounded-full bg-stone-900/70 border border-stone-700/80 text-amber-300 flex items-center justify-center shadow-md active:scale-90 transition-transform cursor-pointer touch-none select-none backdrop-blur-sm`}
-                    style={{ touchAction: 'none' }}
-                    title="Girar cámara derecha"
-                    aria-label="Girar cámara derecha"
-                  >
-                    <Redo2 className="w-4 h-4" />
-                  </button>
-                </div>
                 <VirtualJoystick
                   onMove={handleJoystickMove}
                   compact={compactControls}
@@ -1716,32 +1744,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     </span>
                   </button>
                 )}
-
-                <button
-                  onTouchStart={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const next = !isSprintActive;
-                    setIsSprintActive(next);
-                    engine?.setVirtualInput({ sprint: next });
-                  }}
-                  onClick={() => {
-                    const next = !isSprintActive;
-                    setIsSprintActive(next);
-                    engine?.setVirtualInput({ sprint: next });
-                  }}
-                  className={`flex items-center gap-1.5 rounded-2xl text-[10px] sm:text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none ${
-                    compactControls ? 'px-3 py-2' : 'px-4 py-2.5'
-                  } ${
-                    isSprintActive
-                      ? 'bg-amber-500 text-stone-950 border-2 border-amber-300'
-                      : 'bg-stone-900/85 text-stone-200 border border-stone-700/80'
-                  }`}
-                  style={{ touchAction: 'none' }}
-                >
-                  <Zap className={`w-4 h-4 ${isSprintActive ? 'fill-stone-950' : 'text-amber-400'}`} />
-                  <span>{isSprintActive ? 'Corriendo' : 'Correr'}</span>
-                </button>
 
                 <button
                   onTouchStart={(e) => {
@@ -2605,15 +2607,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Joystick 360° (abajo a la izquierda)</span>
-                  <span className="text-stone-200">Mueve en cualquier dirección</span>
+                  <span className="text-stone-200">Mueve en cualquier ángulo; al inclinar al borde corre automáticamente</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Botón saltar (abajo a la derecha)</span>
                   <span className="text-stone-200">Salto y rebote</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-stone-800">
-                  <span className="text-stone-400">Botón correr (sprint)</span>
-                  <span className="text-stone-200">Acelera el paso</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-stone-800">
                   <span className="text-stone-400">Girar cámara y zoom</span>
