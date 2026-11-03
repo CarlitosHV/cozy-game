@@ -1029,7 +1029,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         'KeyW', 'KeyA', 'KeyS', 'KeyD',
         'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
         'Space', 'ShiftLeft', 'ShiftRight',
-        'KeyQ', 'KeyE', 'KeyR', 'KeyC', 'KeyG', 'KeyI', 'Escape'
+        'KeyQ', 'KeyE', 'KeyR', 'KeyC', 'KeyG', 'KeyI', 'KeyV', 'Escape'
       ];
       if (gameKeys.includes(e.code)) {
         if (isTouchDevice) return;
@@ -2630,7 +2630,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   })()}
                   {!isMobileUi && (
                     <p className="mt-2 text-[10px] text-stone-400 leading-snug">
-                      Recoge bayas y nueces en las islas. 1–5 usan · Mayús+1–5 tiran · F batea. Las llaves se usan solas en puertas.
+                      Recoge bayas y nueces en las islas. 1–5 usan · Mayús+1–5 tiran · V batea. Las llaves se usan solas en puertas.
                     </p>
                   )}
                 </div>

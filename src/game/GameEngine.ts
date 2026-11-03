@@ -801,7 +801,7 @@ export class GameEngine {
     return this.combat ? this.combat.getStatus() : null;
   }
 
-  /** Key F / HUD button: swing the bat if you carry one. */
+  /** Key V / HUD button: swing the bat if you carry one. */
   public quickAttack() {
     if (this.gameState !== 'playing') return;
     const slot = this.itemSystem.slotOf('bate');
@@ -1172,7 +1172,7 @@ export class GameEngine {
     if (e.code === 'KeyG' && !e.repeat) {
       this.activateCompanionPower();
     }
-    if (e.code === 'KeyF' && !e.repeat) {
+    if (e.code === 'KeyV' && !e.repeat) {
       this.quickAttack();
     }
     const slotMatch = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);

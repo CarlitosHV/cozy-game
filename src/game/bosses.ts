@@ -341,7 +341,7 @@ class BirdBoss extends BossController {
 
   hint(): string {
     if (this.state === 'flying') return 'Plumarroca vuela a otra torre…';
-    if (this.onPerch()) return this.has('bate') ? '¡Golpéala con el bate (F) o cáele encima!' : '¡Cáele encima de un salto! (o trae un bate)';
+    if (this.onPerch()) return this.has('bate') ? '¡Golpéala con el bate (V) o cáele encima!' : '¡Cáele encima de un salto! (o trae un bate)';
     return 'Esquiva las piedras y sube por los escalones de la torre donde está Plumarroca';
   }
 

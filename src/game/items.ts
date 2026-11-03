@@ -55,7 +55,7 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
   bate: {
     type: 'bate',
     name: 'Bate',
-    desc: 'Golpea lo que tengas enfrente (tecla F). Se rompe tras varios golpes.',
+    desc: 'Golpea lo que tengas enfrente (tecla V). Se rompe tras varios golpes.',
     color: '#d97706',
   },
   red: {
