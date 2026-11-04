@@ -12,6 +12,7 @@ export interface ProceduralTextures {
   cloud: THREE.CanvasTexture;
   shadow: THREE.CanvasTexture;
   leaf: THREE.CanvasTexture;
+  particleGlow: THREE.CanvasTexture;
 }
 
 export function createProceduralTextures(maxAnisotropy: number = 4): ProceduralTextures {
@@ -222,6 +223,22 @@ export function createProceduralTextures(maxAnisotropy: number = 4): ProceduralT
   const leafTex = new THREE.CanvasTexture(leafCanvas);
   leafTex.colorSpace = THREE.SRGBColorSpace;
 
+  // 8. Soft Circular Particle Glow Texture (weather motes, pollen, fireflies, sparks)
+  const partCanvas = document.createElement('canvas');
+  partCanvas.width = 64;
+  partCanvas.height = 64;
+  const pCtx = partCanvas.getContext('2d')!;
+  const pGrad = pCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  pGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+  pGrad.addColorStop(0.25, 'rgba(255, 255, 255, 0.9)');
+  pGrad.addColorStop(0.55, 'rgba(255, 255, 255, 0.45)');
+  pGrad.addColorStop(0.85, 'rgba(255, 255, 255, 0.12)');
+  pGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  pCtx.fillStyle = pGrad;
+  pCtx.fillRect(0, 0, 64, 64);
+
+  const particleGlowTex = new THREE.CanvasTexture(partCanvas);
+
   return {
     grass: grassTex,
     stone: stoneTex,
@@ -230,5 +247,6 @@ export function createProceduralTextures(maxAnisotropy: number = 4): ProceduralT
     cloud: cloudTex,
     shadow: shadowTex,
     leaf: leafTex,
+    particleGlow: particleGlowTex,
   };
 }

@@ -182,15 +182,16 @@ export function createPlayerCharacter(
         group.add(cord, tip);
       }
 
-      const hoodGeom = new THREE.SphereGeometry(0.18, 16, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
-      hoodGeom.scale(1.15, 0.75, 0.75);
+      // Resting hood draped naturally across the upper back behind the neck
+      const hoodGeom = new THREE.SphereGeometry(0.17, 16, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+      hoodGeom.scale(1.15, 0.70, 0.65);
       const hood = new THREE.Mesh(hoodGeom, new THREE.MeshStandardMaterial({
         color: look.sweaterColor,
         roughness: 0.85,
         side: THREE.DoubleSide,
       }));
-      hood.position.set(0, 0.9, -0.16);
-      hood.rotation.x = -0.9;
+      hood.position.set(0, 0.73, -0.21);
+      hood.rotation.x = -0.55;
       hood.castShadow = true;
       group.add(hood);
       break;
@@ -350,9 +351,16 @@ export function createPlayerCharacter(
   head.castShadow = true;
   group.add(head);
 
+  const hasFullHat = ['gorro', 'gorra', 'sombrero'].includes(look.hatStyle);
+
   // Hair cap covering the top/back of the head - contoured snugly around the cranium
-  const capGeom = new THREE.SphereGeometry(0.226, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.50);
-  capGeom.scale(1.02, 1.02, 1.03);
+  const capRadius = hasFullHat ? 0.222 : 0.226;
+  const capGeom = new THREE.SphereGeometry(capRadius, 20, 16, 0, Math.PI * 2, 0, hasFullHat ? Math.PI * 0.44 : Math.PI * 0.50);
+  if (!hasFullHat) {
+    capGeom.scale(1.02, 1.02, 1.03);
+  } else {
+    capGeom.scale(0.99, 0.99, 1.0);
+  }
   const hairCap = new THREE.Mesh(capGeom, hairMat);
   hairCap.position.set(0, HEAD_Y, -0.01);
   hairCap.rotation.x = -0.32; // tilt slightly back so forehead is clear
@@ -361,6 +369,7 @@ export function createPlayerCharacter(
 
   // Soft stylized bangs curving naturally over the forehead
   const addBangs = (count: number, length: number, spread: number) => {
+    const yOffset = (look.hatStyle === 'gorro' || look.hatStyle === 'gorra') ? 0.05 : 0.08;
     for (let b = 0; b < count; b++) {
       const angle = (b - (count - 1) / 2) * spread;
       const bangGeom = new THREE.CapsuleGeometry(0.022, length, 6, 8);
@@ -368,7 +377,7 @@ export function createPlayerCharacter(
       const bang = new THREE.Mesh(bangGeom, hairMat);
       bang.position.set(
         Math.sin(angle) * 0.19,
-        HEAD_Y + 0.08 - Math.abs(angle) * 0.03,
+        HEAD_Y + yOffset - Math.abs(angle) * 0.03,
         Math.cos(angle) * 0.19 + 0.01
       );
       bang.rotation.x = 0.38;
@@ -404,26 +413,44 @@ export function createPlayerCharacter(
     case 'puntas': {
       addBangs(3, 0.10, 0.28);
       addSideTufts(0.09);
-      // Swept-back stylized layered tufts that follow the head curve
-      const tuftGeom = new THREE.ConeGeometry(0.035, 0.15, 8);
-      tuftGeom.scale(1.2, 1.0, 0.65);
-      const sweptLocks: [number, number, number, number, number][] = [
-        // [x, y, z, rotX, rotZ]
-        [0, HEAD_Y + 0.19, -0.06, 0.65, 0],
-        [0.08, HEAD_Y + 0.17, -0.09, 0.72, -0.25],
-        [-0.08, HEAD_Y + 0.17, -0.09, 0.72, 0.25],
-        [0.12, HEAD_Y + 0.12, -0.14, 0.95, -0.4],
-        [-0.12, HEAD_Y + 0.12, -0.14, 0.95, 0.4],
-        [0, HEAD_Y + 0.13, -0.18, 1.15, 0],
-        [0.06, HEAD_Y + 0.06, -0.20, 1.35, -0.2],
-        [-0.06, HEAD_Y + 0.06, -0.20, 1.35, 0.2],
-      ];
-      for (const [lx, ly, lz, rx, rz] of sweptLocks) {
-        const lock = new THREE.Mesh(tuftGeom, hairMat);
-        lock.position.set(lx, ly, lz);
-        lock.rotation.set(rx, 0, rz);
-        lock.castShadow = true;
-        headGroup.add(lock);
+      if (!hasFullHat) {
+        // Swept-back stylized layered tufts that follow the head curve
+        const tuftGeom = new THREE.ConeGeometry(0.035, 0.15, 8);
+        tuftGeom.scale(1.2, 1.0, 0.65);
+        const sweptLocks: [number, number, number, number, number][] = [
+          // [x, y, z, rotX, rotZ]
+          [0, HEAD_Y + 0.19, -0.06, 0.65, 0],
+          [0.08, HEAD_Y + 0.17, -0.09, 0.72, -0.25],
+          [-0.08, HEAD_Y + 0.17, -0.09, 0.72, 0.25],
+          [0.12, HEAD_Y + 0.12, -0.14, 0.95, -0.4],
+          [-0.12, HEAD_Y + 0.12, -0.14, 0.95, 0.4],
+          [0, HEAD_Y + 0.13, -0.18, 1.15, 0],
+          [0.06, HEAD_Y + 0.06, -0.20, 1.35, -0.2],
+          [-0.06, HEAD_Y + 0.06, -0.20, 1.35, 0.2],
+        ];
+        for (const [lx, ly, lz, rx, rz] of sweptLocks) {
+          const lock = new THREE.Mesh(tuftGeom, hairMat);
+          lock.position.set(lx, ly, lz);
+          lock.rotation.set(rx, 0, rz);
+          lock.castShadow = true;
+          headGroup.add(lock);
+        }
+      } else {
+        // Under full hats, only show lower nape tufts peeking out from underneath
+        const tuftGeom = new THREE.ConeGeometry(0.032, 0.11, 8);
+        tuftGeom.scale(1.1, 1.0, 0.6);
+        const lowLocks: [number, number, number, number, number][] = [
+          [0.06, HEAD_Y + 0.02, -0.20, 1.35, -0.2],
+          [-0.06, HEAD_Y + 0.02, -0.20, 1.35, 0.2],
+          [0, HEAD_Y + 0.03, -0.21, 1.3, 0],
+        ];
+        for (const [lx, ly, lz, rx, rz] of lowLocks) {
+          const lock = new THREE.Mesh(tuftGeom, hairMat);
+          lock.position.set(lx, ly, lz);
+          lock.rotation.set(rx, 0, rz);
+          lock.castShadow = true;
+          headGroup.add(lock);
+        }
       }
       break;
     }
@@ -431,7 +458,12 @@ export function createPlayerCharacter(
       addBangs(5, 0.09, 0.20);
       addSideTufts(0.10);
       const tail = new THREE.Group();
-      tail.position.set(0, HEAD_Y + 0.07, -0.20);
+      if (hasFullHat) {
+        // Ponytail emerges comfortably below hat rim at the nape
+        tail.position.set(0, HEAD_Y - 0.01, -0.21);
+      } else {
+        tail.position.set(0, HEAD_Y + 0.07, -0.20);
+      }
       const tie = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.014, 6, 14), hatMat);
       tie.rotation.x = Math.PI / 2 - 0.4;
       const tailGeom = new THREE.CapsuleGeometry(0.042, 0.22, 8, 10);
@@ -476,17 +508,29 @@ export function createPlayerCharacter(
       break;
     }
     case 'chongo': {
-      // Elegant top bun with smooth contour
       addBangs(5, 0.09, 0.20);
       addSideTufts(0.10);
-      const bun = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 14), hairMat);
-      bun.scale.set(1.05, 0.95, 1.05);
-      bun.position.set(0, HEAD_Y + 0.20, -0.11);
-      bun.castShadow = true;
-      const bunTie = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.015, 6, 16), hatMat);
-      bunTie.position.set(0, HEAD_Y + 0.15, -0.10);
-      bunTie.rotation.x = Math.PI / 2 - 0.5;
-      headGroup.add(bun, bunTie);
+      if (hasFullHat) {
+        // Tucked into a cute neat nape bun peeking beneath the hat rim
+        const bun = new THREE.Mesh(new THREE.SphereGeometry(0.065, 14, 14), hairMat);
+        bun.scale.set(1.05, 0.85, 0.85);
+        bun.position.set(0, HEAD_Y - 0.04, -0.21);
+        bun.castShadow = true;
+        const bunTie = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.013, 6, 16), hatMat);
+        bunTie.position.set(0, HEAD_Y - 0.015, -0.19);
+        bunTie.rotation.x = Math.PI / 2 - 0.2;
+        headGroup.add(bun, bunTie);
+      } else {
+        // Elegant top bun with smooth contour
+        const bun = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 14), hairMat);
+        bun.scale.set(1.05, 0.95, 1.05);
+        bun.position.set(0, HEAD_Y + 0.20, -0.11);
+        bun.castShadow = true;
+        const bunTie = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.015, 6, 16), hatMat);
+        bunTie.position.set(0, HEAD_Y + 0.15, -0.10);
+        bunTie.rotation.x = Math.PI / 2 - 0.5;
+        headGroup.add(bun, bunTie);
+      }
       break;
     }
     case 'trenzas': {
@@ -634,61 +678,62 @@ export function createPlayerCharacter(
   let hatPompom: THREE.Mesh = new THREE.Mesh(); // invisible placeholder when the hat has no pompom
   switch (look.hatStyle) {
     case 'gorro': {
-      // Cozy Beanie Hat
-      const hatGeom = new THREE.ConeGeometry(0.24, 0.28, 16);
-      const hat = new THREE.Mesh(hatGeom, hatMat);
-      hat.position.set(0, 1.15, -0.02);
-      hat.rotation.x = -0.15;
+      // Cozy rounded Beanie Hat: dome that fits snugly and roomily over the head without clipping
+      const hatDomeGeom = new THREE.SphereGeometry(0.245, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.58);
+      hatDomeGeom.scale(1.02, 1.16, 1.05);
+      const hat = new THREE.Mesh(hatDomeGeom, hatMat);
+      hat.position.set(0, 1.01, -0.015);
+      hat.rotation.x = -0.14;
       hat.castShadow = true;
       headGroup.add(hat);
 
       // Folded beanie rim
-      const rimGeom = new THREE.TorusGeometry(0.22, 0.05, 8, 20);
+      const rimGeom = new THREE.TorusGeometry(0.228, 0.052, 8, 24);
       const rim = new THREE.Mesh(rimGeom, hatMat);
-      rim.position.set(0, 1.05, -0.01);
-      rim.rotation.x = Math.PI / 2 - 0.15;
+      rim.position.set(0, 1.04, -0.01);
+      rim.rotation.x = Math.PI / 2 - 0.14;
       headGroup.add(rim);
 
       // Fluffy cream pompom on top
       const pompomGeom = new THREE.SphereGeometry(0.08, 12, 12);
       hatPompom = new THREE.Mesh(pompomGeom, pompomMat);
-      hatPompom.position.set(0, 1.32, -0.06);
+      hatPompom.position.set(0, 1.30, -0.05);
       headGroup.add(hatPompom);
       break;
     }
     case 'gorra': {
       // Baseball cap with a front bill and a top button
-      const crownGeom = new THREE.SphereGeometry(0.235, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2);
-      crownGeom.scale(1, 0.82, 1);
+      const crownGeom = new THREE.SphereGeometry(0.244, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.52);
+      crownGeom.scale(1.02, 0.92, 1.04);
       const crown = new THREE.Mesh(crownGeom, hatMat);
-      crown.position.set(0, 1.0, -0.01);
+      crown.position.set(0, 0.99, -0.01);
       crown.rotation.x = -0.12;
       crown.castShadow = true;
-      const billGeom = new THREE.CylinderGeometry(0.2, 0.2, 0.02, 20, 1, false, -Math.PI / 2, Math.PI);
-      billGeom.scale(1, 1, 0.85);
+      const billGeom = new THREE.CylinderGeometry(0.21, 0.21, 0.02, 20, 1, false, -Math.PI / 2, Math.PI);
+      billGeom.scale(1, 1, 0.88);
       const bill = new THREE.Mesh(billGeom, detailMat);
-      bill.position.set(0, 1.02, 0.15);
+      bill.position.set(0, 1.01, 0.155);
       bill.rotation.x = 0.12;
       bill.castShadow = true;
-      const capBand = new THREE.Mesh(new THREE.TorusGeometry(0.232, 0.014, 6, 24), detailMat);
+      const capBand = new THREE.Mesh(new THREE.TorusGeometry(0.236, 0.016, 6, 24), detailMat);
       capBand.rotation.x = Math.PI / 2 - 0.12;
-      capBand.position.set(0, 1.005, -0.01);
+      capBand.position.set(0, 0.995, -0.01);
       hatPompom = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 8), detailMat);
-      hatPompom.position.set(0, 1.19, -0.035);
+      hatPompom.position.set(0, 1.21, -0.035);
       headGroup.add(crown, bill, capBand, hatPompom);
       break;
     }
     case 'sombrero': {
       // Wide-brim explorer hat with a ribbon band
-      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.42, 0.025, 28), hatMat);
-      brim.position.set(0, 1.1, -0.01);
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.44, 0.025, 28), hatMat);
+      brim.position.set(0, 1.10, -0.01);
       brim.rotation.x = -0.08;
       brim.castShadow = true;
-      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.22, 0.18, 20), hatMat);
-      crown.position.set(0, 1.2, -0.02);
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.245, 0.20, 24), hatMat);
+      crown.position.set(0, 1.20, -0.02);
       crown.rotation.x = -0.08;
       crown.castShadow = true;
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.214, 0.221, 0.045, 20), scarfMat);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.235, 0.246, 0.045, 24), scarfMat);
       band.position.set(0, 1.135, -0.015);
       band.rotation.x = -0.08;
       // Little feather tucked in the band (acts as the "pompom" for wind sway)
@@ -696,7 +741,7 @@ export function createPlayerCharacter(
       featherGeom.scale(0.35, 1.6, 0.6);
       featherGeom.translate(0, 0.06, 0);
       hatPompom = new THREE.Mesh(featherGeom, pompomMat);
-      hatPompom.position.set(0.2, 1.16, -0.04);
+      hatPompom.position.set(0.22, 1.16, -0.04);
       hatPompom.rotation.z = -0.5;
       headGroup.add(brim, crown, band, hatPompom);
       break;
@@ -756,23 +801,24 @@ export function createPlayerCharacter(
       break;
   }
 
-  // 4. Cozy Scarf with Fringed Tassels
-  const scarfRingGeom = new THREE.TorusGeometry(0.23, 0.06, 8, 20);
+  // 4. Cozy Scarf with Fringed Tassels (sits comfortably around the collar without chin intersection)
+  const isPoncho = look.outfitStyle === 'poncho';
+  const scarfRingGeom = new THREE.TorusGeometry(isPoncho ? 0.215 : 0.21, isPoncho ? 0.035 : 0.046, 8, 24);
   const scarfRing = new THREE.Mesh(scarfRingGeom, scarfMat);
-  scarfRing.position.y = 0.8;
-  scarfRing.rotation.x = Math.PI / 2;
+  scarfRing.position.set(0, 0.74, 0.01);
+  scarfRing.rotation.x = Math.PI / 2 + 0.08;
   group.add(scarfRing);
 
   // Scarf tails with fringe detail
-  const tailGeom1 = new THREE.BoxGeometry(0.09, 0.28, 0.02);
-  tailGeom1.translate(0, -0.14, 0);
+  const tailGeom1 = new THREE.BoxGeometry(0.085, 0.26, 0.02);
+  tailGeom1.translate(0, -0.13, 0);
   const scarfTail1 = new THREE.Mesh(tailGeom1, scarfMat);
-  scarfTail1.position.set(0.08, 0.78, -0.22);
+  scarfTail1.position.set(0.08, 0.73, -0.21);
 
-  const tailGeom2 = new THREE.BoxGeometry(0.08, 0.24, 0.02);
-  tailGeom2.translate(0, -0.12, 0);
+  const tailGeom2 = new THREE.BoxGeometry(0.075, 0.22, 0.02);
+  tailGeom2.translate(0, -0.11, 0);
   const scarfTail2 = new THREE.Mesh(tailGeom2, scarfMat);
-  scarfTail2.position.set(-0.04, 0.76, -0.21);
+  scarfTail2.position.set(-0.04, 0.71, -0.20);
   group.add(scarfTail1, scarfTail2);
 
   // 5. Articulated Arms & Cozy Mittens (Left & Right)
@@ -1753,7 +1799,8 @@ export function createCheckpointShrine(textures: ProceduralTextures): Checkpoint
   particleGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
   const particleMat = new THREE.PointsMaterial({
-    size: 0.16,
+    size: 0.22,
+    map: textures.particleGlow,
     vertexColors: true,
     transparent: true,
     opacity: 0,

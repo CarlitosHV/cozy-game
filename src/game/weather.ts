@@ -186,10 +186,12 @@ export class WeatherSystem {
 
     const rainMat = new THREE.PointsMaterial({
       color: 0xc4dded,
-      size: 0.18,
+      size: 0.22,
+      map: textures.particleGlow,
       transparent: true,
       opacity: 0,
       blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
     this.rainParticles = new THREE.Points(this.rainGeom, rainMat);
     this.scene.add(this.rainParticles);
@@ -234,7 +236,7 @@ export class WeatherSystem {
     this.sakuraParticles.instanceMatrix.needsUpdate = true;
     this.scene.add(this.sakuraParticles);
 
-    // 3. Golden Dust Pollen
+    // 3. Golden Dust Pollen (Soft glowing circular motes)
     const pollenCount = 300;
     const pollenGeom = new THREE.BufferGeometry();
     const pollenPos = new Float32Array(pollenCount * 3);
@@ -245,16 +247,18 @@ export class WeatherSystem {
     }
     pollenGeom.setAttribute('position', new THREE.BufferAttribute(pollenPos, 3));
     const pollenMat = new THREE.PointsMaterial({
-      color: 0xffd166,
-      size: 0.15,
+      color: 0xffd97d,
+      size: 0.22,
+      map: textures.particleGlow,
       transparent: true,
       opacity: 0.75,
       blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
     this.pollenParticles = new THREE.Points(pollenGeom, pollenMat);
     this.scene.add(this.pollenParticles);
 
-    // 4. Starlit Fireflies
+    // 4. Starlit Fireflies (Glowing soft orbs)
     const fireflyGeom = new THREE.BufferGeometry();
     this.fireflyPositions = new Float32Array(this.fireflyCount * 3);
     for (let i = 0; i < this.fireflyCount; i++) {
@@ -265,10 +269,12 @@ export class WeatherSystem {
     fireflyGeom.setAttribute('position', new THREE.BufferAttribute(this.fireflyPositions, 3));
     const fireflyMat = new THREE.PointsMaterial({
       color: 0x90e0ef,
-      size: 0.28,
+      size: 0.35,
+      map: textures.particleGlow,
       transparent: true,
       opacity: 0,
       blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
     this.fireflyParticles = new THREE.Points(fireflyGeom, fireflyMat);
     this.scene.add(this.fireflyParticles);

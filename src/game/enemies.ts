@@ -1240,11 +1240,27 @@ export class AetherStalker {
       pPositions[i + 2] = (Math.random() - 0.5) * 1.8;
     }
     pGeom.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+
+    const stalkerPartCanvas = document.createElement('canvas');
+    stalkerPartCanvas.width = 32;
+    stalkerPartCanvas.height = 32;
+    const sCtx = stalkerPartCanvas.getContext('2d')!;
+    const sGrad = sCtx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    sGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    sGrad.addColorStop(0.5, 'rgba(255, 255, 255, 0.4)');
+    sGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    sCtx.fillStyle = sGrad;
+    sCtx.fillRect(0, 0, 32, 32);
+    const stalkerPartTex = new THREE.CanvasTexture(stalkerPartCanvas);
+
     const pMat = new THREE.PointsMaterial({
       color: 0x9333ea,
-      size: 0.12,
+      size: 0.18,
+      map: stalkerPartTex,
       transparent: true,
       opacity: 0.65,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
     this.particles = new THREE.Points(pGeom, pMat);
     this.group.add(this.particles);

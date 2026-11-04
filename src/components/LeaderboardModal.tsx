@@ -6,7 +6,7 @@ import { ActionFeedbackBanner } from './ActionFeedback';
 import { formatSeconds, friendlyError } from '../utils/locale';
 import { UI, BTN } from '../ui/labels';
 import { isTypingTarget } from '../ui/shortcuts';
-import { levelInfo, maxPlayableLevel } from '../game/progress';
+import { levelInfo, maxPlayableLevel, BOSS_INFO } from '../game/progress';
 import { EmptyState, HelpTip, TIPS } from './HelpTip';
 
 interface LeaderboardModalProps {
@@ -189,6 +189,15 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
             {levelList.map((lvl) => {
               const info = levelInfo(lvl);
               const isSelected = levelId === lvl;
+              const shortLabel = info.boss
+                ? `👑 ${BOSS_INFO[info.boss]?.short ?? 'Jefe'}`
+                : info.name
+                    .replace(/^Archipiélago /, '')
+                    .replace(/^Ruta /, '')
+                    .replace(/^Valle /, '')
+                    .replace(/^Jardín /, '')
+                    .replace(/^Castillo /, '')
+                    .replace(/ · .*$/, '');
               return (
                 <button
                   key={lvl}
@@ -200,7 +209,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                     isSelected ? 'cozy-tab-active shadow-sm' : 'cozy-btn text-cozy-muted'
                   }`}
                 >
-                  {lvl}. {info.name.replace(/^Archipiélago /, '').replace(/^Ruta /, '').replace(/^Valle /, '').replace(/^Jefe: /, '👑 ')}
+                  {lvl}. {shortLabel}
                 </button>
               );
             })}
@@ -269,8 +278,12 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
           ) : entries.length === 0 ? (
             <EmptyState
               className="h-48"
-              title="Aún no hay tiempos aquí"
-              body="Completa este nivel en modo Contrarreloj estando dentro de tu cuenta. Tu mejor tiempo aparecerá solo."
+              title={mode === 'chase' ? 'Aún no hay récords de Persecución' : 'Aún no hay tiempos aquí'}
+              body={
+                mode === 'chase'
+                  ? 'Completa este nivel en modo Persecución escapando del Acechador estando dentro de tu cuenta. Tu récord aparecerá aquí.'
+                  : 'Completa este nivel en modo Contrarreloj estando dentro de tu cuenta. Tu mejor tiempo aparecerá solo.'
+              }
             />
           ) : (
             entries.map((entry) => {
