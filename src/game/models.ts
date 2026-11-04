@@ -350,34 +350,46 @@ export function createPlayerCharacter(
   head.castShadow = true;
   group.add(head);
 
-  // Hair cap covering the top/back of the head (visible when no hat or under brims)
-  const capGeom = new THREE.SphereGeometry(0.228, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.47);
+  // Hair cap covering the top/back of the head - contoured snugly around the cranium
+  const capGeom = new THREE.SphereGeometry(0.226, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.50);
+  capGeom.scale(1.02, 1.02, 1.03);
   const hairCap = new THREE.Mesh(capGeom, hairMat);
-  hairCap.position.y = HEAD_Y;
-  hairCap.rotation.x = -0.38; // tilt back so the face stays clear
+  hairCap.position.set(0, HEAD_Y, -0.01);
+  hairCap.rotation.x = -0.32; // tilt slightly back so forehead is clear
   hairCap.castShadow = true;
   headGroup.add(hairCap);
 
-  // Bangs peeking out at the front (shared by most styles)
+  // Soft stylized bangs curving naturally over the forehead
   const addBangs = (count: number, length: number, spread: number) => {
     for (let b = 0; b < count; b++) {
-      const bangGeom = new THREE.ConeGeometry(0.045, length, 6);
-      const bang = new THREE.Mesh(bangGeom, hairMat);
       const angle = (b - (count - 1) / 2) * spread;
-      bang.position.set(Math.sin(angle) * 0.18, 1.03, Math.cos(angle) * 0.18);
-      bang.rotation.x = 0.45;
-      bang.rotation.z = -angle * 0.5;
+      const bangGeom = new THREE.CapsuleGeometry(0.022, length, 6, 8);
+      bangGeom.scale(1.25, 1.0, 0.45);
+      const bang = new THREE.Mesh(bangGeom, hairMat);
+      bang.position.set(
+        Math.sin(angle) * 0.19,
+        HEAD_Y + 0.08 - Math.abs(angle) * 0.03,
+        Math.cos(angle) * 0.19 + 0.01
+      );
+      bang.rotation.x = 0.38;
+      bang.rotation.y = angle * 0.5;
+      bang.rotation.z = -angle * 0.45;
+      bang.castShadow = true;
       headGroup.add(bang);
     }
   };
+
   const addSideTufts = (length: number) => {
-    const leftTuft = new THREE.Mesh(new THREE.ConeGeometry(0.04, length, 6), hairMat);
-    leftTuft.position.set(0.21, 0.94, 0.05);
-    leftTuft.rotation.z = -0.4;
-    const rightTuft = new THREE.Mesh(new THREE.ConeGeometry(0.04, length, 6), hairMat);
-    rightTuft.position.set(-0.21, 0.94, 0.05);
-    rightTuft.rotation.z = 0.4;
-    headGroup.add(leftTuft, rightTuft);
+    for (const side of [1, -1]) {
+      const tuftGeom = new THREE.CapsuleGeometry(0.02, length, 6, 8);
+      tuftGeom.scale(1.15, 1.0, 0.5);
+      const tuft = new THREE.Mesh(tuftGeom, hairMat);
+      tuft.position.set(0.205 * side, HEAD_Y - 0.01, 0.05);
+      tuft.rotation.x = 0.15;
+      tuft.rotation.z = -0.32 * side;
+      tuft.castShadow = true;
+      headGroup.add(tuft);
+    }
   };
 
   // Swinging hair pieces (ponytail / pigtails) animated in updateAnimation
@@ -385,92 +397,111 @@ export function createPlayerCharacter(
 
   switch (look.hairStyle) {
     case 'flequillo': {
-      addBangs(5, 0.1, 0.18);
+      addBangs(5, 0.09, 0.20);
       addSideTufts(0.12);
       break;
     }
     case 'puntas': {
-      addBangs(3, 0.13, 0.3);
-      // Spiky tufts radiating from the top & back of the head
-      const spikeGeom = new THREE.ConeGeometry(0.055, 0.17, 6);
-      const spikes: [number, number][] = [
-        [0, 0.55], [0.9, 0.6], [-0.9, 0.6], [1.7, 0.75], [-1.7, 0.75],
-        [2.5, 0.8], [-2.5, 0.8], [Math.PI, 0.7], [0, 0.15],
+      addBangs(3, 0.10, 0.28);
+      addSideTufts(0.09);
+      // Swept-back stylized layered tufts that follow the head curve
+      const tuftGeom = new THREE.ConeGeometry(0.035, 0.15, 8);
+      tuftGeom.scale(1.2, 1.0, 0.65);
+      const sweptLocks: [number, number, number, number, number][] = [
+        // [x, y, z, rotX, rotZ]
+        [0, HEAD_Y + 0.19, -0.06, 0.65, 0],
+        [0.08, HEAD_Y + 0.17, -0.09, 0.72, -0.25],
+        [-0.08, HEAD_Y + 0.17, -0.09, 0.72, 0.25],
+        [0.12, HEAD_Y + 0.12, -0.14, 0.95, -0.4],
+        [-0.12, HEAD_Y + 0.12, -0.14, 0.95, 0.4],
+        [0, HEAD_Y + 0.13, -0.18, 1.15, 0],
+        [0.06, HEAD_Y + 0.06, -0.20, 1.35, -0.2],
+        [-0.06, HEAD_Y + 0.06, -0.20, 1.35, 0.2],
       ];
-      for (const [yaw, tilt] of spikes) {
-        const s = new THREE.Mesh(spikeGeom, hairMat);
-        const dir = new THREE.Vector3(Math.sin(yaw) * Math.sin(tilt), Math.cos(tilt), Math.cos(yaw) * Math.sin(tilt) * 0.6 - 0.25).normalize();
-        s.position.set(dir.x * 0.22, HEAD_Y + dir.y * 0.22, dir.z * 0.22);
-        s.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-        headGroup.add(s);
+      for (const [lx, ly, lz, rx, rz] of sweptLocks) {
+        const lock = new THREE.Mesh(tuftGeom, hairMat);
+        lock.position.set(lx, ly, lz);
+        lock.rotation.set(rx, 0, rz);
+        lock.castShadow = true;
+        headGroup.add(lock);
       }
       break;
     }
     case 'coleta': {
-      addBangs(5, 0.1, 0.18);
-      addSideTufts(0.1);
+      addBangs(5, 0.09, 0.20);
+      addSideTufts(0.10);
       const tail = new THREE.Group();
-      tail.position.set(0, 1.02, -0.2);
-      const tie = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.015, 6, 12), hatMat);
-      tie.rotation.x = Math.PI / 2 - 0.5;
-      const tailGeom = new THREE.CapsuleGeometry(0.05, 0.2, 6, 10);
-      tailGeom.translate(0, -0.13, 0);
+      tail.position.set(0, HEAD_Y + 0.07, -0.20);
+      const tie = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.014, 6, 14), hatMat);
+      tie.rotation.x = Math.PI / 2 - 0.4;
+      const tailGeom = new THREE.CapsuleGeometry(0.042, 0.22, 8, 10);
+      tailGeom.scale(1.1, 1.0, 0.85);
+      tailGeom.translate(0, -0.14, 0);
       const tailMesh = new THREE.Mesh(tailGeom, hairMat);
       tailMesh.castShadow = true;
       tail.add(tie, tailMesh);
-      tail.rotation.x = 0.35;
+      tail.rotation.x = 0.32;
       headGroup.add(tail);
       swingingHair.push(tail);
       break;
     }
     case 'largo': {
-      addBangs(5, 0.11, 0.18);
-      // Long flowing curtain down the back and sides
-      const backGeom = new THREE.CapsuleGeometry(0.19, 0.2, 8, 16);
-      backGeom.scale(1.15, 1, 0.55);
+      addBangs(5, 0.10, 0.20);
+      // Soft flowing hair curtain hugging the shoulders
+      const backGeom = new THREE.CapsuleGeometry(0.17, 0.22, 10, 16);
+      backGeom.scale(1.18, 1.0, 0.52);
       const back = new THREE.Mesh(backGeom, hairMat);
-      back.position.set(0, 0.86, -0.12);
+      back.position.set(0, HEAD_Y - 0.09, -0.11);
+      back.rotation.x = -0.05;
       back.castShadow = true;
       headGroup.add(back);
-      const sideGeom = new THREE.CapsuleGeometry(0.045, 0.22, 6, 8);
-      const sideL = new THREE.Mesh(sideGeom, hairMat);
-      sideL.position.set(0.2, 0.86, 0.02);
-      const sideR = new THREE.Mesh(sideGeom, hairMat);
-      sideR.position.set(-0.2, 0.86, 0.02);
-      headGroup.add(sideL, sideR);
+
+      // Front shoulder strands
+      for (const side of [1, -1]) {
+        const frontStrandGeom = new THREE.CapsuleGeometry(0.035, 0.24, 6, 8);
+        frontStrandGeom.scale(1.1, 1.0, 0.6);
+        const frontStrand = new THREE.Mesh(frontStrandGeom, hairMat);
+        frontStrand.position.set(0.17 * side, HEAD_Y - 0.10, 0.06);
+        frontStrand.rotation.z = -0.12 * side;
+        frontStrand.rotation.x = 0.12;
+        frontStrand.castShadow = true;
+        headGroup.add(frontStrand);
+      }
       break;
     }
     case 'rapado': {
-      // Short crop: just the cap with a tiny fringe and sideburns
-      addBangs(3, 0.05, 0.25);
-      addSideTufts(0.06);
+      // Clean, neat short hair with tiny soft fringe
+      addBangs(3, 0.04, 0.25);
+      addSideTufts(0.05);
       break;
     }
     case 'chongo': {
-      // Top bun with a ribbon tie
-      addBangs(5, 0.1, 0.18);
-      addSideTufts(0.1);
-      const bun = new THREE.Mesh(new THREE.SphereGeometry(0.085, 12, 12), hairMat);
-      bun.position.set(0, 1.16, -0.14);
+      // Elegant top bun with smooth contour
+      addBangs(5, 0.09, 0.20);
+      addSideTufts(0.10);
+      const bun = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 14), hairMat);
+      bun.scale.set(1.05, 0.95, 1.05);
+      bun.position.set(0, HEAD_Y + 0.20, -0.11);
       bun.castShadow = true;
-      const bunTie = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.016, 6, 16), hatMat);
-      bunTie.position.set(0, 1.11, -0.12);
-      bunTie.rotation.x = Math.PI / 2 - 0.6;
+      const bunTie = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.015, 6, 16), hatMat);
+      bunTie.position.set(0, HEAD_Y + 0.15, -0.10);
+      bunTie.rotation.x = Math.PI / 2 - 0.5;
       headGroup.add(bun, bunTie);
       break;
     }
     case 'trenzas': {
-      addBangs(5, 0.1, 0.18);
+      addBangs(5, 0.09, 0.20);
       for (const side of [1, -1]) {
         const pig = new THREE.Group();
-        pig.position.set(0.21 * side, 1.0, -0.06);
-        const tie = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), hatMat);
-        const tuftGeom = new THREE.CapsuleGeometry(0.045, 0.14, 6, 8);
-        tuftGeom.translate(0, -0.1, 0);
+        pig.position.set(0.19 * side, HEAD_Y + 0.04, -0.06);
+        const tie = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 8), hatMat);
+        const tuftGeom = new THREE.CapsuleGeometry(0.036, 0.16, 6, 8);
+        tuftGeom.translate(0, -0.11, 0);
+        tuftGeom.scale(1.0, 1.0, 0.7);
         const tuft = new THREE.Mesh(tuftGeom, hairMat);
         tuft.castShadow = true;
         pig.add(tie, tuft);
-        pig.rotation.z = 0.6 * side;
+        pig.rotation.z = 0.48 * side;
         headGroup.add(pig);
         swingingHair.push(pig);
       }

@@ -1270,6 +1270,13 @@ export class AetherStalker {
       this.position.y += Math.sin(time * 6) * 0.01;
       this.group.position.copy(this.position);
       this.coreMesh.rotation.y += dt * 0.8;
+
+      // Keep distance to player updated during stun so HUD is never frozen
+      const stunTargetY = playerPos.y + 0.9 + Math.sin(time * 3) * 0.25;
+      const stunTarget = new THREE.Vector3(playerPos.x, stunTargetY, playerPos.z);
+      const stunDist = this.position.distanceTo(stunTarget);
+      this.distanceToPlayer = stunDist;
+      this.warningLevel = stunDist < 8.0 ? 'danger' : stunDist < 18.0 ? 'caution' : 'none';
       return;
     }
 
@@ -1330,7 +1337,7 @@ export class AetherStalker {
     if (dist < 1.7) {
       // Caught the player!
       this.isStunned = true;
-      this.stunTimer = 3.2;
+      this.stunTimer = 2.5;
 
       // Recoil stalker backward
       this.position.sub(dir.multiplyScalar(7.5));
@@ -1355,9 +1362,11 @@ export class AetherStalker {
   public resetPosition(playerPos: THREE.Vector3) {
     this.isStunned = false;
     this.stunTimer = 0;
-    this.position.copy(playerPos).add(new THREE.Vector3(-14, 3, -14));
+    this.position.copy(playerPos).add(new THREE.Vector3(-18, 3, -18));
     this.velocity.set(0, 0, 0);
     this.group.position.copy(this.position);
+    this.distanceToPlayer = this.position.distanceTo(playerPos);
+    this.warningLevel = 'none';
   }
 
   public dispose() {

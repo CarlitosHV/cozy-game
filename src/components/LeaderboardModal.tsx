@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { Trophy, Clock, X, RefreshCw, Medal, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Trophy, Clock, X, RefreshCw, Medal, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiClient, LeaderboardEntry } from '../services/apiClient';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { ActionFeedbackBanner } from './ActionFeedback';
 import { formatSeconds, friendlyError } from '../utils/locale';
 import { UI, BTN } from '../ui/labels';
 import { isTypingTarget } from '../ui/shortcuts';
-import { levelInfo } from '../game/progress';
+import { levelInfo, maxPlayableLevel } from '../game/progress';
 import { EmptyState, HelpTip, TIPS } from './HelpTip';
 
 interface LeaderboardModalProps {
@@ -22,16 +22,18 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
   initialLevelId = 1,
   initialMode = 'time_trial',
 }) => {
+  const sanitizeMode = (m?: string): 'time_trial' | 'chase' => (m === 'chase' ? 'chase' : 'time_trial');
   const [levelId, setLevelId] = useState<number>(initialLevelId);
-  const [mode, setMode] = useState<'time_trial' | 'free' | 'chase'>(initialMode);
+  const [mode, setMode] = useState<'time_trial' | 'chase'>(sanitizeMode(initialMode));
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const loadAction = useAsyncAction();
 
   useEffect(() => {
     if (!isOpen) return;
     setLevelId(initialLevelId);
-    setMode(initialMode);
+    setMode(sanitizeMode(initialMode));
   }, [isOpen, initialLevelId, initialMode]);
 
   useEffect(() => {
@@ -44,7 +46,17 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
-      const match = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);
+      if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        setLevelId((prev) => Math.max(1, prev - 1));
+        return;
+      }
+      if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        setLevelId((prev) => prev + 1);
+        return;
+      }
+      const match = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
       if (match) {
         e.preventDefault();
         setLevelId(parseInt(match[1], 10));
@@ -53,6 +65,18 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [isOpen]);
+
+  // Keep active level button visible in horizontal scroll
+  useEffect(() => {
+    if (!isOpen || !scrollContainerRef.current) return;
+    const el = scrollContainerRef.current.querySelector<HTMLElement>(`[data-level="${levelId}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [levelId, isOpen]);
+
+  const maxAvailableLevels = Math.max(12, maxPlayableLevel(), levelId + 4);
+  const levelList = Array.from({ length: maxAvailableLevels }, (_, i) => i + 1);
 
   const fetchLeaderboard = async (manual: boolean) => {
     const result = await loadAction.run(
@@ -106,40 +130,86 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-          <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-            {[1, 2, 3, 4, 5].map((lvl) => {
+        {/* Level Selector with Stepper, Scrollable List, and Direct Level Input */}
+        <div className="flex flex-col gap-2 mb-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setLevelId((prev) => Math.max(1, prev - 1))}
+                disabled={levelId <= 1 || loadAction.busy}
+                className="p-1.5 rounded-xl cozy-btn text-cozy-ink disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                title="Nivel anterior (flecha izquierda)"
+                aria-label="Nivel anterior"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <div className="flex items-center gap-1.5 bg-cozy-panel-deep px-2.5 py-1 rounded-xl border border-cozy-line">
+                <span className="text-[10px] text-cozy-muted font-bold">Nivel:</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={999}
+                  value={levelId}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val) && val >= 1) setLevelId(val);
+                  }}
+                  className="w-11 text-center text-xs font-bold text-cozy-ink bg-white/90 rounded-lg border border-cozy-line py-0.5 focus:outline-none focus:ring-1 focus:ring-cozy-accent"
+                  title="Escribe cualquier nivel para ver sus mejores tiempos"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setLevelId((prev) => prev + 1)}
+                disabled={loadAction.busy}
+                className="p-1.5 rounded-xl cozy-btn text-cozy-ink disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                title="Nivel siguiente (flecha derecha)"
+                aria-label="Nivel siguiente"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            <button
+              onClick={() => void fetchLeaderboard(true)}
+              disabled={loadAction.busy}
+              className="px-2.5 py-1.5 rounded-xl cozy-btn text-cozy-accent-deep cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed flex items-center gap-1 text-[10px] font-semibold shrink-0"
+              title={UI.updateList}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loadAction.showLoading ? 'animate-spin' : ''}`} />
+              <span>{UI.updateList}</span>
+            </button>
+          </div>
+
+          <div
+            ref={scrollContainerRef}
+            className="flex items-center gap-1.5 overflow-x-auto py-1 scrollbar-none"
+          >
+            {levelList.map((lvl) => {
               const info = levelInfo(lvl);
+              const isSelected = levelId === lvl;
               return (
                 <button
                   key={lvl}
+                  data-level={lvl}
                   onClick={() => setLevelId(lvl)}
                   disabled={loadAction.busy}
-                  title={`${info.name} (tecla ${lvl})`}
-                  className={`px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed max-w-[7.5rem] truncate ${
-                    levelId === lvl ? 'cozy-tab-active' : 'cozy-btn text-cozy-muted'
+                  title={`Nivel ${lvl}: ${info.name}`}
+                  className={`px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed shrink-0 whitespace-nowrap ${
+                    isSelected ? 'cozy-tab-active shadow-sm' : 'cozy-btn text-cozy-muted'
                   }`}
                 >
-                  {lvl}. {info.name.replace(/^Archipiélago /, '').replace(/^Ruta /, '').replace(/^Valle /, '')}
+                  {lvl}. {info.name.replace(/^Archipiélago /, '').replace(/^Ruta /, '').replace(/^Valle /, '').replace(/^Jefe: /, '👑 ')}
                 </button>
               );
             })}
           </div>
-
-          <button
-            onClick={() => void fetchLeaderboard(true)}
-            disabled={loadAction.busy}
-            className="px-2.5 py-1.5 rounded-xl cozy-btn text-cozy-accent-deep cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed flex items-center gap-1 text-[10px] font-semibold"
-            title={UI.updateList}
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loadAction.showLoading ? 'animate-spin' : ''}`} />
-            <span>{UI.updateList}</span>
-          </button>
         </div>
 
         <p className="text-[11px] text-cozy-muted mb-2 truncate">
           Viendo: Nivel {levelId} · {levelInfo(levelId).name} ·{' '}
-          {mode === 'time_trial' ? 'Contrarreloj' : mode === 'free' ? 'Libre' : 'Persecución'}
+          {mode === 'time_trial' ? 'Contrarreloj' : 'Persecución'}
         </p>
 
         <div className="flex items-center gap-1.5 mb-3 pb-3 border-b border-cozy-line">
@@ -239,7 +309,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                       <div className="text-xs font-bold text-cozy-ink">{entry.username}</div>
                       {entry.collectiblesFound > 0 && (
                         <div className="text-[10px] text-cozy-muted">
-                          {entry.collectiblesFound} reliquias
+                          {entry.collectiblesFound} / {levelInfo(levelId).totalCollectibles} reliquias
                         </div>
                       )}
                     </div>

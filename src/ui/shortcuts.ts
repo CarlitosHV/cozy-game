@@ -19,7 +19,7 @@ export const POWER_SHORTCUTS: ShortcutRow[] = [
   { action: 'Objetivo del nivel', keys: 'O', context: 'Jugando' },
   { action: 'Seguir / Siguiente', keys: 'Enter', context: 'Pausa · Victoria · Fin' },
   { action: 'Empezar de nuevo', keys: 'R', context: 'Victoria · Fin' },
-  { action: 'Elegir nivel', keys: '1–5', context: 'Menú de niveles · Ranking' },
+  { action: 'Elegir nivel', keys: '1–9 / flechas', context: 'Menú de niveles · Ranking' },
   { action: 'Tirar objeto', keys: 'Mayús+1–5', context: 'Jugando' },
   { action: 'Batear', keys: 'V', context: 'Lucha contra jefes' },
   { action: 'Pantalla completa', keys: 'F', context: 'Siempre' },

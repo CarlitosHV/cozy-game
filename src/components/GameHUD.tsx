@@ -981,7 +981,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showToast('¡Listo! Tu cuenta está al día', 2500, 'success');
   };
 
-  const currentHowTo = levelHowTo(engine?.currentLevel ?? pendingLevel);
+  const currentHowTo = levelHowTo(
+    engine?.currentLevel ?? pendingLevel,
+    engine?.gameMode ?? gameMode ?? pendingMode
+  );
 
   useEffect(() => {
     if (engine) {
@@ -1701,7 +1704,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          setLeaderboardLevelId(1);
+                          setLeaderboardLevelId(engine?.currentLevel ?? pendingLevel ?? 1);
                           setShowLeaderboardModal(true);
                         }}
                         className="hover:text-cozy-ink cursor-pointer"
@@ -3447,7 +3450,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <span>{formatTime(elapsedTime)}</span>
                 <span>· Reliquias {collectedCount}/{totalCollectibles}</span>
                 <HelpTip label={TIPS.reliquias} />
-                {gameMode === 'time_trial' ? <span>· {timeRemaining}s restantes</span> : null}
+                {gameMode === 'time_trial' ? <span>· {timeRemaining.toFixed(1)}s restantes</span> : null}
               </p>
             </div>
 

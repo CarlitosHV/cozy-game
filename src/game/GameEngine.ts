@@ -125,6 +125,7 @@ export class GameEngine {
   public stalker: AetherStalker | null = null;
   private frameId: number = 0;
   private isDisposed: boolean = false;
+  private lastWallTime: number = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
 
   // Camera Orbit & Follow
@@ -670,6 +671,7 @@ export class GameEngine {
       this.setGameMode(mode);
     }
     this.gameState = 'playing';
+    this.lastWallTime = performance.now();
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
     if (this.gameMode === 'time_trial') {
@@ -706,6 +708,8 @@ export class GameEngine {
       this.virtualInput.right = 0;
       this.physics.velocity.x = 0;
       this.physics.velocity.z = 0;
+    } else {
+      this.lastWallTime = performance.now();
     }
     this.callbacks.onStateChange(this.gameState);
   }
@@ -723,6 +727,8 @@ export class GameEngine {
       this.virtualInput.right = 0;
       this.physics.velocity.x = 0;
       this.physics.velocity.z = 0;
+    } else {
+      this.lastWallTime = performance.now();
     }
   }
 
@@ -980,6 +986,7 @@ export class GameEngine {
     this.reapplySharedWorld();
     this.resetCombat();
     this.gameState = 'playing';
+    this.lastWallTime = performance.now();
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
     if (this.gameMode === 'time_trial') {
@@ -1410,7 +1417,11 @@ export class GameEngine {
       const dt = Math.min(rawDt, 0.05);
       const elapsedTime = this.clock.getElapsed();
 
-      this.update(dt, elapsedTime);
+      const now = performance.now();
+      const wallDt = Math.min(Math.max(0, (now - this.lastWallTime) / 1000), 2.0);
+      this.lastWallTime = now;
+
+      this.update(dt, elapsedTime, wallDt);
       this.renderer.render(this.scene, this.camera);
 
       if (this.isSoftwareGl) {
@@ -1427,7 +1438,7 @@ export class GameEngine {
     }
   }
 
-  private update(dt: number, time: number) {
+  private update(dt: number, time: number, wallDt: number) {
     // 1. Title Screen live-world camera pan
     if (this.gameState === 'title') {
       // The character waits at the level start (generated levels don't start at the center)
@@ -1499,6 +1510,7 @@ export class GameEngine {
     }
 
     if (this.gameState === 'paused' || this.gameState === 'victory' || this.isUIModalOpen) {
+      this.lastWallTime = performance.now();
       this.currentInput.forward = 0;
       this.currentInput.right = 0;
       this.currentInput.jump = false;
@@ -1517,6 +1529,7 @@ export class GameEngine {
 
     // 1b. Photo Mode Update & Camera Orbit
     if (this.gameState === 'photo_mode') {
+      this.lastWallTime = performance.now();
       if (!this.photoModePaused) {
         this.weatherSystem.update(dt, this.photoTarget, time);
         this.physics.updateMovingPlatforms(time, dt);
@@ -1621,12 +1634,12 @@ export class GameEngine {
     // 5b. Game Mode Execution (Time Trial Countdown & Chase Stalker)
     if (this.gameMode === 'time_trial') {
       const prevSec = Math.floor(this.timeRemaining);
-      this.timeRemaining -= dt;
+      this.timeRemaining = Math.max(0, this.timeRemaining - wallDt);
       const curSec = Math.floor(this.timeRemaining);
       if (prevSec !== curSec && curSec <= 15 && curSec > 0) {
         soundManager.playTimeWarning();
       }
-      this.callbacks.onTimeTrialTick?.(Math.max(0, this.timeRemaining));
+      this.callbacks.onTimeTrialTick?.(this.timeRemaining);
       if (this.timeRemaining <= 0) {
         this.timeRemaining = 0;
         this.gameState = 'game_over';
@@ -1646,6 +1659,9 @@ export class GameEngine {
         if (lure) return; // it only bumped into the lure
         // Caught by Stalker! Respawn player at checkpoint with warning notice
         this.physics.respawnAtCheckpoint();
+        if (this.stalker) {
+          this.stalker.resetPosition(this.physics.position);
+        }
         this.callbacks.onWeatherNotice?.({
           weather: this.weatherSystem.currentWeather,
           title: '¡Acechador te atrapó!',

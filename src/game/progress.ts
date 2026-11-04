@@ -22,6 +22,7 @@ export interface LevelInfo {
   generated: boolean;
   /** Boss of this level (null on sandbox and handmade levels) */
   boss: BossKind | null;
+  totalCollectibles: number;
 }
 
 const THEME_ORDER: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero', 'garden', 'castle'];
@@ -154,6 +155,11 @@ export function bossForLevel(level: number): BossKind | null {
   return isBossLevel(level) ? BOSS_FOR_THEME[themeForLevel(level)] : null;
 }
 
+export function levelTotalCollectibles(level: number): number {
+  if (level === 1) return 12;
+  return 10;
+}
+
 export function levelInfo(level: number): LevelInfo {
   const theme = themeForLevel(level);
   const t = THEME_INFO[theme];
@@ -166,6 +172,7 @@ export function levelInfo(level: number): LevelInfo {
     accent: t.accent,
     generated: level > 4,
     boss,
+    totalCollectibles: levelTotalCollectibles(level),
   };
 }
 
@@ -176,8 +183,20 @@ export interface LevelHowTo {
 }
 
 /** Clear objective + steps shown at level start and in the pause menu. */
-export function levelHowTo(level: number): LevelHowTo {
+export function levelHowTo(level: number, mode?: string): LevelHowTo {
   const info = levelInfo(level);
+
+  if (mode === 'chase') {
+    return {
+      title: `Nivel ${level} · Modo Persecución`,
+      goal: '¡Escapa del Acechador Sombrío y llega al portal de la cima!',
+      steps: [
+        'El Acechador Sombrío te persigue sin descanso desde atrás: ¡no te detengas!',
+        'Si se acerca a menos de 8 metros, la pantalla vibrará en rojo y escucharás la alarma.',
+        'Aprovecha los hongos elásticos, atajos y saltos precisos para ganar distancia y cruzar el portal.',
+      ],
+    };
+  }
 
   if (level === 1) {
     return {
@@ -316,7 +335,7 @@ function read(): ProgressData {
     // storage unavailable – start fresh
   }
   try {
-    if (/[?&]desbloquear=todo\b/.test(window.location.search)) {
+    if (/[?&](unlock(?:=all|=true)?|desbloquear(?:=todo)?|debug(?:=true)?)\b/i.test(window.location.search)) {
       data.highestCompleted = Math.max(data.highestCompleted, 60);
     }
   } catch {
