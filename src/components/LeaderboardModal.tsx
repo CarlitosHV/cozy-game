@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Trophy, Clock, X, RefreshCw, Medal, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
-import { apiClient, LeaderboardEntry } from '../services/apiClient';
+import { Trophy, Clock, X, RefreshCw, Medal, Loader2, ChevronLeft, ChevronRight, Timer, Ghost, Compass } from 'lucide-react';
+import { apiClient, LeaderboardEntry, LeaderboardTables, LeaderboardCounts } from '../services/apiClient';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { ActionFeedbackBanner } from './ActionFeedback';
 import { formatSeconds, friendlyError } from '../utils/locale';
@@ -9,22 +9,31 @@ import { isTypingTarget } from '../ui/shortcuts';
 import { levelInfo, maxPlayableLevel, BOSS_INFO } from '../game/progress';
 import { EmptyState, HelpTip, TIPS } from './HelpTip';
 
+export type LeaderboardTabMode = 'contrareloj' | 'persecucion' | 'normal';
+
 interface LeaderboardModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialLevelId?: number;
-  initialMode?: 'time_trial' | 'free' | 'chase';
+  initialMode?: 'contrareloj' | 'persecucion' | 'normal' | 'time_trial' | 'free' | 'chase';
 }
 
 export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
   isOpen,
   onClose,
   initialLevelId = 1,
-  initialMode = 'time_trial',
+  initialMode = 'contrareloj',
 }) => {
-  const sanitizeMode = (m?: string): 'time_trial' | 'chase' => (m === 'chase' ? 'chase' : 'time_trial');
+  const sanitizeMode = (m?: string): LeaderboardTabMode => {
+    if (m === 'chase' || m === 'persecucion') return 'persecucion';
+    if (m === 'free' || m === 'normal') return 'normal';
+    return 'contrareloj';
+  };
+
   const [levelId, setLevelId] = useState<number>(initialLevelId);
-  const [mode, setMode] = useState<'time_trial' | 'chase'>(sanitizeMode(initialMode));
+  const [mode, setMode] = useState<LeaderboardTabMode>(sanitizeMode(initialMode));
+  const [tables, setTables] = useState<LeaderboardTables>({});
+  const [counts, setCounts] = useState<LeaderboardCounts>({});
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -82,7 +91,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
     const result = await loadAction.run(
       async () => {
         const res = await apiClient.getLeaderboard(levelId, mode);
-        return res.leaderboard || [];
+        return res;
       },
       {
         successMessage: manual ? 'Lista al día' : undefined,
@@ -95,8 +104,12 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
       }
     );
 
-    if (result.ok) {
-      setEntries(result.result);
+    if (result.ok && result.result) {
+      const res = result.result;
+      setTables(res.tables || {});
+      setCounts(res.counts || {});
+      const activeList = res.tables?.[mode] || res.leaderboard || [];
+      setEntries(activeList);
       setHasLoadedOnce(true);
     } else {
       setHasLoadedOnce(true);
@@ -218,28 +231,50 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
 
         <p className="text-[11px] text-cozy-muted mb-2 truncate">
           Viendo: Nivel {levelId} · {levelInfo(levelId).name} ·{' '}
-          {mode === 'time_trial' ? 'Contrarreloj' : 'Persecución'}
+          {mode === 'contrareloj' ? 'Contrarreloj' : mode === 'persecucion' ? 'Persecución' : 'Modo Libre'}
         </p>
 
-        <div className="flex items-center gap-1.5 mb-3 pb-3 border-b border-cozy-line">
+        <div className="flex items-center gap-1.5 mb-3 pb-3 border-b border-cozy-line overflow-x-auto scrollbar-none">
           {(
             [
-              { id: 'time_trial' as const, label: 'Contrarreloj' },
-              { id: 'chase' as const, label: 'Persecución' },
+              { id: 'contrareloj' as const, label: 'Contrarreloj', Icon: Timer },
+              { id: 'persecucion' as const, label: 'Persecución', Icon: Ghost },
+              { id: 'normal' as const, label: 'Modo Libre', Icon: Compass },
             ] as const
-          ).map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => setMode(m.id)}
-              disabled={loadAction.busy}
-              className={`px-2.5 py-1 rounded-xl text-[10px] font-bold cursor-pointer disabled:opacity-55 ${
-                mode === m.id ? 'cozy-tab-active' : 'cozy-btn text-cozy-muted'
-              }`}
-            >
-              {m.label}
-            </button>
-          ))}
+          ).map((m) => {
+            const count = counts[m.id] ?? tables[m.id]?.length;
+            const isSelected = mode === m.id;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => {
+                  setMode(m.id);
+                  if (tables[m.id]) {
+                    setEntries(tables[m.id]!);
+                  }
+                }}
+                disabled={loadAction.busy}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-55 inline-flex items-center gap-1.5 transition-all shrink-0 ${
+                  isSelected ? 'cozy-tab-active shadow-xs' : 'cozy-btn text-cozy-muted'
+                }`}
+              >
+                <m.Icon className="w-3.5 h-3.5" />
+                <span>{m.label}</span>
+                {typeof count === 'number' && count > 0 && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono leading-none ${
+                      isSelected
+                        ? 'bg-amber-400/40 text-stone-900 font-bold'
+                        : 'bg-stone-200 text-stone-600'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         <ActionFeedbackBanner
@@ -278,11 +313,19 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
           ) : entries.length === 0 ? (
             <EmptyState
               className="h-48"
-              title={mode === 'chase' ? 'Aún no hay récords de Persecución' : 'Aún no hay tiempos aquí'}
+              title={
+                mode === 'persecucion'
+                  ? 'Aún no hay récords de Persecución'
+                  : mode === 'normal'
+                  ? 'Aún no hay récords en Modo Libre'
+                  : 'Aún no hay tiempos en Contrarreloj'
+              }
               body={
-                mode === 'chase'
-                  ? 'Completa este nivel en modo Persecución escapando del Acechador estando dentro de tu cuenta. Tu récord aparecerá aquí.'
-                  : 'Completa este nivel en modo Contrarreloj estando dentro de tu cuenta. Tu mejor tiempo aparecerá solo.'
+                mode === 'persecucion'
+                  ? 'Completa este nivel en modo Persecución escapando del Acechador con tu cuenta iniciada. Tu récord aparecerá aquí.'
+                  : mode === 'normal'
+                  ? 'Completa este nivel y llega a la cima en Modo Libre con tu cuenta iniciada para registrar tu tiempo.'
+                  : 'Completa este nivel contra el cronómetro en modo Contrarreloj con tu cuenta iniciada. Tu mejor tiempo aparecerá solo.'
               }
             />
           ) : (
@@ -290,10 +333,11 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
               const isFirst = entry.rank === 1;
               const isSecond = entry.rank === 2;
               const isThird = entry.rank === 3;
+              const relics = entry.collectiblesFound ?? entry.relicsFound ?? 0;
 
               return (
                 <div
-                  key={entry.userId || entry.rank}
+                  key={entry.userId ? `${entry.userId}-${entry.rank}` : entry.rank}
                   className={`flex items-center justify-between p-3 rounded-2xl border transition-all ${
                     isFirst
                       ? 'bg-[#fff1de] border-[#f0c48a]'
@@ -320,11 +364,18 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                     </span>
                     <div>
                       <div className="text-xs font-bold text-cozy-ink">{entry.username}</div>
-                      {entry.collectiblesFound > 0 && (
-                        <div className="text-[10px] text-cozy-muted">
-                          {entry.collectiblesFound} / {levelInfo(levelId).totalCollectibles} reliquias
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2 text-[10px] text-cozy-muted">
+                        {relics > 0 && (
+                          <span>
+                            {relics} / {levelInfo(levelId).totalCollectibles} reliquias
+                          </span>
+                        )}
+                        {entry.createdAt && (
+                          <span className="text-stone-400">
+                            · {new Date(entry.createdAt).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 

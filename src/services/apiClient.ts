@@ -56,6 +56,35 @@ export interface LeaderboardEntry {
   username: string;
   timeSeconds: number;
   collectiblesFound: number;
+  relicsFound?: number;
+  createdAt?: string;
+}
+
+export interface LeaderboardTables {
+  normal?: LeaderboardEntry[];
+  contrareloj?: LeaderboardEntry[];
+  persecucion?: LeaderboardEntry[];
+  free?: LeaderboardEntry[];
+  time_trial?: LeaderboardEntry[];
+  chase?: LeaderboardEntry[];
+}
+
+export interface LeaderboardCounts {
+  normal?: number;
+  contrareloj?: number;
+  persecucion?: number;
+  total?: number;
+}
+
+export interface LeaderboardResponse {
+  status: string;
+  levelId: number;
+  mode: string;
+  count?: number;
+  tables?: LeaderboardTables;
+  rankings?: LeaderboardTables;
+  counts?: LeaderboardCounts;
+  leaderboard: LeaderboardEntry[];
 }
 
 export type FriendRelationship = 'none' | 'friends' | 'outgoing_request' | 'incoming_request';
@@ -459,8 +488,18 @@ class ApiClient {
     levelId: number;
     timeSeconds: number;
     relicsFound?: number;
-    mode?: 'time_trial' | 'free' | 'chase';
+    mode?: 'normal' | 'contrareloj' | 'persecucion' | 'free' | 'time_trial' | 'chase';
   }): Promise<LevelCompletionResult> {
+    const modeMap: Record<string, string> = {
+      free: 'normal',
+      normal: 'normal',
+      time_trial: 'contrareloj',
+      contrareloj: 'contrareloj',
+      chase: 'persecucion',
+      persecucion: 'persecucion',
+    };
+    const mode = modeMap[params.mode || 'normal'] || 'normal';
+
     const res = await this.request<{
       status: string;
       data: LevelCompletionResult;
@@ -472,7 +511,7 @@ class ApiClient {
           levelId: params.levelId,
           timeSeconds: Number(params.timeSeconds.toFixed(2)),
           relicsFound: params.relicsFound ?? 0,
-          mode: params.mode || 'time_trial',
+          mode,
         }),
       },
       true
@@ -484,22 +523,78 @@ class ApiClient {
   // --- Leaderboard Endpoints (Specification 3) ---
 
   /**
-   * GET /api/v1/leaderboard/:levelId?mode=time_trial&limit=50
+   * GET /api/v1/leaderboard/:levelId?mode=all|contrareloj|normal|persecucion&limit=50
    */
   public async getLeaderboard(
     levelId: number,
-    mode: 'time_trial' | 'free' | 'chase' = 'time_trial',
+    mode: 'all' | 'normal' | 'contrareloj' | 'persecucion' | 'time_trial' | 'free' | 'chase' = 'all',
     limit: number = 50
-  ): Promise<{ levelId: number; mode: string; count: number; leaderboard: LeaderboardEntry[] }> {
-    const res = await this.request<{
-      status: string;
-      levelId: number;
-      mode: string;
-      count: number;
-      leaderboard: LeaderboardEntry[];
-    }>(`/leaderboard/${levelId}?mode=${mode}&limit=${limit}`, { method: 'GET' });
+  ): Promise<LeaderboardResponse> {
+    const modeMap: Record<string, string> = {
+      all: 'all',
+      free: 'normal',
+      normal: 'normal',
+      time_trial: 'contrareloj',
+      contrareloj: 'contrareloj',
+      chase: 'persecucion',
+      persecucion: 'persecucion',
+    };
+    const canonicalMode = modeMap[mode] || 'all';
 
-    return res;
+    const raw = await this.request<any>(
+      `/leaderboard/${levelId}?mode=${canonicalMode}&limit=${limit}`,
+      { method: 'GET' }
+    );
+
+    const tables: LeaderboardTables = raw.tables || raw.rankings || {};
+    const counts: LeaderboardCounts = raw.counts || {};
+
+    const mapEntry = (e: any): LeaderboardEntry => ({
+      rank: e.rank ?? 0,
+      userId: e.userId ?? '',
+      username: e.username ?? 'Jugador',
+      timeSeconds: e.timeSeconds ?? 0,
+      collectiblesFound: e.collectiblesFound ?? e.relicsFound ?? 0,
+      relicsFound: e.relicsFound ?? e.collectiblesFound ?? 0,
+      createdAt: e.createdAt,
+    });
+
+    const normalizedTables: LeaderboardTables = {};
+    if (Array.isArray(tables.normal)) normalizedTables.normal = tables.normal.map(mapEntry);
+    if (Array.isArray(tables.contrareloj)) normalizedTables.contrareloj = tables.contrareloj.map(mapEntry);
+    if (Array.isArray(tables.persecucion)) normalizedTables.persecucion = tables.persecucion.map(mapEntry);
+
+    // Determine entries for the requested mode
+    let entries: LeaderboardEntry[] = [];
+    if (canonicalMode !== 'all' && normalizedTables[canonicalMode as keyof LeaderboardTables]) {
+      entries = normalizedTables[canonicalMode as keyof LeaderboardTables]!;
+    } else if (Array.isArray(raw.leaderboard)) {
+      entries = raw.leaderboard.map(mapEntry);
+    } else if (normalizedTables.contrareloj) {
+      entries = normalizedTables.contrareloj;
+    } else if (normalizedTables.normal) {
+      entries = normalizedTables.normal;
+    }
+
+    return {
+      status: raw.status || 'success',
+      levelId: raw.levelId ?? levelId,
+      mode: raw.mode || canonicalMode,
+      count: raw.count ?? entries.length,
+      tables: normalizedTables,
+      rankings: normalizedTables,
+      counts,
+      leaderboard: entries,
+    };
+  }
+
+  /**
+   * GET /api/v1/leaderboard
+   * Global endpoint returning all levels (1 to 5) with independent tables.
+   */
+  public async getAllLeaderboards(): Promise<Record<number, LeaderboardResponse>> {
+    const raw = await this.request<any>('/leaderboard', { method: 'GET' });
+    return raw?.data || raw || {};
   }
 
   // --- Friends (Specification 4) ---
