@@ -40,6 +40,7 @@ export const FriendsPanel: React.FC<FriendsPanelProps> = ({
   const [results, setResults] = useState<FriendSearchResult[]>([]);
   const [query, setQuery] = useState('');
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
   const loadAction = useAsyncAction();
   const mutateAction = useAsyncAction();
   const searchTimer = useRef<number | null>(null);
@@ -57,11 +58,14 @@ export const FriendsPanel: React.FC<FriendsPanelProps> = ({
     void loadAction.run(
       async () => {
         await refreshLists();
+        setInitialLoading(false);
       },
       {
         silentSuccess: true,
-        errorMessage: (err) =>
-          friendlyError(err, 'No se pudo cargar amigos. Revisa la conexión e inténtalo.'),
+        errorMessage: (err) => {
+          setInitialLoading(false);
+          return friendlyError(err, 'No se pudo cargar amigos. Revisa la conexión e inténtalo.');
+        },
       }
     );
   }, []);
@@ -252,7 +256,12 @@ export const FriendsPanel: React.FC<FriendsPanelProps> = ({
 
       {tab === 'friends' && (
         <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-0.5">
-          {friends.length === 0 ? (
+          {initialLoading ? (
+            <div className="flex flex-col items-center justify-center py-8 gap-2 text-cozy-soft">
+              <span className="w-4 h-4 rounded-full border-2 border-cozy-accent border-t-transparent animate-spin" />
+              <span className="text-xs">Cargando amigos…</span>
+            </div>
+          ) : friends.length === 0 ? (
             <EmptyState
               title="Aún no tienes amigos"
               body="Busca por usuario y envía una solicitud. Cuando acepte, podrás invitarle a jugar."
@@ -311,7 +320,12 @@ export const FriendsPanel: React.FC<FriendsPanelProps> = ({
 
       {tab === 'requests' && (
         <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-0.5">
-          {requests.length === 0 ? (
+          {initialLoading ? (
+            <div className="flex flex-col items-center justify-center py-8 gap-2 text-cozy-soft">
+              <span className="w-4 h-4 rounded-full border-2 border-cozy-accent border-t-transparent animate-spin" />
+              <span className="text-xs">Cargando solicitudes…</span>
+            </div>
+          ) : requests.length === 0 ? (
             <EmptyState
               title="Sin solicitudes"
               body="Cuando alguien te agregue, la petición aparecerá aquí para aceptar o rechazar."

@@ -116,16 +116,16 @@ function createNameTagSprite(username: string): THREE.Sprite {
   const mat = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
     sizeAttenuation: true,
   });
 
   const sprite = new THREE.Sprite(mat);
-  const worldH = 0.42;
+  const worldH = 0.20;
   const worldW = worldH * (w / h);
   sprite.scale.set(worldW, worldH, 1);
-  sprite.position.set(0, 2.48, 0);
+  sprite.position.set(0, 1.48, 0);
   sprite.renderOrder = 10;
   return sprite;
 }

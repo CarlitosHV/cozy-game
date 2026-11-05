@@ -653,6 +653,12 @@ export class GameEngine {
     }
   }
 
+  public getPartySpawnOffset(): { x: number; z: number } | undefined {
+    if (!this.partyRoomId) return undefined;
+    const isHost = multiplayerClient.isPartyHostRole();
+    return isHost ? { x: -0.9, z: 0 } : { x: 0.9, z: 0 };
+  }
+
   private beginRun(mode: GameMode | undefined, freshBackpack: boolean) {
     this.lastUnlocked = null;
     this.clearPreviewCamera();
@@ -665,6 +671,7 @@ export class GameEngine {
     this.puzzleSystem.reset();
     this.reapplySharedWorld();
     this.resetCombat();
+    this.physics.respawnAtCheckpoint(0, false, this.getPartySpawnOffset());
     soundManager.init();
     soundManager.resume();
     if (mode) {
@@ -975,7 +982,7 @@ export class GameEngine {
     if (mode) {
       this.setGameMode(mode);
     }
-    this.physics.respawnAtCheckpoint(0, true);
+    this.physics.respawnAtCheckpoint(0, true, this.getPartySpawnOffset());
     this.resetCompanionPowers();
     this.physics.resetCollectibles();
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
@@ -1524,6 +1531,9 @@ export class GameEngine {
       this.playerModel.updateAnimation(0, true, dt, time);
       this.weatherSystem.update(dt, this.physics.position, time);
       this.world.levelUpdate?.(dt, time);
+      if (this.partyRoomId && this.remotePlayers) {
+        this.remotePlayers.update(dt);
+      }
       return;
     }
 

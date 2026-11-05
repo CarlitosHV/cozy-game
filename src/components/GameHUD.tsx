@@ -485,6 +485,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [leaderboardLevelId, setLeaderboardLevelId] = useState(1);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<InviteReceivedPayload | null>(null);
+  const [partyMembers, setPartyMembers] = useState<string[]>([]);
+  const [rejoinSession, setRejoinSession] = useState<{ roomId: string; levelId: number } | null>(() => {
+    try {
+      const raw = sessionStorage.getItem('cozy_party_session');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed?.roomId && parsed?.levelId && Date.now() - (parsed.joinedAt || 0) < 15 * 60 * 1000) {
+        return { roomId: parsed.roomId, levelId: parsed.levelId };
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  });
   const [levelListFilter, setLevelListFilter] = useState<'all' | 'done' | 'todo'>('all');
   const [levelSearch, setLevelSearch] = useState('');
   const [recentLevelSearches, setRecentLevelSearches] = useState<string[]>(() =>
@@ -673,11 +687,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     setShowCreator(false);
     engine.setCharacterPreview(false);
     engine.setPartyRoom(roomId, false);
-    if (gameState === 'playing' && engine.currentLevel === levelId) {
-      multiplayerClient.joinLevel(levelId, roomId);
-      showToast(`Sala privada · nivel ${levelId}`, 2200, 'success');
-      return;
-    }
+    sessionStorage.setItem(
+      'cozy_party_session',
+      JSON.stringify({ roomId, levelId, joinedAt: Date.now() })
+    );
+    setElapsedTime(0);
     engine.startGame('free', levelId);
     multiplayerClient.joinLevel(levelId, roomId);
     showToast(`Entraste a la sala · nivel ${levelId}`, 2200, 'success');
@@ -696,6 +710,19 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   };
 
   useEffect(() => {
+    multiplayerClient.onRoomState = (players) => {
+      setPartyMembers(players.map((p) => p.username).filter(Boolean));
+    };
+    multiplayerClient.onPlayerJoined = (player) => {
+      const name = player.username || 'Un jugador';
+      showToast(`¡${name} se unió a la sala!`, 3200, 'success');
+      setPartyMembers((prev) => [...prev.filter((u) => u !== name), name]);
+      // Timer sync & restart so both players start at 0:00 simultaneously
+      if (multiplayerClient.isInPartyRoom() && engine) {
+        setElapsedTime(0);
+        engine.restartLevel();
+      }
+    };
     multiplayerClient.onInviteReceived = (data) => {
       setShowAuthModal(false);
       setIncomingInvite(data);
@@ -708,7 +735,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       if (data.accepted && data.roomId) {
         enterPartyRoom(data.levelId, data.roomId);
       } else if (!data.accepted) {
-        showToast('La invitación fue rechazada o caducó.', 2200);
+        const reason = (data as { reason?: string }).reason;
+        if (reason === 'declined') {
+          showToast('Tu amigo rechazó la invitación para jugar.', 2800, 'neutral');
+        } else if (reason === 'expired') {
+          showToast('La invitación caducó sin respuesta.', 2800, 'neutral');
+        } else {
+          showToast('La invitación fue rechazada por tu amigo.', 2800, 'neutral');
+        }
       }
     };
     multiplayerClient.onSocketError = (err) => {
@@ -723,8 +757,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           ? `${name} se desconectó de la sala`
           : `${name} salió de la sala`;
       showToast(msg, 2600, 'neutral');
+      setPartyMembers((prev) => prev.filter((u) => u !== name && u !== data.username));
     };
     return () => {
+      multiplayerClient.onRoomState = undefined;
+      multiplayerClient.onPlayerJoined = undefined;
       multiplayerClient.onInviteReceived = undefined;
       multiplayerClient.onInviteSent = undefined;
       multiplayerClient.onInviteResult = undefined;
@@ -1054,9 +1091,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     };
   }, [isTouchDevice]);
 
-  // Timer (Bug 7: cleanly pauses when objective panel or any modal is open)
+  // Timer (cleanly pauses when objective panel or any modal is open in single-player, but keeps in sync across party players)
   useEffect(() => {
-    if (gameState !== 'playing' || isAnyModalOpen) return;
+    const isParty = multiplayerClient.isInPartyRoom();
+    if (!isParty && (gameState !== 'playing' || isAnyModalOpen)) return;
+    if (isParty && gameState !== 'playing' && gameState !== 'paused') return;
     const interval = setInterval(() => {
       setElapsedTime((prev) => prev + 1);
     }, 1000);
@@ -1126,7 +1165,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
       if (e.code === 'Escape') {
         if (incomingInvite) {
-          multiplayerClient.respondInvite(incomingInvite.inviteId, false);
+          multiplayerClient.respondInvite(incomingInvite.inviteId, false, 'declined');
           setIncomingInvite(null);
           e.preventDefault();
           return;
@@ -1412,6 +1451,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   };
 
   const handleReturnToTitle = () => {
+    sessionStorage.removeItem('cozy_party_session');
+    setPartyMembers([]);
     setElapsedTime(0);
     setTitleStep('main');
     setTitleDraftReady(false);
@@ -1634,6 +1675,42 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     Islas cálidas y saltos suaves
                   </p>
                 </div>
+
+                {rejoinSession && (
+                  <div className="w-full p-3 rounded-2xl bg-[#fff2db] border border-[#f0d4a3] text-stone-900 flex items-center justify-between gap-2 shadow-xs">
+                    <div className="flex items-center gap-2 text-left min-w-0">
+                      <Users className="w-4 h-4 text-amber-700 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold truncate">Sala multijugador previa</p>
+                        <p className="text-[10px] text-stone-600 truncate">Nivel {rejoinSession.levelId} · ¿Deseas volver a entrar?</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const s = rejoinSession;
+                          setRejoinSession(null);
+                          enterPartyRoom(s.levelId, s.roomId);
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-[11px] cursor-pointer shadow-xs active:scale-95 transition-all"
+                      >
+                        Volver
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          sessionStorage.removeItem('cozy_party_session');
+                          setRejoinSession(null);
+                        }}
+                        className="p-1 rounded-lg text-stone-500 hover:text-stone-800 cursor-pointer"
+                        title="Cerrar aviso"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="w-full flex flex-col gap-5">
                   <button
@@ -2315,6 +2392,42 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <span>{formatTime(elapsedTime)}</span>
               </div>
             </div>
+
+            {/* Multiplayer Party Room badge */}
+            {multiplayerClient.isInPartyRoom() && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-950/85 border border-emerald-500/50 text-emerald-200 text-xs shadow-md backdrop-blur-md">
+                <Users className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <div className="flex flex-col text-left">
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400">
+                    Sala privada {multiplayerClient.isPartyHostRole() ? '(Anfitrión)' : '(Invitado)'}
+                  </span>
+                  <span className="text-[11px] text-emerald-100 font-semibold truncate max-w-[140px]">
+                    {partyMembers.length > 0 ? partyMembers.join(', ') : 'En la sala'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmRequest({
+                      title: '¿Salir de la sala multijugador?',
+                      message: 'Saldrás de la partida en línea y volverás al menú principal.',
+                      confirmLabel: 'Salir de la sala',
+                      cancelLabel: 'Seguir jugando',
+                      tone: 'danger',
+                      onConfirm: () => {
+                        sessionStorage.removeItem('cozy_party_session');
+                        multiplayerClient.clearPartyRoom();
+                        handleReturnToTitle();
+                      },
+                    });
+                  }}
+                  className="ml-1 px-1.5 py-0.5 rounded-md bg-emerald-900/80 hover:bg-rose-900/80 text-[10px] text-emerald-300 hover:text-rose-200 transition-colors cursor-pointer"
+                  title="Salir de la sala"
+                >
+                  Salir
+                </button>
+              </div>
+            )}
 
             {/* Floating Pickup Alert */}
             {pickupAlert && (
@@ -3276,6 +3389,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </p>
             </div>
 
+            {multiplayerClient.isInPartyRoom() && (
+              <div className="w-full px-3 py-2 rounded-xl bg-[#e3f0f7] border border-[#bcd7e8] text-[11px] text-[#2c5878] text-left flex items-start gap-2 shadow-xs">
+                <Users className="w-4 h-4 shrink-0 mt-0.5 text-[#2c5878]" />
+                <span className="leading-tight">
+                  Partida multijugador online. El tiempo y los demás jugadores continúan en curso.
+                </span>
+              </div>
+            )}
+
             <div className="w-full flex flex-col gap-3">
               <button
                 onClick={() => engine?.setPaused(false)}
@@ -3869,7 +3991,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  multiplayerClient.respondInvite(incomingInvite.inviteId, false);
+                  multiplayerClient.respondInvite(incomingInvite.inviteId, false, 'declined');
                   setIncomingInvite(null);
                 }}
                 className={`flex-1 ${BTN.secondary}`}
@@ -3879,7 +4001,25 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  multiplayerClient.respondInvite(incomingInvite.inviteId, true);
+                  const inv = incomingInvite;
+                  if (!inv) return;
+                  if (gameState === 'playing') {
+                    setConfirmRequest({
+                      title: '¿Abandonar partida actual?',
+                      message: `Tienes una partida en curso. Al unirte a la sala de ${inv.fromUsername}, tu partida actual se reiniciará para jugar juntos en el nivel ${inv.levelId}.`,
+                      confirmLabel: 'Unirme a la sala',
+                      cancelLabel: 'Seguir jugando',
+                      tone: 'danger',
+                      onConfirm: () => {
+                        setConfirmRequest(null);
+                        setIncomingInvite(null);
+                        multiplayerClient.respondInvite(inv.inviteId, true);
+                      },
+                    });
+                  } else {
+                    setIncomingInvite(null);
+                    multiplayerClient.respondInvite(inv.inviteId, true);
+                  }
                 }}
                 className={`flex-1 ${BTN.primary}`}
               >

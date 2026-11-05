@@ -438,18 +438,32 @@ class MultiplayerClient {
     this.currentRoomId = roomId;
   }
 
+  private isPartyHost: boolean = false;
+
+  public isPartyHostRole(): boolean {
+    return this.isPartyHost;
+  }
+
+  public setPartyHostRole(isHost: boolean): void {
+    this.isPartyHost = isHost;
+  }
+
   public sendInvite(toUserId: string, levelId: number): void {
     if (!this.socket || !this.socket.connected) {
       this.connect();
     }
+    this.isPartyHost = true;
     this.socket?.emit('invite:send', { toUserId, levelId });
   }
 
-  public respondInvite(inviteId: string, accept: boolean): void {
+  public respondInvite(inviteId: string, accept: boolean, reason?: 'declined' | 'expired' | string): void {
     if (!this.socket || !this.socket.connected) {
       this.connect();
     }
-    this.socket?.emit('invite:respond', { inviteId, accept });
+    if (accept) {
+      this.isPartyHost = false;
+    }
+    this.socket?.emit('invite:respond', { inviteId, accept, reason });
   }
 
   public syncPlayer(
