@@ -61,6 +61,7 @@ import {
   Gamepad2,
   Lock,
   Settings,
+  RefreshCw,
 } from 'lucide-react';
 import { GameEngine, GameState, GameMode } from '../game/GameEngine';
 import {
@@ -505,7 +506,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     getRecent(RECENT_KEYS.levelSearches)
   );
   const [currentUser, setCurrentUser] = useState<User | null>(() => apiClient.getCurrentUser());
-  const [lastSubmittedVictory, setLastSubmittedVictory] = useState<number | null>(null);
+  const [submittedRunKey, setSubmittedRunKey] = useState<string | null>(null);
+  const runStartTimeRef = useRef<number>(Date.now());
   const [elapsedTime, setElapsedTime] = useState(0);
   const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -962,44 +964,55 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     gameState === 'game_over' ||
     gameState === 'photo_mode';
 
+  const submitVictoryRun = async (force: boolean = false) => {
+    if (!engine) return;
+    const targetLevel = engine.currentLevel;
+    const targetMode = engine.gameMode ?? gameMode;
+    const preciseTime = Math.max(4.6, (performance.now() - runStartTimeRef.current) / 1000, elapsedTime);
+
+    const runKey = `${targetLevel}-${targetMode}-${runStartTimeRef.current}`;
+    if (!force && submittedRunKey === runKey) return;
+    setSubmittedRunKey(runKey);
+
+    void saveProgressAction.run(
+      async () => {
+        const res = await apiClient.completeLevel({
+          levelId: targetLevel,
+          timeSeconds: Number(preciseTime.toFixed(2)),
+          relicsFound: collectedCount,
+          mode: targetMode,
+        });
+        if (res?.progress?.maxUnlockedLevel) {
+          syncProgressFromBackend(res.progress.maxUnlockedLevel - 1);
+        }
+        return res;
+      },
+      {
+        successMessage: (res) =>
+          (res as { isNewBest?: boolean })?.isNewBest
+            ? '¡Nuevo récord personal guardado en el ranking!'
+            : '¡Récord y progreso guardados!',
+        errorMessage: (err) =>
+          friendlyError(
+            err,
+            'No se guardó el récord en el servidor. Toca Reintentar.'
+          ),
+      }
+    );
+  };
+
   // Submit level completion when logged in, with loading / success / error feedback
   useEffect(() => {
-    if (gameState === 'victory' && engine && lastSubmittedVictory !== engine.currentLevel) {
-      setLastSubmittedVictory(engine.currentLevel);
-      if (apiClient.isAuthenticated()) {
-        void saveProgressAction.run(
-          async () => {
-            const res = await apiClient.completeLevel({
-              levelId: engine.currentLevel,
-              timeSeconds: elapsedTime,
-              relicsFound: collectedCount,
-              mode: gameMode,
-            });
-            if (res?.progress?.maxUnlockedLevel) {
-              syncProgressFromBackend(res.progress.maxUnlockedLevel - 1);
-            }
-            return res;
-          },
-          {
-            successMessage: (res) =>
-              (res as { isNewBest?: boolean })?.isNewBest
-                ? '¡Nuevo récord personal!'
-                : 'Progreso guardado',
-            errorMessage: (err) =>
-              friendlyError(
-                err,
-                'No se guardó el progreso. Puedes seguir: inténtalo otra vez al terminar.'
-              ),
-          }
-        );
-      }
+    if (gameState === 'victory' && engine) {
+      void submitVictoryRun(false);
     } else if (gameState === 'playing') {
-      setLastSubmittedVictory(null);
+      setSubmittedRunKey(null);
       saveProgressAction.clearFeedback();
     }
-  }, [gameState, engine, elapsedTime, collectedCount, gameMode, lastSubmittedVictory]);
+  }, [gameState, engine]);
 
   const handleProfileSynced = (profile: PlayerProfileData) => {
+    setCurrentUser(apiClient.getCurrentUser());
     if (profile.appearance && engine) {
       const fullAppearance = {
         ...appearance,
@@ -1011,6 +1024,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     if (profile.progress?.maxUnlockedLevel) {
       syncProgressFromBackend(profile.progress.maxUnlockedLevel - 1);
       setSelectedLevel(profile.progress.maxUnlockedLevel);
+    }
+    if (gameState === 'victory') {
+      void submitVictoryRun(true);
     }
     if (profile.inventory?.slots && engine?.itemSystem) {
       engine.itemSystem.setSlots(profile.inventory.slots);
@@ -1281,7 +1297,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           if (isLevelUnlocked(lvl)) {
             e.preventDefault();
             setPendingLevel(lvl);
-            setPendingMode('free');
             engine?.loadLevel(lvl);
             engine?.setCharacterPreview(true);
             setPreviousTitleStep('select_level');
@@ -1432,6 +1447,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     localStorage.setItem('cozy_last_mode', targetMode);
     localStorage.setItem('cozy_last_level', String(targetLevel));
     setTitleDraftReady(false);
+    setElapsedTime(0);
+    runStartTimeRef.current = performance.now();
+    setSubmittedRunKey(null);
+    saveProgressAction.clearFeedback();
     if (engine) {
       engine.setCharacterPreview(false);
       engine.startGame(targetMode, targetLevel);
@@ -1446,6 +1465,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const handleRestart = (modeToRestart?: GameMode) => {
     setElapsedTime(0);
+    runStartTimeRef.current = performance.now();
+    setSubmittedRunKey(null);
+    saveProgressAction.clearFeedback();
     const targetMode = modeToRestart ?? gameMode;
     if (engine) engine.restartGame(targetMode);
   };
@@ -1808,14 +1830,50 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <div className="flex flex-col gap-5">
                 <div className="flex items-center justify-between">
                   <button
-                    onClick={() => setTitleStep('main')}
+                    onClick={() => setTitleStep(previousTitleStep === 'game_modes' ? 'game_modes' : 'main')}
                     className={BTN.back}
                   >
                     <ChevronLeft className="w-4 h-4" />
                     <span>{UI.back}</span>
                   </button>
-                  <span className="text-sm font-bold text-cozy-ink font-display">{UI.selectLevel}</span>
+                  <span className="text-sm font-bold text-cozy-ink font-display">
+                    Elegir nivel · Modo {pendingMode === 'time_trial' ? 'Contrarreloj' : pendingMode === 'chase' ? 'Persecución' : 'Libre'}
+                  </span>
                   <span className="w-10" />
+                </div>
+
+                {/* Mode Selector pills: let player choose mode directly while picking level */}
+                <div className="flex items-center gap-1.5 p-1 bg-cozy-panel-deep rounded-2xl border border-cozy-line">
+                  <button
+                    type="button"
+                    onClick={() => setPendingMode('free')}
+                    className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      pendingMode === 'free' ? 'cozy-tab-active shadow-xs' : 'text-cozy-muted hover:text-cozy-ink'
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Libre</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingMode('time_trial')}
+                    className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      pendingMode === 'time_trial' ? 'cozy-tab-active shadow-xs' : 'text-cozy-muted hover:text-cozy-ink'
+                    }`}
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Contrarreloj</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingMode('chase')}
+                    className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      pendingMode === 'chase' ? 'cozy-tab-active shadow-xs' : 'text-cozy-muted hover:text-cozy-ink'
+                    }`}
+                  >
+                    <Timer className="w-3.5 h-3.5" />
+                    <span>Persecución</span>
+                  </button>
                 </div>
 
                 {maxPlayableLevel() > 4 && (
@@ -1965,7 +2023,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                             const label = `Nivel ${lvl} · ${info.name}`;
                             setRecentLevelSearches(pushRecent(RECENT_KEYS.levelSearches, label));
                             setPendingLevel(lvl);
-                            setPendingMode('free');
                             engine?.loadLevel(lvl);
                             engine?.setCharacterPreview(true);
                             setPreviousTitleStep('select_level');
@@ -2026,16 +2083,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       </span>
                     </button>
                   )}
-                  {/* Bug 12: Modo Libre added clearly to Game Modes */}
+                  {/* Bug fix & feature: Selecting a mode now takes the player to level select with that mode active */}
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => {
                         setPendingMode('free');
-                        setPendingLevel(maxPlayableLevel());
-                        engine?.loadLevel(maxPlayableLevel());
-                        engine?.setCharacterPreview(true);
                         setPreviousTitleStep('game_modes');
-                        setTitleStep('select_character');
+                        setTitleStep('select_level');
                       }}
                       className={`${BTN.primary} flex-1 flex items-center justify-center gap-2`}
                     >
@@ -2048,11 +2102,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     <button
                       onClick={() => {
                         setPendingMode('time_trial');
-                        setPendingLevel(maxPlayableLevel());
-                        engine?.loadLevel(maxPlayableLevel());
-                        engine?.setCharacterPreview(true);
                         setPreviousTitleStep('game_modes');
-                        setTitleStep('select_character');
+                        setTitleStep('select_level');
                       }}
                       className={`${BTN.secondary} flex-1 flex items-center justify-center gap-2`}
                     >
@@ -2065,15 +2116,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     <button
                       onClick={() => {
                         setPendingMode('chase');
-                        setPendingLevel(maxPlayableLevel());
-                        engine?.loadLevel(maxPlayableLevel());
-                        engine?.setCharacterPreview(true);
                         setPreviousTitleStep('game_modes');
-                        setTitleStep('select_character');
+                        setTitleStep('select_level');
                       }}
-                      className={`${BTN.secondary} flex-1`}
+                      className={`${BTN.secondary} flex-1 flex items-center justify-center gap-2`}
                     >
-                      Persecución
+                      <Timer className="w-4 h-4" />
+                      <span>Persecución</span>
                     </button>
                     <HelpTip label={TIPS.persecucion} side="bottom" />
                   </div>
@@ -3593,6 +3642,34 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             )}
 
+            {!apiClient.isAuthenticated() && (
+              <div className="w-full p-3 rounded-2xl bg-[#fff2db] border border-[#f0d4a3] text-stone-900 flex flex-col items-center gap-2 text-center shadow-xs">
+                <p className="text-xs font-bold text-amber-900">Inicia sesión para guardar tu récord</p>
+                <p className="text-[11px] text-stone-600 leading-snug">
+                  Tu tiempo de {formatTime(elapsedTime)} no se registra en el ranking porque juegas como invitado.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowAuthModal(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs cursor-pointer shadow-xs active:scale-95 transition-all"
+                >
+                  Iniciar sesión
+                </button>
+              </div>
+            )}
+
+            {apiClient.isAuthenticated() && saveProgressAction.feedback?.type === 'error' && (
+              <button
+                type="button"
+                onClick={() => void submitVictoryRun(true)}
+                disabled={saveProgressAction.busy}
+                className="text-xs font-bold text-cozy-accent-deep hover:underline cursor-pointer flex items-center justify-center gap-1"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${saveProgressAction.showLoading ? 'animate-spin' : ''}`} />
+                <span>Reintentar guardar récord</span>
+              </button>
+            )}
+
             <div className="w-full flex flex-col gap-3">
               {engine && isLevelUnlocked(engine.currentLevel + 1) ? (
                 <button
@@ -3600,6 +3677,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   disabled={saveProgressAction.busy}
                   onClick={() => {
                     setElapsedTime(0);
+                    runStartTimeRef.current = performance.now();
+                    setSubmittedRunKey(null);
+                    saveProgressAction.clearFeedback();
                     setSelectedLevel(engine.currentLevel + 1);
                     engine.goToNextLevel();
                   }}
