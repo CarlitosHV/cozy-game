@@ -19,7 +19,7 @@ import { WorldBuildResult } from './levels';
 import { createLevelKit } from './levelKit';
 import { Builder, createThemePack } from './levelThemes';
 import { ItemSpot, ItemType } from './items';
-import { BOSS_FOR_THEME, BOSS_INFO, BossKind, THEME_INFO, themeForLevel } from './progress';
+import { BOSS_FOR_THEME, BOSS_INFO, BossKind, RELICS, THEME_INFO, themeForLevel } from './progress';
 import { addOpenBackdrop, difficultyForLevel } from './levelGen';
 import { VictoryPortalModel } from './models';
 
@@ -346,8 +346,8 @@ export function generateBossArena(level: number, root: THREE.Object3D, textures:
   for (const [x, z, k] of foodSpots) setup.food.push({ pos: new THREE.Vector3(x, Y + 1.0, z), kind: k });
 
   // ---- A few crystals to collect ----
-  for (let k = 0; k < 8; k++) {
-    const a = (k / 8) * Math.PI * 2 + rng() * 0.4;
+  for (let k = 0; k < RELICS.boss; k++) {
+    const a = (k / RELICS.boss) * Math.PI * 2 + rng() * 0.4;
     const r = 17 + rng() * 6;
     kit.addCollectible(`bc${k}`, rng() < 0.7 ? 'sun_crystal' : 'golden_acorn', Math.cos(a) * r, Y + 1.2, Math.sin(a) * r);
   }

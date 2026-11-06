@@ -207,9 +207,12 @@ export function bossForLevel(level: number): BossKind | null {
   return isBossLevel(level) ? BOSS_FOR_THEME[themeForLevel(level)] : null;
 }
 
+/** Relics (crystals and acorns) in each kind of level — the generators place exactly these. */
+export const RELICS = { handmade: 12, zone: 25, boss: 8 } as const;
+
 export function levelTotalCollectibles(level: number): number {
-  if (level === 1) return 12;
-  return 10;
+  const kind = levelKind(level);
+  return kind === 'handmade' ? RELICS.handmade : kind === 'boss' ? RELICS.boss : RELICS.zone;
 }
 
 export function levelInfo(level: number): LevelInfo {

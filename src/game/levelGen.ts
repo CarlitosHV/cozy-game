@@ -24,7 +24,7 @@ import { PlatformItem, WorldBuildResult } from './levels';
 import { createLevelKit } from './levelKit';
 import { Builder, createThemePack } from './levelThemes';
 import { ItemSpot } from './items';
-import { THEME_INFO, themeForLevel, ThemeId } from './progress';
+import { RELICS, THEME_INFO, themeForLevel, ThemeId } from './progress';
 import { ExtraKind, spawnExtraEnemy } from './enemiesExtra';
 import { CoverBox, DOOR_H, emptyPuzzles, makeBeam, makeCarrier, makeDoor, makeOrb, makePortal, makePushBlock, makeSentinel } from './puzzles';
 
@@ -55,6 +55,8 @@ function mulberry32(seed: number) {
   };
 }
 
+/** Relics on the open zone (+1 on the summit = RELICS.zone, the total the menus show) */
+const RELICS_IN_ZONE = RELICS.zone - 1;
 const STONE: Record<ThemeId, number> = { cozy: 0xa08a7a, cosmic: 0x6d6a8f, swamp: 0x55604a, aero: 0x6fb7dc, garden: 0x9ca3af, castle: 0x4b4458 };
 const ORB_COLORS = [0xf472b6, 0x38bdf8, 0xfacc15, 0x4ade80, 0xc084fc];
 
@@ -166,7 +168,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   };
 
   function collectible(x: number, y: number, z: number, force = false) {
-    if (!force && (collectN >= 26 || rng() > 0.5)) return;
+    if (collectN >= RELICS_IN_ZONE || (!force && rng() > 0.5)) return;
     kit.addCollectible(`g${collectN++}`, rng() < 0.7 ? 'sun_crystal' : 'golden_acorn', x, y + 1.2, z);
   }
   function hint(pos: THREE.Vector3, radius: number, text: string) {
@@ -884,7 +886,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
       if (pattern === 'crumble') kit.makeCrumbling(p);
       else if (pattern === 'movers') kit.makeMoving(p, radial, 0.9, 0.6 + 0.4 * diff, rng() * 6);
       else if (pattern === 'elevator' && i === 1) kit.makeMoving(p, 'y', 0.9, 0.8, rng() * 6);
-      if (i === Math.floor(m / 2) && rng() < 0.4) collectible(x, top, z, true);
+      // No relics on the fortress climb: they'd be visible behind the shield but out of reach
     }
     if (m >= 2 && rng() < 0.25 + 0.35 * diff) {
       const mid = startAlong + dir * (L / 2);
@@ -1003,10 +1005,19 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     const p = t && freeSpot(t, 0.8);
     if (p) items.push({ type, pos: p.add(new THREE.Vector3(0, 0.95, 0)) });
   });
+  // Relics on the open zone (always reachable): spread out (one touch never takes two),
+  // and always the same amount so the counter matches the menus: 24 here + the summit one = 25
   for (const t of shuffle(nonFort())) {
-    if (collectN >= 24) break;
-    const p = freeSpot(t, 0.6);
+    if (collectN >= RELICS_IN_ZONE) break;
+    const p = freeSpot(t, 1.5);
     if (p) collectible(p.x, p.y, p.z, rng() < 0.6);
+  }
+  for (let pass = 0; pass < 4 && collectN < RELICS_IN_ZONE; pass++) {
+    for (const t of shuffle(nonFort())) {
+      if (collectN >= RELICS_IN_ZONE) break;
+      const p = freeSpot(t, pass < 2 ? 1.5 : 0.8);
+      if (p) collectible(p.x, p.y, p.z, true);
+    }
   }
   // Decor
   for (const t of nonFort()) {
