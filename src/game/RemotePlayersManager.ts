@@ -9,7 +9,13 @@ import * as THREE from 'three';
 import { ProceduralTextures } from './textures';
 import { sanitizeAppearance } from './character';
 import { createPlayerCharacter, PlayerCharacterModel } from './models';
-import { multiplayerClient, RemotePlayer } from '../services/multiplayerClient';
+import {
+  multiplayerClient,
+  RemotePlayer,
+  normalizeRemotePlayer,
+  getPlayerDisplayName,
+  getPlayerId,
+} from '../services/multiplayerClient';
 import { apiClient } from '../services/apiClient';
 import { createBoneCage } from './bossModels';
 import { makeLabel } from './combatFx';
@@ -135,6 +141,7 @@ export class RemotePlayersManager {
   private textures: ProceduralTextures;
   private players: Map<string, RemotePlayerEntity> = new Map();
   private windTime: number = 0;
+  private unsubs: Array<() => void> = [];
 
   constructor(scene: THREE.Scene, textures: ProceduralTextures) {
     this.scene = scene;
@@ -142,103 +149,95 @@ export class RemotePlayersManager {
     this.setupNetworkCallbacks();
   }
 
-  private isLocalPlayer(player: { userId?: string; username?: string }): boolean {
+  private isLocalPlayer(player: { userId?: string; id?: string; username?: string }): boolean {
+    const self = multiplayerClient.getSelf();
+    const selfId = self?.userId || self?.id;
+    const pId = player.userId || player.id;
+    if (selfId && pId && selfId === pId) return true;
+    if (self?.username && player.username && self.username === player.username) return true;
+
     const me = apiClient.getCurrentUser();
     if (!me) return false;
-    return player.userId === me._id || player.username === me.username;
-  }
-
-  private normalizePlayer(player: RemotePlayer & { position?: { x?: number; y?: number; z?: number; yaw?: number } }): RemotePlayer {
-    const nested = player.position;
-    return {
-      ...player,
-      x: Number.isFinite(player.x) ? player.x : Number(nested?.x) || 0,
-      y: Number.isFinite(player.y) ? player.y : Number(nested?.y) || 0,
-      z: Number.isFinite(player.z) ? player.z : Number(nested?.z) || 0,
-      yaw: Number.isFinite(player.yaw) ? player.yaw : Number(nested?.yaw) || 0,
-      anim: player.anim || 'idle',
-      lastUpdate: player.lastUpdate || performance.now(),
-    };
+    return pId === me._id || player.username === me.username;
   }
 
   private setupNetworkCallbacks() {
-    multiplayerClient.onRoomState = (players: RemotePlayer[]) => {
-      const seenIds = new Set<string>();
+    this.unsubs.push(
+      multiplayerClient.addRoomStateListener((players) => {
+        const seenIds = new Set<string>();
 
-      for (const raw of players) {
-        const p = this.normalizePlayer(raw);
-        if (this.isLocalPlayer(p)) continue;
-        if (!p.userId) continue;
-        seenIds.add(p.userId);
-        this.addOrUpdatePlayer(p);
-      }
-
-      for (const [id] of this.players) {
-        if (!seenIds.has(id)) {
-          this.removePlayer(id);
+        for (const raw of players) {
+          const p = normalizeRemotePlayer(raw);
+          if (this.isLocalPlayer(p)) continue;
+          if (!p.userId) continue;
+          seenIds.add(p.userId);
+          this.addOrUpdatePlayer(p);
         }
-      }
-    };
 
-    multiplayerClient.onPlayerJoined = (player: RemotePlayer) => {
-      const p = this.normalizePlayer(player);
-      if (this.isLocalPlayer(p) || !p.userId) return;
-      this.addOrUpdatePlayer(p);
-    };
+        for (const [id] of this.players) {
+          if (!seenIds.has(id)) {
+            this.removePlayer(id);
+          }
+        }
+      })
+    );
 
-    multiplayerClient.onPlayerMoved = (update) => {
-      let entity = this.players.get(update.userId);
-      if (!entity) {
-        this.addOrUpdatePlayer({
-          userId: update.userId,
-          username: 'Explorador',
-          x: update.x,
-          y: update.y,
-          z: update.z,
-          yaw: update.yaw,
-          anim: update.anim,
-          action: update.action,
-          lastUpdate: performance.now(),
-        });
-        entity = this.players.get(update.userId);
-      }
-      if (entity) {
-        entity.targetPos.set(update.x, update.y, update.z);
-        entity.targetYaw = update.yaw;
-        entity.anim = update.anim;
-        entity.lastSeen = performance.now();
-      }
-    };
+    this.unsubs.push(
+      multiplayerClient.addPlayerJoinedListener((raw) => {
+        const p = normalizeRemotePlayer(raw);
+        if (this.isLocalPlayer(p) || !p.userId) return;
+        this.addOrUpdatePlayer(p);
+      })
+    );
 
-    multiplayerClient.onPlayerLeft = (data) => {
-      this.removePlayer(data.userId);
-    };
+    this.unsubs.push(
+      multiplayerClient.addPlayerMovedListener((update) => {
+        let entity = this.players.get(update.userId);
+        if (!entity) {
+          this.addOrUpdatePlayer({
+            userId: update.userId,
+            username: 'Explorador',
+            x: update.x,
+            y: update.y,
+            z: update.z,
+            yaw: update.yaw,
+            anim: update.anim,
+            action: update.action,
+            lastUpdate: performance.now(),
+          });
+          entity = this.players.get(update.userId);
+        }
+        if (entity) {
+          entity.targetPos.set(update.x, update.y, update.z);
+          entity.targetYaw = update.yaw;
+          entity.anim = update.anim;
+          entity.lastSeen = performance.now();
+        }
+      })
+    );
 
-    multiplayerClient.onCompanionPower = (data) => {
-      const entity = this.players.get(data.userId);
-      if (entity) {
-        // Visual indicator that this remote player activated companion power
-        const spark = createNameTagSprite(String(data.powerType));
-        spark.position.set(entity.currentPos.x, entity.currentPos.y + 3.0, entity.currentPos.z);
-        this.scene.add(spark);
-        setTimeout(() => {
-          this.scene.remove(spark);
-          spark.material.dispose();
-        }, 1600);
-      }
-    };
+    this.unsubs.push(
+      multiplayerClient.addPlayerLeftListener((data) => {
+        this.removePlayer(data.userId);
+      })
+    );
   }
 
   private addOrUpdatePlayer(p: RemotePlayer) {
-    let entity = this.players.get(p.userId);
+    const userId = p.userId || p.id;
+    if (!userId) return;
+
+    let entity = this.players.get(userId);
+    const displayName = getPlayerDisplayName(p);
+
     if (!entity) {
       try {
         const appearance = sanitizeAppearance({
           ...(p.appearance || {}),
-          name: (p.appearance as { name?: string } | undefined)?.name || p.username || 'Explorador',
+          name: displayName,
         });
         const model = createPlayerCharacter(this.textures, appearance);
-        const nameTag = createNameTagSprite(p.username || appearance.name || 'Explorador');
+        const nameTag = createNameTagSprite(displayName);
         model.group.add(nameTag);
 
         const pos = new THREE.Vector3(
@@ -251,8 +250,8 @@ export class RemotePlayersManager {
         this.scene.add(model.group);
 
         entity = {
-          userId: p.userId,
-          username: p.username || 'Explorador',
+          userId,
+          username: displayName,
           model,
           nameTag,
           currentPos: pos.clone(),
@@ -264,9 +263,9 @@ export class RemotePlayersManager {
           grabbed: false,
           down: false,
         };
-        this.players.set(p.userId, entity);
+        this.players.set(userId, entity);
       } catch (err) {
-        console.error('[RemotePlayers] Failed to spawn remote player', p.userId, err);
+        console.error('[RemotePlayers] Failed to spawn remote player', userId, err);
         return;
       }
     } else {
@@ -342,6 +341,14 @@ export class RemotePlayersManager {
     for (const [id] of this.players) {
       this.removePlayer(id);
     }
+  }
+
+  public dispose() {
+    this.clearAll();
+    for (const unsub of this.unsubs) {
+      unsub();
+    }
+    this.unsubs = [];
   }
 
   public update(dt: number) {

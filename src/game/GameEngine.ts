@@ -328,21 +328,34 @@ export class GameEngine {
     // 8b. Online Multiplayer Remote Players Manager
     this.remotePlayers = new RemotePlayersManager(this.scene, this.textures);
     // Shared puzzle progress inside a party: orbs found and rocks pushed by anyone count for everyone
-    multiplayerClient.onWorldState = (data) => {
+    multiplayerClient.addWorldStateListener((data) => {
       if (data.levelId === this.currentLevel) this.applySharedWorld(data);
-    };
-    multiplayerClient.onWorldOrb = (data) => {
+    });
+    multiplayerClient.addWorldOrbListener((data) => {
       if (data.levelId !== this.currentLevel) return;
       this.puzzleSystem.collectOrbRemote(data.orbIndex, data.username || 'Tu equipo', this.itemSystem);
-    };
-    multiplayerClient.onWorldBlock = (data) => {
+    });
+    multiplayerClient.addWorldBlockListener((data) => {
       if (data.levelId !== this.currentLevel) return;
       this.puzzleSystem.setBlockRemote(data.blockIndex, data.x, data.y, data.z);
-    };
-    multiplayerClient.onWorldEvent = (data) => {
+    });
+    multiplayerClient.addWorldEventListener((data) => {
       if (data.levelId !== this.currentLevel || !this.combat) return;
       this.combat.onEvent(data.kind, data.i ?? 0, data.v ?? 0, data.target, data.userId ?? '', false);
-    };
+    });
+    multiplayerClient.addRoomStateListener((_players, raw) => {
+      if (
+        this.gameState === 'playing' &&
+        raw?.yourSpawn &&
+        Number.isFinite(raw.yourSpawn.x) &&
+        Number.isFinite(raw.yourSpawn.y) &&
+        Number.isFinite(raw.yourSpawn.z)
+      ) {
+        this.physics.position.set(raw.yourSpawn.x, raw.yourSpawn.y, raw.yourSpawn.z);
+        this.physics.velocity.set(0, 0, 0);
+        this.playerModel.group.position.copy(this.physics.position);
+      }
+    });
     this.resetCombat();
     if (this.partyRoomId) {
       multiplayerClient.joinLevel(this.currentLevel, this.partyRoomId);
@@ -653,10 +666,32 @@ export class GameEngine {
     }
   }
 
-  public getPartySpawnOffset(): { x: number; z: number } | undefined {
+  public getPartySpawnOffset(customIndex?: number): { x: number; z: number } | undefined {
     if (!this.partyRoomId) return undefined;
+    const offsets: Array<{ x: number; z: number }> = [
+      { x: -0.9, z: 0 },
+      { x: 0.9, z: 0 },
+      { x: 0, z: 1.2 },
+      { x: 0, z: -1.2 },
+      { x: -1.2, z: 1.1 },
+      { x: 1.2, z: 1.1 },
+      { x: -1.2, z: -1.1 },
+      { x: 1.2, z: -1.1 },
+      { x: -1.8, z: 0 },
+      { x: 1.8, z: 0 },
+    ];
+    if (typeof customIndex === 'number' && customIndex >= 0) {
+      return offsets[customIndex % offsets.length];
+    }
+    const self = multiplayerClient.getSelf();
+    const selfId = self?.userId || self?.id;
+    const players = multiplayerClient.getPartyPlayers();
+    if (selfId && players.length > 0) {
+      const idx = players.findIndex((p) => (p.userId || p.id) === selfId);
+      if (idx >= 0) return offsets[idx % offsets.length];
+    }
     const isHost = multiplayerClient.isPartyHostRole();
-    return isHost ? { x: -0.9, z: 0 } : { x: 0.9, z: 0 };
+    return isHost ? offsets[0] : offsets[1];
   }
 
   private beginRun(mode: GameMode | undefined, freshBackpack: boolean) {
@@ -2048,7 +2083,7 @@ export class GameEngine {
     dom.removeEventListener('wheel', this.handleWheel);
 
     this.disposeCombat();
-    this.remotePlayers?.clearAll();
+    this.remotePlayers?.dispose();
     multiplayerClient.disconnect();
     this.stalker?.dispose();
     this.companionPowers?.dispose();

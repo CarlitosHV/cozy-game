@@ -1,6 +1,6 @@
 /**
  * Socket.io Multiplayer Client for Cozy Leap Online
- * Spec sections 4–6: rooms, presence, party invites.
+ * Spec sections 4–6: rooms, presence, party invites (up to 10 players).
  */
 
 import { io, Socket } from 'socket.io-client';
@@ -9,7 +9,13 @@ import { CharacterAppearance } from '../game/character';
 
 export interface RemotePlayer {
   userId: string;
+  id?: string;
   username: string;
+  displayName?: string;
+  name?: string;
+  playerName?: string;
+  tag?: string;
+  label?: string;
   appearance?: CharacterAppearance;
   x: number;
   y: number;
@@ -17,16 +23,84 @@ export interface RemotePlayer {
   yaw: number;
   anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall';
   action?: string;
+  position?: { x: number; y: number; z: number; yaw?: number };
   lastUpdate: number;
+  socketId?: string;
+  levelId?: number;
+}
+
+export function getPlayerDisplayName(
+  p?: Partial<RemotePlayer> | { displayName?: string; name?: string; playerName?: string; username?: string } | null
+): string {
+  if (!p) return 'Explorador';
+  const name = p.displayName || p.name || p.playerName || p.username || 'Explorador';
+  return name.trim() || 'Explorador';
+}
+
+export function getPlayerId(
+  p?: Partial<RemotePlayer> | { userId?: string; id?: string; socketId?: string } | null
+): string {
+  if (!p) return '';
+  return p.userId || p.id || p.socketId || '';
+}
+
+export function normalizeRemotePlayer(raw: any): RemotePlayer {
+  const nested = raw?.position;
+  const userId = getPlayerId(raw);
+  const displayName = getPlayerDisplayName(raw);
+  return {
+    userId,
+    id: raw?.id || userId,
+    username: raw?.username || displayName,
+    displayName,
+    name: raw?.name || displayName,
+    playerName: raw?.playerName || displayName,
+    tag: raw?.tag,
+    label: raw?.label,
+    appearance: raw?.appearance,
+    x: Number.isFinite(raw?.x) ? raw.x : Number(nested?.x) || 0,
+    y: Number.isFinite(raw?.y) ? raw.y : Number(nested?.y) || 0,
+    z: Number.isFinite(raw?.z) ? raw.z : Number(nested?.z) || 0,
+    yaw: Number.isFinite(raw?.yaw) ? raw.yaw : Number(nested?.yaw) || 0,
+    anim: raw?.anim || 'idle',
+    action: raw?.action,
+    position: {
+      x: Number.isFinite(raw?.x) ? raw.x : Number(nested?.x) || 0,
+      y: Number.isFinite(raw?.y) ? raw.y : Number(nested?.y) || 0,
+      z: Number.isFinite(raw?.z) ? raw.z : Number(nested?.z) || 0,
+      yaw: Number.isFinite(raw?.yaw) ? raw.yaw : Number(nested?.yaw) || 0,
+    },
+    lastUpdate: raw?.lastUpdate || performance.now(),
+    socketId: raw?.socketId,
+    levelId: raw?.levelId,
+  };
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+export interface RoomStatePayload {
+  levelId: number;
+  roomId?: string | null;
+  players: RemotePlayer[];
+  yourSpawn?: { x: number; y: number; z: number };
+  self?: {
+    userId?: string;
+    id?: string;
+    username?: string;
+    displayName?: string;
+    name?: string;
+    playerName?: string;
+    tag?: string;
+    label?: string;
+  };
+}
 
 export interface InviteReceivedPayload {
   inviteId: string;
   fromUserId: string;
   fromUsername: string;
   levelId: number;
+  roomId?: string;
   expiresInSeconds: number;
 }
 
@@ -34,6 +108,7 @@ export interface InviteSentPayload {
   inviteId: string;
   toUserId: string;
   levelId: number;
+  roomId?: string;
   expiresInSeconds: number;
 }
 
@@ -42,11 +117,30 @@ export interface InviteResultPayload {
   accepted: boolean;
   roomId?: string;
   levelId: number;
+  reason?: 'declined' | 'expired' | string;
 }
 
 export interface SocketErrorPayload {
   code?: string;
   message: string;
+}
+
+export interface PlayerMovedPayload {
+  userId: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall';
+  action?: string;
+}
+
+export interface PlayerLeftPayload {
+  userId: string;
+  id?: string;
+  username?: string;
+  displayName?: string;
+  reason?: 'leave' | 'disconnect';
 }
 
 /** Shared puzzle progress of the party on one level (orbs found, rocks moved). */
@@ -56,6 +150,7 @@ export interface WorldBlockPos {
   y: number;
   z: number;
 }
+
 export interface WorldStatePayload {
   levelId: number;
   orbs: number[];
@@ -63,7 +158,7 @@ export interface WorldStatePayload {
   /** Boss fights: shared events so far (damage, heals…) */
   events?: WorldEventPayload[];
 }
-/** Boss fights: something that happened to the shared boss/arena (damage, nets, candelabra…) */
+
 export interface WorldEventPayload {
   userId?: string;
   username?: string;
@@ -73,12 +168,14 @@ export interface WorldEventPayload {
   v?: number;
   target?: string;
 }
+
 export interface WorldOrbPayload {
   userId: string;
   username: string;
   levelId: number;
   orbIndex: number;
 }
+
 export interface WorldBlockPayload {
   userId: string;
   levelId: number;
@@ -95,52 +192,54 @@ class MultiplayerClient {
   private status: ConnectionStatus = 'disconnected';
   private statusListeners: Set<(status: ConnectionStatus) => void> = new Set();
 
+  private selfPlayer: { userId?: string; id?: string; username?: string; displayName?: string } | null = null;
+  private lastYourSpawn: { x: number; y: number; z: number } | null = null;
+  private partyPlayers: Map<string, RemotePlayer> = new Map();
+
+  // Multi-listener sets to avoid callback clobbering across components
+  private roomStateListeners: Set<(players: RemotePlayer[], raw: RoomStatePayload) => void> = new Set();
+  private playerJoinedListeners: Set<(player: RemotePlayer) => void> = new Set();
+  private playerMovedListeners: Set<(data: PlayerMovedPayload) => void> = new Set();
+  private playerLeftListeners: Set<(data: PlayerLeftPayload) => void> = new Set();
+  private inviteReceivedListeners: Set<(data: InviteReceivedPayload) => void> = new Set();
+  private inviteSentListeners: Set<(data: InviteSentPayload) => void> = new Set();
+  private inviteResultListeners: Set<(data: InviteResultPayload) => void> = new Set();
+  private socketErrorListeners: Set<(data: SocketErrorPayload) => void> = new Set();
+  private companionPowerListeners: Set<(data: any) => void> = new Set();
+  private worldStateListeners: Set<(data: WorldStatePayload) => void> = new Set();
+  private worldOrbListeners: Set<(data: WorldOrbPayload) => void> = new Set();
+  private worldBlockListeners: Set<(data: WorldBlockPayload) => void> = new Set();
+  private worldEventListeners: Set<(data: WorldEventPayload) => void> = new Set();
+
+  // Backward compatibility legacy properties
   public onRoomState?: (players: RemotePlayer[]) => void;
   public onPlayerJoined?: (player: RemotePlayer) => void;
-  public onPlayerMoved?: (update: {
-    userId: string;
-    x: number;
-    y: number;
-    z: number;
-    yaw: number;
-    anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall';
-    action?: string;
-  }) => void;
-  public onPlayerLeft?: (data: {
-    userId: string;
-    username?: string;
-    displayName?: string;
-    reason?: 'leave' | 'disconnect';
-  }) => void;
-  public onPlayerLeftNotice?: (data: {
-    userId: string;
-    username?: string;
-    displayName?: string;
-    reason?: 'leave' | 'disconnect';
-  }) => void;
-  public onCompanionPower?: (data: {
-    userId: string;
-    username: string;
-    powerType: string;
-    position?: { x: number; y: number; z: number };
-    timestamp?: string;
-  }) => void;
+  public onPlayerMoved?: (data: PlayerMovedPayload) => void;
+  public onPlayerLeft?: (data: PlayerLeftPayload) => void;
+  public onPlayerLeftNotice?: (data: PlayerLeftPayload) => void;
   public onInviteReceived?: (data: InviteReceivedPayload) => void;
   public onInviteSent?: (data: InviteSentPayload) => void;
   public onInviteResult?: (data: InviteResultPayload) => void;
   public onSocketError?: (data: SocketErrorPayload) => void;
-  /** Shared puzzle progress (see GameEngine): full state when joining, then live changes */
+  public onCompanionPower?: (data: any) => void;
   public onWorldState?: (data: WorldStatePayload) => void;
   public onWorldOrb?: (data: WorldOrbPayload) => void;
   public onWorldBlock?: (data: WorldBlockPayload) => void;
   public onWorldEvent?: (data: WorldEventPayload) => void;
 
   /** Latest known shared progress of the party, so it can be re-applied after a restart */
-  private world: { levelId: number; orbs: Set<number>; blocks: Map<number, WorldBlockPos>; events: WorldEventPayload[] } | null = null;
+  private world: {
+    levelId: number;
+    orbs: Set<number>;
+    blocks: Map<number, WorldBlockPos>;
+    events: WorldEventPayload[];
+  } | null = null;
   private lastBlockSend = new Map<number, number>();
 
   private lastSyncTime: number = 0;
-  private syncThrottleMs: number = 40;
+  private syncThrottleMs: number = 33;
+
+  private isPartyHost: boolean = false;
 
   constructor() {
     apiClient.onAuthChange((user) => {
@@ -148,11 +247,76 @@ class MultiplayerClient {
         this.disconnect();
         this.currentLevelId = null;
         this.currentRoomId = null;
+        this.partyPlayers.clear();
       } else {
         this.connect();
       }
     });
   }
+
+  // --- Listener Registration Methods ---
+
+  public addRoomStateListener(cb: (players: RemotePlayer[], raw: RoomStatePayload) => void): () => void {
+    this.roomStateListeners.add(cb);
+    return () => this.roomStateListeners.delete(cb);
+  }
+
+  public addPlayerJoinedListener(cb: (player: RemotePlayer) => void): () => void {
+    this.playerJoinedListeners.add(cb);
+    return () => this.playerJoinedListeners.delete(cb);
+  }
+
+  public addPlayerMovedListener(cb: (data: PlayerMovedPayload) => void): () => void {
+    this.playerMovedListeners.add(cb);
+    return () => this.playerMovedListeners.delete(cb);
+  }
+
+  public addPlayerLeftListener(cb: (data: PlayerLeftPayload) => void): () => void {
+    this.playerLeftListeners.add(cb);
+    return () => this.playerLeftListeners.delete(cb);
+  }
+
+  public addInviteReceivedListener(cb: (data: InviteReceivedPayload) => void): () => void {
+    this.inviteReceivedListeners.add(cb);
+    return () => this.inviteReceivedListeners.delete(cb);
+  }
+
+  public addInviteSentListener(cb: (data: InviteSentPayload) => void): () => void {
+    this.inviteSentListeners.add(cb);
+    return () => this.inviteSentListeners.delete(cb);
+  }
+
+  public addInviteResultListener(cb: (data: InviteResultPayload) => void): () => void {
+    this.inviteResultListeners.add(cb);
+    return () => this.inviteResultListeners.delete(cb);
+  }
+
+  public addSocketErrorListener(cb: (data: SocketErrorPayload) => void): () => void {
+    this.socketErrorListeners.add(cb);
+    return () => this.socketErrorListeners.delete(cb);
+  }
+
+  public addWorldStateListener(cb: (data: WorldStatePayload) => void): () => void {
+    this.worldStateListeners.add(cb);
+    return () => this.worldStateListeners.delete(cb);
+  }
+
+  public addWorldOrbListener(cb: (data: WorldOrbPayload) => void): () => void {
+    this.worldOrbListeners.add(cb);
+    return () => this.worldOrbListeners.delete(cb);
+  }
+
+  public addWorldBlockListener(cb: (data: WorldBlockPayload) => void): () => void {
+    this.worldBlockListeners.add(cb);
+    return () => this.worldBlockListeners.delete(cb);
+  }
+
+  public addWorldEventListener(cb: (data: WorldEventPayload) => void): () => void {
+    this.worldEventListeners.add(cb);
+    return () => this.worldEventListeners.delete(cb);
+  }
+
+  // --- Getters & Status ---
 
   public getStatus(): ConnectionStatus {
     return this.status;
@@ -160,6 +324,30 @@ class MultiplayerClient {
 
   public getCurrentRoomId(): string | null {
     return this.currentRoomId;
+  }
+
+  public getSelf(): { userId?: string; id?: string; username?: string; displayName?: string } | null {
+    return this.selfPlayer;
+  }
+
+  public getLastSpawn(): { x: number; y: number; z: number } | null {
+    return this.lastYourSpawn;
+  }
+
+  public getPartyPlayers(): RemotePlayer[] {
+    return Array.from(this.partyPlayers.values());
+  }
+
+  public getPartyCount(): number {
+    return Math.max(1, this.partyPlayers.size);
+  }
+
+  public isPartyHostRole(): boolean {
+    return this.isPartyHost;
+  }
+
+  public setPartyHostRole(isHost: boolean): void {
+    this.isPartyHost = isHost;
   }
 
   public onStatusChange(cb: (status: ConnectionStatus) => void): () => void {
@@ -176,6 +364,8 @@ class MultiplayerClient {
       listener(status);
     }
   }
+
+  // --- Connection ---
 
   public connect(): void {
     if (this.socket && this.socket.connected) return;
@@ -214,6 +404,7 @@ class MultiplayerClient {
       this.socket.disconnect();
       this.socket = null;
     }
+    this.partyPlayers.clear();
     this.setStatus('disconnected');
   }
 
@@ -235,67 +426,170 @@ class MultiplayerClient {
       this.setStatus('error');
     });
 
-    this.socket.on('room:state', (data: {
-      levelId: number;
-      roomId?: string | null;
-      players: RemotePlayer[];
-      yourSpawn?: unknown;
-    }) => {
-      if (data?.roomId) this.currentRoomId = data.roomId;
-      if (this.onRoomState && Array.isArray(data?.players)) {
-        this.onRoomState(data.players);
+    // Backend Response: room:state
+    this.socket.on('room:state', (raw: any) => {
+      if (!raw) return;
+      if (raw.roomId) this.currentRoomId = raw.roomId;
+      if (raw.self) this.selfPlayer = raw.self;
+      if (raw.yourSpawn && Number.isFinite(raw.yourSpawn.x) && Number.isFinite(raw.yourSpawn.y) && Number.isFinite(raw.yourSpawn.z)) {
+        this.lastYourSpawn = { x: raw.yourSpawn.x, y: raw.yourSpawn.y, z: raw.yourSpawn.z };
+      }
+
+      const rawList = Array.isArray(raw.players) ? raw.players : [];
+      const normalizedList: RemotePlayer[] = rawList.map(normalizeRemotePlayer);
+
+      this.partyPlayers.clear();
+      for (const p of normalizedList) {
+        if (p.userId) {
+          this.partyPlayers.set(p.userId, p);
+        }
+      }
+
+      // Also ensure self is included in partyPlayers if provided
+      if (raw.self) {
+        const selfNorm = normalizeRemotePlayer(raw.self);
+        if (selfNorm.userId && !this.partyPlayers.has(selfNorm.userId)) {
+          this.partyPlayers.set(selfNorm.userId, selfNorm);
+        }
+      }
+
+      const statePayload: RoomStatePayload = {
+        levelId: raw.levelId ?? this.currentLevelId ?? 1,
+        roomId: raw.roomId || this.currentRoomId,
+        players: normalizedList,
+        yourSpawn: this.lastYourSpawn || undefined,
+        self: raw.self,
+      };
+
+      // Notify multi-listeners
+      for (const listener of this.roomStateListeners) {
+        try {
+          listener(normalizedList, statePayload);
+        } catch (e) {
+          console.error('[MultiplayerClient] roomState listener error:', e);
+        }
+      }
+
+      // Legacy callback
+      if (this.onRoomState) {
+        this.onRoomState(normalizedList);
       }
     });
 
-    this.socket.on('player:joined', (player: RemotePlayer) => {
-      if (this.onPlayerJoined && player) {
+    // Backend Response: player:joined
+    this.socket.on('player:joined', (raw: any) => {
+      if (!raw) return;
+      const player = normalizeRemotePlayer(raw);
+      if (player.userId) {
+        this.partyPlayers.set(player.userId, player);
+      }
+
+      for (const listener of this.playerJoinedListeners) {
+        try {
+          listener(player);
+        } catch (e) {
+          console.error('[MultiplayerClient] playerJoined listener error:', e);
+        }
+      }
+
+      if (this.onPlayerJoined) {
         this.onPlayerJoined(player);
       }
     });
 
-    this.socket.on('player:moved', (data: {
-      userId: string;
-      x: number;
-      y: number;
-      z: number;
-      yaw: number;
-      anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall';
-      action?: string;
-    }) => {
-      if (this.onPlayerMoved && data?.userId) {
-        this.onPlayerMoved(data);
+    // Backend Response: player:moved
+    this.socket.on('player:moved', (data: any) => {
+      if (!data) return;
+      const userId = getPlayerId(data);
+      if (!userId) return;
+
+      const payload: PlayerMovedPayload = {
+        userId,
+        x: Number.isFinite(data.x) ? data.x : Number(data.position?.x) || 0,
+        y: Number.isFinite(data.y) ? data.y : Number(data.position?.y) || 0,
+        z: Number.isFinite(data.z) ? data.z : Number(data.position?.z) || 0,
+        yaw: Number.isFinite(data.yaw) ? data.yaw : Number(data.position?.yaw) || 0,
+        anim: data.anim || 'idle',
+        action: data.action,
+      };
+
+      // Update cached player
+      const cached = this.partyPlayers.get(userId);
+      if (cached) {
+        cached.x = payload.x;
+        cached.y = payload.y;
+        cached.z = payload.z;
+        cached.yaw = payload.yaw;
+        cached.anim = payload.anim;
+        cached.action = payload.action;
+        cached.lastUpdate = performance.now();
+      }
+
+      for (const listener of this.playerMovedListeners) {
+        try {
+          listener(payload);
+        } catch (e) {
+          console.error('[MultiplayerClient] playerMoved listener error:', e);
+        }
+      }
+
+      if (this.onPlayerMoved) {
+        this.onPlayerMoved(payload);
       }
     });
 
-    this.socket.on('player:left', (data: {
-      userId: string;
-      username?: string;
-      displayName?: string;
-      reason?: 'leave' | 'disconnect';
-    } | string) => {
-      const payload =
-        typeof data === 'string'
-          ? { userId: data, reason: 'leave' as const }
-          : data?.userId
-            ? data
-            : null;
-      if (!payload) return;
-      this.onPlayerLeft?.(payload);
-      this.onPlayerLeftNotice?.(payload);
+    // Backend Response: player:left
+    this.socket.on('player:left', (data: any) => {
+      if (!data) return;
+      const userId = typeof data === 'string' ? data : getPlayerId(data);
+      if (!userId) return;
+
+      const displayName = typeof data === 'object' ? getPlayerDisplayName(data) : undefined;
+      const username = typeof data === 'object' ? data.username || displayName : undefined;
+      const reason = typeof data === 'object' ? data.reason || 'leave' : 'leave';
+
+      this.partyPlayers.delete(userId);
+
+      const payload: PlayerLeftPayload = {
+        userId,
+        id: userId,
+        username,
+        displayName,
+        reason,
+      };
+
+      for (const listener of this.playerLeftListeners) {
+        try {
+          listener(payload);
+        } catch (e) {
+          console.error('[MultiplayerClient] playerLeft listener error:', e);
+        }
+      }
+
+      if (this.onPlayerLeft) {
+        this.onPlayerLeft(payload);
+      }
+      if (this.onPlayerLeftNotice) {
+        this.onPlayerLeftNotice(payload);
+      }
     });
 
-    this.socket.on('companion:power:broadcast', (data: {
-      userId: string;
-      username: string;
-      powerType: string;
-      position?: { x: number; y: number; z: number };
-      timestamp?: string;
-    }) => {
-      if (this.onCompanionPower && data) {
+    // Companion power broadcast
+    this.socket.on('companion:power:broadcast', (data: any) => {
+      if (!data) return;
+      for (const listener of this.companionPowerListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] companionPower listener error:', e);
+        }
+      }
+      if (this.onCompanionPower) {
         this.onCompanionPower(data);
       }
     });
 
+    // World state (puzzles, blocks, boss fights)
     this.socket.on('world:state', (data: WorldStatePayload) => {
       if (!data || typeof data.levelId !== 'number') return;
       this.world = {
@@ -304,47 +598,113 @@ class MultiplayerClient {
         blocks: new Map((Array.isArray(data.blocks) ? data.blocks : []).map((b) => [b.index, b])),
         events: Array.isArray(data.events) ? data.events.slice(-400) : [],
       };
+      for (const listener of this.worldStateListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] worldState listener error:', e);
+        }
+      }
       this.onWorldState?.(data);
     });
 
     this.socket.on('world:event', (data: WorldEventPayload) => {
       if (!data || typeof data.kind !== 'string' || typeof data.levelId !== 'number') return;
       this.remember(this.rememberWorld(data.levelId), data);
+      for (const listener of this.worldEventListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] worldEvent listener error:', e);
+        }
+      }
       this.onWorldEvent?.(data);
     });
 
     this.socket.on('world:orb', (data: WorldOrbPayload) => {
       if (!data || typeof data.orbIndex !== 'number') return;
       this.rememberWorld(data.levelId).orbs.add(data.orbIndex);
+      for (const listener of this.worldOrbListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] worldOrb listener error:', e);
+        }
+      }
       this.onWorldOrb?.(data);
     });
 
     this.socket.on('world:block', (data: WorldBlockPayload) => {
       if (!data || typeof data.blockIndex !== 'number') return;
-      this.rememberWorld(data.levelId).blocks.set(data.blockIndex, { index: data.blockIndex, x: data.x, y: data.y, z: data.z });
+      this.rememberWorld(data.levelId).blocks.set(data.blockIndex, {
+        index: data.blockIndex,
+        x: data.x,
+        y: data.y,
+        z: data.z,
+      });
+      for (const listener of this.worldBlockListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] worldBlock listener error:', e);
+        }
+      }
       this.onWorldBlock?.(data);
     });
 
+    // Invites
     this.socket.on('invite:received', (data: InviteReceivedPayload) => {
-      if (this.onInviteReceived && data?.inviteId) {
+      if (!data?.inviteId) return;
+      for (const listener of this.inviteReceivedListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] inviteReceived listener error:', e);
+        }
+      }
+      if (this.onInviteReceived) {
         this.onInviteReceived(data);
       }
     });
 
     this.socket.on('invite:sent', (data: InviteSentPayload) => {
-      if (this.onInviteSent && data?.inviteId) {
+      if (!data?.inviteId) return;
+      for (const listener of this.inviteSentListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] inviteSent listener error:', e);
+        }
+      }
+      if (this.onInviteSent) {
         this.onInviteSent(data);
       }
     });
 
     this.socket.on('invite:result', (data: InviteResultPayload) => {
-      if (this.onInviteResult && data?.inviteId) {
+      if (!data?.inviteId) return;
+      for (const listener of this.inviteResultListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] inviteResult listener error:', e);
+        }
+      }
+      if (this.onInviteResult) {
         this.onInviteResult(data);
       }
     });
 
     this.socket.on('error', (data: SocketErrorPayload) => {
-      if (this.onSocketError && data) {
+      if (!data) return;
+      for (const listener of this.socketErrorListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] socketError listener error:', e);
+        }
+      }
+      if (this.onSocketError) {
         this.onSocketError(data);
       }
     });
@@ -357,7 +717,7 @@ class MultiplayerClient {
 
   /**
    * Client -> Server: room:join
-   * Only private party rooms (`party_*`) are allowed. Without roomId, leaves any room.
+   * Joins a private party room (`party_*`).
    */
   public joinLevel(levelId: number, roomId?: string | null): void {
     this.currentLevelId = levelId;
@@ -374,14 +734,20 @@ class MultiplayerClient {
   }
 
   private rememberWorld(levelId: number) {
-    if (!this.world || this.world.levelId !== levelId) this.world = { levelId, orbs: new Set(), blocks: new Map(), events: [] };
+    if (!this.world || this.world.levelId !== levelId) {
+      this.world = { levelId, orbs: new Set(), blocks: new Map(), events: [] };
+    }
     return this.world;
   }
 
-  /** Shared progress known for a level while in a party (null when there is none). */
   public getWorldState(levelId: number): WorldStatePayload | null {
     if (!this.isInPartyRoom() || !this.world || this.world.levelId !== levelId) return null;
-    return { levelId, orbs: [...this.world.orbs], blocks: [...this.world.blocks.values()], events: [...this.world.events] };
+    return {
+      levelId,
+      orbs: [...this.world.orbs],
+      blocks: [...this.world.blocks.values()],
+      events: [...this.world.events],
+    };
   }
 
   private remember(world: { events: WorldEventPayload[] }, e: WorldEventPayload) {
@@ -389,7 +755,6 @@ class MultiplayerClient {
     if (world.events.length > 400) world.events.splice(0, world.events.length - 400);
   }
 
-  /** Client -> Server: world:event — boss fight events shared with the party */
   public sendEvent(levelId: number, kind: string, i?: number, v?: number, target?: string): void {
     if (!this.socket?.connected || !this.isInPartyRoom()) return;
     const e: WorldEventPayload = { levelId, kind };
@@ -400,18 +765,16 @@ class MultiplayerClient {
     this.socket.emit('world:event', e);
   }
 
-  /** Client -> Server: world:orb — this player found an orb */
   public sendOrb(levelId: number, orbIndex: number): void {
     if (!this.socket?.connected || !this.isInPartyRoom()) return;
     this.rememberWorld(levelId).orbs.add(orbIndex);
     this.socket.emit('world:orb', { levelId, orbIndex });
   }
 
-  /** Client -> Server: world:block — this player is moving a rock (throttled unless `final`) */
   public sendBlock(levelId: number, blockIndex: number, x: number, y: number, z: number, final = false): void {
     if (!this.socket?.connected || !this.isInPartyRoom()) return;
     const now = performance.now();
-    if (!final && now - (this.lastBlockSend.get(blockIndex) ?? 0) < 60) return;
+    if (!final && now - (this.lastBlockSend.get(blockIndex) ?? 0) < 50) return;
     this.lastBlockSend.set(blockIndex, now);
     const pos = { index: blockIndex, x: Number(x.toFixed(3)), y: Number(y.toFixed(3)), z: Number(z.toFixed(3)) };
     this.rememberWorld(levelId).blocks.set(blockIndex, pos);
@@ -421,6 +784,9 @@ class MultiplayerClient {
   public leaveRoom(): void {
     this.world = null;
     this.currentRoomId = null;
+    this.isPartyHost = false;
+    this.partyPlayers.clear();
+    this.lastYourSpawn = null;
     if (this.socket?.connected) {
       this.socket.emit('room:leave');
     }
@@ -438,22 +804,23 @@ class MultiplayerClient {
     this.currentRoomId = roomId;
   }
 
-  private isPartyHost: boolean = false;
-
-  public isPartyHostRole(): boolean {
-    return this.isPartyHost;
-  }
-
-  public setPartyHostRole(isHost: boolean): void {
-    this.isPartyHost = isHost;
-  }
-
-  public sendInvite(toUserId: string, levelId: number): void {
+  /**
+   * Invites a friend to play. If already in a party room, invites them directly to that room
+   * so up to 10 players can easily gather.
+   */
+  public sendInvite(toUserId: string, levelId: number, roomId?: string | null): void {
     if (!this.socket || !this.socket.connected) {
       this.connect();
     }
-    this.isPartyHost = true;
-    this.socket?.emit('invite:send', { toUserId, levelId });
+    const targetRoom = roomId || this.currentRoomId || undefined;
+    if (!this.currentRoomId) {
+      this.isPartyHost = true;
+    }
+    this.socket?.emit('invite:send', {
+      toUserId,
+      levelId,
+      ...(targetRoom ? { roomId: targetRoom } : {}),
+    });
   }
 
   public respondInvite(inviteId: string, accept: boolean, reason?: 'declined' | 'expired' | string): void {

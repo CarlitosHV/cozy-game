@@ -76,6 +76,7 @@ import {
   syncProgressFromBackend,
 } from '../game/progress';
 import { AuthModal } from './AuthModal';
+import { PartyRoomModal } from './PartyRoomModal';
 import { LeaderboardModal } from './LeaderboardModal';
 import { SettingsModal } from './SettingsModal';
 import { ActionFeedbackBanner } from './ActionFeedback';
@@ -89,6 +90,7 @@ import { apiClient, User, PlayerProfileData, FriendUser } from '../services/apiC
 import {
   multiplayerClient,
   InviteReceivedPayload,
+  getPlayerDisplayName,
 } from '../services/multiplayerClient';
 import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus, STACK_MAX, DURABILITY } from '../game/items';
 import type { CombatStatus } from '../game/combat';
@@ -482,6 +484,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showLevelBrief, setShowLevelBrief] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showPartyModal, setShowPartyModal] = useState(false);
   const [showLeaderboardModal, setShowLeaderboardModal] = useState(false);
   const [leaderboardLevelId, setLeaderboardLevelId] = useState(1);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
@@ -701,9 +704,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const handleInviteToPlay = (friend: FriendUser) => {
     const levelId = engine?.currentLevel ?? pendingLevel;
-    setShowAuthModal(false);
     multiplayerClient.connect();
-    multiplayerClient.sendInvite(friend._id, levelId);
+    const currentRoom = multiplayerClient.getCurrentRoomId();
+    multiplayerClient.sendInvite(friend._id, levelId, currentRoom || undefined);
     showToast(
       `Invitando a ${friend.displayName || friend.username} al nivel ${levelId}…`,
       2200,
@@ -712,63 +715,83 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   };
 
   useEffect(() => {
-    multiplayerClient.onRoomState = (players) => {
-      setPartyMembers(players.map((p) => p.username).filter(Boolean));
-    };
-    multiplayerClient.onPlayerJoined = (player) => {
-      const name = player.username || 'Un jugador';
-      showToast(`¡${name} se unió a la sala!`, 3200, 'success');
-      setPartyMembers((prev) => [...prev.filter((u) => u !== name), name]);
-      // Timer sync & restart so both players start at 0:00 simultaneously
-      if (multiplayerClient.isInPartyRoom() && engine) {
-        setElapsedTime(0);
-        engine.restartLevel();
-      }
-    };
-    multiplayerClient.onInviteReceived = (data) => {
-      setShowAuthModal(false);
-      setIncomingInvite(data);
-    };
-    multiplayerClient.onInviteSent = () => {
-      showToast('Invitación enviada. Esperando respuesta (60 s)…', 2800, 'success');
-    };
-    multiplayerClient.onInviteResult = (data) => {
-      setIncomingInvite((cur) => (cur?.inviteId === data.inviteId ? null : cur));
-      if (data.accepted && data.roomId) {
-        enterPartyRoom(data.levelId, data.roomId);
-      } else if (!data.accepted) {
-        const reason = (data as { reason?: string }).reason;
-        if (reason === 'declined') {
-          showToast('Tu amigo rechazó la invitación para jugar.', 2800, 'neutral');
-        } else if (reason === 'expired') {
-          showToast('La invitación caducó sin respuesta.', 2800, 'neutral');
-        } else {
-          showToast('La invitación fue rechazada por tu amigo.', 2800, 'neutral');
+    const unsubs: Array<() => void> = [];
+
+    unsubs.push(
+      multiplayerClient.addRoomStateListener((players) => {
+        setPartyMembers(players.map(getPlayerDisplayName).filter(Boolean));
+      })
+    );
+
+    unsubs.push(
+      multiplayerClient.addPlayerJoinedListener((player) => {
+        const name = getPlayerDisplayName(player);
+        showToast(`¡${name} se unió a la sala!`, 3200, 'success');
+        setPartyMembers(
+          Array.from(multiplayerClient.getPartyPlayers().values()).map(getPlayerDisplayName)
+        );
+      })
+    );
+
+    unsubs.push(
+      multiplayerClient.addPlayerLeftListener((data) => {
+        const name = data.displayName || data.username || 'Un explorador';
+        const msg =
+          data.reason === 'disconnect'
+            ? `${name} se desconectó de la sala`
+            : `${name} salió de la sala`;
+        showToast(msg, 2600, 'neutral');
+        setPartyMembers(
+          Array.from(multiplayerClient.getPartyPlayers().values()).map(getPlayerDisplayName)
+        );
+      })
+    );
+
+    unsubs.push(
+      multiplayerClient.addInviteReceivedListener((data) => {
+        setShowAuthModal(false);
+        setIncomingInvite(data);
+      })
+    );
+
+    unsubs.push(
+      multiplayerClient.addInviteSentListener(() => {
+        showToast('Invitación enviada. Esperando respuesta (60 s)…', 2800, 'success');
+      })
+    );
+
+    unsubs.push(
+      multiplayerClient.addInviteResultListener((data) => {
+        setIncomingInvite((cur) => (cur?.inviteId === data.inviteId ? null : cur));
+        if (data.accepted && data.roomId) {
+          if (multiplayerClient.getCurrentRoomId() === data.roomId && multiplayerClient.isInPartyRoom()) {
+            showToast('¡Invitación aceptada! Tu amigo se ha unido a la partida.', 2800, 'success');
+          } else {
+            enterPartyRoom(data.levelId, data.roomId);
+          }
+        } else if (!data.accepted) {
+          const reason = (data as { reason?: string }).reason;
+          if (reason === 'declined') {
+            showToast('Tu amigo rechazó la invitación para jugar.', 2800, 'neutral');
+          } else if (reason === 'expired') {
+            showToast('La invitación caducó sin respuesta.', 2800, 'neutral');
+          } else {
+            showToast('La invitación fue rechazada por tu amigo.', 2800, 'neutral');
+          }
         }
-      }
-    };
-    multiplayerClient.onSocketError = (err) => {
-      const wrapped = new Error(err.message || '');
-      (wrapped as Error & { code?: string }).code = err.code;
-      showToast(friendlyError(wrapped, 'No se pudo completar la invitación.'), 2800, 'error');
-    };
-    multiplayerClient.onPlayerLeftNotice = (data) => {
-      const name = data.displayName || data.username || 'Un jugador';
-      const msg =
-        data.reason === 'disconnect'
-          ? `${name} se desconectó de la sala`
-          : `${name} salió de la sala`;
-      showToast(msg, 2600, 'neutral');
-      setPartyMembers((prev) => prev.filter((u) => u !== name && u !== data.username));
-    };
+      })
+    );
+
+    unsubs.push(
+      multiplayerClient.addSocketErrorListener((err) => {
+        const wrapped = new Error(err.message || '');
+        (wrapped as Error & { code?: string }).code = err.code;
+        showToast(friendlyError(wrapped, 'No se pudo completar la acción multijugador.'), 2800, 'error');
+      })
+    );
+
     return () => {
-      multiplayerClient.onRoomState = undefined;
-      multiplayerClient.onPlayerJoined = undefined;
-      multiplayerClient.onInviteReceived = undefined;
-      multiplayerClient.onInviteSent = undefined;
-      multiplayerClient.onInviteResult = undefined;
-      multiplayerClient.onSocketError = undefined;
-      multiplayerClient.onPlayerLeftNotice = undefined;
+      for (const unsub of unsubs) unsub();
     };
   }, [engine, gameState, pendingLevel]);
 
@@ -2446,14 +2469,30 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             {multiplayerClient.isInPartyRoom() && (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-950/85 border border-emerald-500/50 text-emerald-200 text-xs shadow-md backdrop-blur-md">
                 <Users className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <div className="flex flex-col text-left">
-                  <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400">
-                    Sala privada {multiplayerClient.isPartyHostRole() ? '(Anfitrión)' : '(Invitado)'}
+                <button
+                  type="button"
+                  onClick={() => setShowPartyModal(true)}
+                  className="flex flex-col text-left hover:brightness-110 cursor-pointer"
+                  title="Gestionar sala multijugador"
+                >
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                    <span>Sala ({multiplayerClient.getPartyCount()}/10)</span>
+                    <span className="text-[8px] px-1 rounded bg-emerald-800/80 text-emerald-200 font-normal">
+                      {multiplayerClient.isPartyHostRole() ? 'Anfitrión' : 'Invitado'}
+                    </span>
                   </span>
                   <span className="text-[11px] text-emerald-100 font-semibold truncate max-w-[140px]">
                     {partyMembers.length > 0 ? partyMembers.join(', ') : 'En la sala'}
                   </span>
-                </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPartyModal(true)}
+                  className="ml-1 px-2 py-0.5 rounded-md bg-emerald-700/80 hover:bg-emerald-600 text-[10px] text-white font-bold transition-colors cursor-pointer"
+                  title="Invitar amigos a la sala"
+                >
+                  + Invitar
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -2470,7 +2509,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       },
                     });
                   }}
-                  className="ml-1 px-1.5 py-0.5 rounded-md bg-emerald-900/80 hover:bg-rose-900/80 text-[10px] text-emerald-300 hover:text-rose-200 transition-colors cursor-pointer"
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-900/80 hover:bg-rose-900/80 text-[10px] text-emerald-300 hover:text-rose-200 transition-colors cursor-pointer"
                   title="Salir de la sala"
                 >
                   Salir
@@ -3525,6 +3564,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               >
                 {currentUser ? UI.account : UI.enter}
               </button>
+              {multiplayerClient.isInPartyRoom() && (
+                <button
+                  type="button"
+                  onClick={() => setShowPartyModal(true)}
+                  className="hover:text-cozy-ink cursor-pointer inline-flex items-center gap-1 font-bold text-emerald-700"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Sala ({multiplayerClient.getPartyCount()}/10)</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={toggleMute}
@@ -4035,6 +4084,23 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         onInviteToPlay={handleInviteToPlay}
       />
 
+      <PartyRoomModal
+        isOpen={showPartyModal}
+        onClose={() => setShowPartyModal(false)}
+        levelId={engine?.currentLevel ?? pendingLevel}
+        onInviteFriend={handleInviteToPlay}
+        onOpenFriends={() => {
+          setShowPartyModal(false);
+          setShowAuthModal(true);
+        }}
+        onLeaveRoom={() => {
+          setShowPartyModal(false);
+          sessionStorage.removeItem('cozy_party_session');
+          multiplayerClient.clearPartyRoom();
+          handleReturnToTitle();
+        }}
+      />
+
       <LeaderboardModal
         isOpen={showLeaderboardModal}
         onClose={() => setShowLeaderboardModal(false)}
@@ -4063,7 +4129,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 </p>
                 <p className="mt-1 text-[10px] text-cozy-soft inline-flex items-center gap-1">
                   <Gamepad2 className="w-3 h-3" />
-                  Sala privada · hasta 4 jugadores
+                  Sala privada · hasta 10 exploradores
                 </p>
               </div>
             </div>

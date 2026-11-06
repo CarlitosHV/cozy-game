@@ -97,5 +97,5 @@ export const TIPS = {
   friends:
     'Busca por usuario, envía solicitud y, cuando acepte, podrás invitarle a una partida privada.',
   invitePlay:
-    'Abre una sala privada (hasta 4). Tu amigo debe estar en línea y aceptar en 60 segundos.',
+    'Abre una sala privada (hasta 10). Tus amigos deben estar en línea y aceptar en 60 segundos.',
 } as const;
