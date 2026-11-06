@@ -161,6 +161,18 @@ export class GameEngine {
   // Mobile / Touchscreen Auto-Follow Camera
   public isTouchDevice: boolean = false;
   public autoChaseCamera: boolean = true;
+  /**
+   * Mouse look: while playing on a computer the game takes the cursor (pointer lock), so moving
+   * the mouse turns the camera without clicking. Esc frees the cursor and pauses; menus free it too.
+   */
+  public mouseLook: boolean = (() => {
+    try {
+      return localStorage.getItem('cozy_mouse_look') !== 'false';
+    } catch {
+      return true;
+    }
+  })();
+  private pointerLocked = false;
   public isUIModalOpen: boolean = false;
   /** When true, Escape will not toggle pause (HUD overlays handle Esc first). */
   public pauseToggleBlocked: boolean = false;
@@ -858,6 +870,7 @@ export class GameEngine {
   public startGame(mode?: GameMode, level?: number) {
     if (level !== undefined) this.loadLevel(level);
     this.beginRun(mode, true);
+    this.syncPointerLock();
     if (this.partyRoomId) {
       multiplayerClient.joinLevel(this.currentLevel, this.partyRoomId);
     } else {
@@ -957,6 +970,7 @@ export class GameEngine {
       this.lastWallTime = performance.now();
     }
     this.callbacks.onStateChange(this.gameState);
+    this.syncPointerLock();
   }
 
   public setUIModalOpen(open: boolean) {
@@ -975,6 +989,7 @@ export class GameEngine {
     } else {
       this.lastWallTime = performance.now();
     }
+    this.syncPointerLock();
   }
 
   /** Multiplayer: apply the party's shared progress (orbs found, rock positions) to this level. */
@@ -1241,6 +1256,7 @@ export class GameEngine {
     this.reapplySharedWorld();
     this.resetCombat();
     this.gameState = 'playing';
+    this.syncPointerLock();
     this.lastWallTime = performance.now();
     this.physics.hasReachedSummit = false;
     this.callbacks.onStateChange('playing');
@@ -1365,6 +1381,7 @@ export class GameEngine {
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
 
     const dom = this.renderer.domElement;
+    document.addEventListener('pointerlockchange', this.handlePointerLockChange);
     dom.addEventListener('mousedown', this.handleMouseDown);
     window.addEventListener('mousemove', this.handleMouseMove);
     window.addEventListener('mouseup', this.handleMouseUp);
@@ -1404,6 +1421,7 @@ export class GameEngine {
     }
     soundManager.resume();
     this.rawKeys[e.code] = true;
+    if (e.code !== 'Escape' && !this.pointerLocked && this.wantsPointerLock()) this.syncPointerLock();
 
     if (this.gameState === 'title') {
       if (this.characterPreview) return;
@@ -1494,7 +1512,81 @@ export class GameEngine {
     this.cameraYaw += deltaYaw;
   }
 
+  // ---------------- Mouse look (pointer lock) ----------------
+  /** A computer with a real mouse (not a phone or tablet). */
+  private hasFinePointer(): boolean {
+    try {
+      return !this.isTouchDevice && window.matchMedia('(pointer: fine)').matches;
+    } catch {
+      return !this.isTouchDevice;
+    }
+  }
+
+  /** The cursor should be captured right now: playing, no menu open, not watching others. */
+  private wantsPointerLock(): boolean {
+    return this.mouseLook && this.gameState === 'playing' && !this.isUIModalOpen && !this.isSpectating && this.hasFinePointer();
+  }
+
+  /**
+   * Takes the cursor when it should (only works from a click or key press — browsers require it)
+   * and gives it back when a menu opens or the game pauses.
+   */
+  public syncPointerLock() {
+    const dom = this.renderer.domElement;
+    if (this.wantsPointerLock()) {
+      if (document.pointerLockElement !== dom && dom.requestPointerLock) {
+        try {
+          const r = dom.requestPointerLock() as unknown as Promise<void> | undefined;
+          r?.catch?.(() => {});
+        } catch {
+          // not allowed right now (no click/key yet): the next one will take it
+        }
+      }
+    } else if (document.pointerLockElement === dom) {
+      this.releasingPointer = true;
+      document.exitPointerLock();
+    }
+  }
+
+  public setMouseLook(on: boolean) {
+    this.mouseLook = on;
+    try {
+      localStorage.setItem('cozy_mouse_look', String(on));
+    } catch {
+      // ignore
+    }
+    if (!on && document.pointerLockElement === this.renderer.domElement) {
+      this.releasingPointer = true;
+      document.exitPointerLock();
+    }
+  }
+
+  private releasingPointer = false;
+
+  private handlePointerLockChange = () => {
+    const locked = document.pointerLockElement === this.renderer.domElement;
+    const wasLocked = this.pointerLocked;
+    this.pointerLocked = locked;
+    if (locked) {
+      this.isMouseDragging = false;
+      return;
+    }
+    // Esc (or switching window) freed the cursor in the middle of the game: pause so the
+    // menu can be used; "Continuar" takes the cursor back
+    if (wasLocked && !this.releasingPointer && this.gameState === 'playing' && !this.isUIModalOpen) {
+      this.pauseToggleBlocked = true;
+      window.setTimeout(() => (this.pauseToggleBlocked = false), 250);
+      this.setPaused(true);
+    }
+    this.releasingPointer = false;
+  };
+
   private handleMouseDown = (e: MouseEvent) => {
+    // While playing, a click on the game takes the cursor (if it was freed)
+    if (e.button === 0 && this.wantsPointerLock() && !this.pointerLocked) {
+      this.syncPointerLock();
+      return;
+    }
     if (e.button === 0 || e.button === 2) {
       this.isMouseDragging = true;
       this.lastMouseX = e.clientX;
@@ -1503,6 +1595,15 @@ export class GameEngine {
   };
 
   private handleMouseMove = (e: MouseEvent) => {
+    if (this.pointerLocked) {
+      // Cursor captured: the mouse turns the camera directly
+      if (this.gameState !== 'playing') return;
+      const mx = THREE.MathUtils.clamp(e.movementX || 0, -120, 120);
+      const my = THREE.MathUtils.clamp(e.movementY || 0, -120, 120);
+      this.cameraYaw -= mx * 0.0032;
+      this.cameraPitch = Math.max(0.08, Math.min(1.2, this.cameraPitch + my * 0.0026));
+      return;
+    }
     if (!this.isMouseDragging) return;
     const dx = e.clientX - this.lastMouseX;
     const dy = e.clientY - this.lastMouseY;
@@ -1707,6 +1808,8 @@ export class GameEngine {
   }
 
   private update(dt: number, time: number, wallDt: number) {
+    // Give the cursor back as soon as we're not playing (title, victory, game over, photo mode…)
+    if (this.pointerLocked && !this.wantsPointerLock()) this.syncPointerLock();
     // 1. Title Screen live-world camera pan
     if (this.gameState === 'title') {
       // The character waits at the level start (generated levels don't start at the center)
@@ -2336,6 +2439,8 @@ export class GameEngine {
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
 
     const dom = this.renderer.domElement;
+    document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
+    if (this.pointerLocked) document.exitPointerLock?.();
     dom.removeEventListener('mousedown', this.handleMouseDown);
     window.removeEventListener('mousemove', this.handleMouseMove);
     window.removeEventListener('mouseup', this.handleMouseUp);

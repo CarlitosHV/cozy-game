@@ -4070,7 +4070,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     </div>
                     <div className="flex justify-between items-center py-1 border-b border-cozy-line">
                       <span className="text-cozy-muted">Girar cámara</span>
-                      <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Arrastrar o Q / E</span>
+                      <span className="bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Mover el mouse o Q / E</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Soltar el cursor (y pausar)</span>
+                      <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">Esc</span>
                     </div>
                     <div className="flex justify-between items-center py-1 border-b border-cozy-line">
                       <span className="text-cozy-muted">Poder del compañero</span>

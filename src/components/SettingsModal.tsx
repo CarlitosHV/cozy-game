@@ -46,6 +46,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [graphicsQuality, setGraphicsQuality] = useState<'high' | 'medium' | 'low'>(() => {
     return (localStorage.getItem('cozy_graphics_quality') as 'high' | 'medium' | 'low') || 'high';
   });
+  const [mouseLook, setMouseLook] = useState<boolean>(() => {
+    const saved = localStorage.getItem('cozy_mouse_look');
+    return saved !== null ? saved === 'true' : true;
+  });
   const [autoChase, setAutoChase] = useState<boolean>(() => {
     const saved = localStorage.getItem('cozy_auto_chase');
     return saved !== null ? saved === 'true' : true;
@@ -72,6 +76,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
     localStorage.setItem('cozy_graphics_quality', graphicsQuality);
   }, [graphicsQuality, engine]);
+
+  useEffect(() => {
+    if (engine) engine.setMouseLook(mouseLook);
+    else localStorage.setItem('cozy_mouse_look', String(mouseLook));
+  }, [mouseLook, engine]);
 
   useEffect(() => {
     if (engine) {
@@ -199,6 +208,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               }`}
             >
               {autoChase ? (isEs ? 'Activado' : 'On') : (isEs ? 'Fijo' : 'Fixed')}
+            </button>
+          </div>
+
+          <div className="p-3 rounded-2xl bg-cozy-panel-deep border border-cozy-line flex items-center justify-between gap-3">
+            <div>
+              <span className="text-xs font-bold text-cozy-ink block">
+                {isEs ? 'Mover la cámara con el mouse sin clic' : 'Mouse look (no click needed)'}
+              </span>
+              <span className="text-[10px] text-cozy-muted block">
+                {mouseLook
+                  ? isEs
+                    ? 'Al jugar, el juego toma el cursor. Esc lo suelta y pausa'
+                    : 'While playing the game takes the cursor. Esc frees it and pauses'
+                  : isEs
+                    ? 'Mantén presionado el clic y arrastra para girar la cámara'
+                    : 'Hold the mouse button and drag to turn the camera'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMouseLook((prev) => !prev)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                mouseLook ? 'cozy-tab-active' : 'cozy-btn text-cozy-muted'
+              }`}
+            >
+              {mouseLook ? (isEs ? 'Activado' : 'On') : (isEs ? 'Arrastrar' : 'Drag')}
             </button>
           </div>
         </div>
