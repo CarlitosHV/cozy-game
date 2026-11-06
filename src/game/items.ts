@@ -79,7 +79,7 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
   antorcha: {
     type: 'antorcha',
     name: 'Antorcha',
-    desc: 'Alumbra en la oscuridad y prende los candelabros al acercarte.',
+    desc: 'Alumbra en la oscuridad y prende 2 candelabros al acercarte; luego se consume.',
     color: '#fb923c',
   },
 };
@@ -89,7 +89,7 @@ export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave', 'resortera', 'pi
 /** Items that pile up in one slot (max per slot) */
 export const STACK_MAX: Partial<Record<ItemType, number>> = { piedra: 12, bomba: 3, luz: 3 };
 /** Tools that break: uses when new */
-export const DURABILITY: Partial<Record<ItemType, number>> = { bate: 12, red: 4 };
+export const DURABILITY: Partial<Record<ItemType, number>> = { bate: 12, red: 4, antorcha: 2 };
 /** How many you get from one pickup */
 const PICKUP_AMOUNT: Partial<Record<ItemType, number>> = { piedra: 3 };
 /** Only one of these is ever needed in the backpack */
@@ -437,7 +437,8 @@ export class ItemSystem {
     // Boss-fight tools
     if (type === 'resortera' || type === 'piedra') return this.shoot(ctx);
     if (type === 'antorcha') {
-      this.emit('La antorcha prende los candelabros sola: acércate a uno');
+      const left = this.counts[slot];
+      this.emit(`La antorcha prende los candelabros sola: acércate a uno (le ${left === 1 ? 'queda 1 uso' : `quedan ${left} usos`})`);
       return false;
     }
     if (type === 'bate' || type === 'red' || type === 'bomba' || type === 'luz') {
@@ -483,8 +484,22 @@ export class ItemSystem {
     this.clearSlot(slot);
     if (DURABILITY[type] !== undefined) {
       soundManager.playEnemyBonk();
-      this.emit(type === 'bate' ? '¡Tu bate se rompió! Busca otro en la arena' : '¡Tu red se rompió! Busca otra en la arena');
+      this.emit(
+        type === 'bate'
+          ? '¡Tu bate se rompió! Busca otro en la arena'
+          : type === 'antorcha'
+            ? '¡Tu antorcha se consumió! Toma otra para seguir prendiendo'
+            : '¡Tu red se rompió! Busca otra en la arena'
+      );
     }
+  }
+
+  /** One use less of a tool you carry (e.g. the torch lit a candelabra). */
+  public wear(type: ItemType): boolean {
+    const slot = this.slots.indexOf(type);
+    if (slot === -1) return false;
+    this.spend(slot);
+    return true;
   }
 
   /** Slingshot: needs the slingshot and at least one stone. */
@@ -562,6 +577,33 @@ export class ItemSystem {
   /** True if a pickup of this type is currently lying in the world. */
   public isLyingAround(type: ItemType): boolean {
     return this.pickups.some((p) => p.type === type && p.available);
+  }
+
+  /** Nearest pickup of a type lying on the ground within `maxDist` (horizontal), or null. */
+  public nearestLying(type: ItemType, from: THREE.Vector3, maxDist: number): THREE.Vector3 | null {
+    let best: (typeof this.pickups)[number] | null = null;
+    let bestD = maxDist;
+    for (const p of this.pickups) {
+      if (p.type !== type || !p.available) continue;
+      const d = Math.hypot(p.group.position.x - from.x, p.group.position.z - from.z);
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best ? new THREE.Vector3(best.group.position.x, best.baseY, best.group.position.z) : null;
+  }
+
+  /** Someone else (a boss) takes a pickup off the ground; it comes back after the usual time. */
+  public takeLying(type: ItemType, near: THREE.Vector3, maxDist = 1.8): boolean {
+    for (const p of this.pickups) {
+      if (p.type !== type || !p.available) continue;
+      if (Math.hypot(p.group.position.x - near.x, p.group.position.z - near.z) > maxDist) continue;
+      p.available = false;
+      p.respawnTimer = p.oneShot ? 1e9 : RESPAWN_BY_TYPE[p.type] ?? RESPAWN_SECONDS;
+      return true;
+    }
+    return false;
   }
 
   /** Spawns a one-time pickup (e.g. a key dropped by an enemy). */

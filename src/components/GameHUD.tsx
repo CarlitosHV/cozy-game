@@ -5,6 +5,8 @@
  */
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  Bug,
+  Lightbulb,
   Volume2,
   VolumeX,
   Play,
@@ -74,7 +76,13 @@ import {
   nextCompanionUnlock,
   ThemeId,
   syncProgressFromBackend,
+  isDevMode,
+  setDevMode,
+  setDevLevelPick,
+  getDevLevelPick,
 } from '../game/progress';
+import { hasDevAccess, setDevAccess } from '../game/devMode';
+import { DevPanel, DevPlay } from './DevPanel';
 import { AuthModal } from './AuthModal';
 import { PartyRoomModal } from './PartyRoomModal';
 import { LeaderboardModal } from './LeaderboardModal';
@@ -557,6 +565,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     getRecent(RECENT_KEYS.levelSearches)
   );
   const [currentUser, setCurrentUser] = useState<User | null>(() => apiClient.getCurrentUser());
+  // Developer panel: user name → "Modo desarrollador" → password (remembered in this browser)
+  const [showDevPanel, setShowDevPanel] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [devAccess, setDevAccessState] = useState(() => hasDevAccess());
+  const [devOn, setDevOn] = useState(() => hasDevAccess() && isDevMode());
   const [submittedRunKey, setSubmittedRunKey] = useState<string | null>(null);
   const runStartTimeRef = useRef<number>(Date.now());
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -960,6 +973,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           prev.hp === st.hp &&
           prev.bossHp === st.bossHp &&
           prev.hint === st.hint &&
+          prev.tip?.text === st.tip?.text &&
+          prev.urgent === st.urgent &&
           prev.defeated === st.defeated &&
           prev.portalOpen === st.portalOpen &&
           Math.abs(prev.darkness - st.darkness) < 0.02 &&
@@ -1059,6 +1074,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const submitVictoryRun = async (force: boolean = false) => {
     if (!engine) return;
+    // Test runs in developer mode don't go to your profile or the ranking
+    if (isDevMode()) return;
     const targetLevel = engine.currentLevel;
     const targetMode = engine.gameMode ?? gameMode;
     const preciseTime = Math.max(4.6, (performance.now() - runStartTimeRef.current) / 1000, elapsedTime);
@@ -1183,7 +1200,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         'KeyW', 'KeyA', 'KeyS', 'KeyD',
         'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
         'Space', 'ShiftLeft', 'ShiftRight',
-        'KeyQ', 'KeyE', 'KeyR', 'KeyC', 'KeyG', 'KeyI', 'KeyV', 'Escape'
+        'KeyQ', 'KeyE', 'KeyR', 'KeyC', 'KeyG', 'KeyI', 'KeyB', 'KeyV', 'Escape'
       ];
       if (gameKeys.includes(e.code)) {
         if (isTouchDevice) return;
@@ -1337,6 +1354,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       }
 
       if (e.code === 'KeyI' && gameState === 'playing') {
+        // Boss fights: your companion gives you a tip; elsewhere I opens the backpack
+        if (!engine?.askCompanionTip()) setShowBackpack((v) => !v);
+        return;
+      }
+
+      if (e.code === 'KeyB' && gameState === 'playing') {
         setShowBackpack((v) => !v);
         return;
       }
@@ -1910,15 +1933,59 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       </button>
                       <HelpTip label={TIPS.ranking} />
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setShowAuthModal(true)}
-                      className="hover:text-cozy-ink cursor-pointer font-semibold"
-                    >
-                      {currentUser
-                        ? currentUser.displayName || currentUser.username
-                        : UI.enter}
-                    </button>
+                    <span className="relative inline-flex">
+                      <button
+                        type="button"
+                        onClick={() => setShowUserMenu((v) => !v)}
+                        aria-haspopup="menu"
+                        aria-expanded={showUserMenu}
+                        className="hover:text-cozy-ink cursor-pointer font-semibold inline-flex items-center gap-1"
+                      >
+                        {currentUser ? currentUser.displayName || currentUser.username : UI.enter}
+                        {devOn && (
+                          <span className="px-1 py-px rounded bg-sky-500 text-white text-[9px] font-bold leading-none tracking-wide">DEV</span>
+                        )}
+                      </button>
+                      {showUserMenu && (
+                        <>
+                          <button
+                            type="button"
+                            aria-label="Cerrar menú"
+                            className="fixed inset-0 z-40 cursor-default"
+                            onClick={() => setShowUserMenu(false)}
+                          />
+                          <div
+                            role="menu"
+                            className="absolute bottom-full right-0 mb-2 z-50 w-52 rounded-2xl cozy-panel p-1.5 flex flex-col shadow-xl text-left"
+                          >
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setShowUserMenu(false);
+                                setShowAuthModal(true);
+                              }}
+                              className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-cozy-ink hover:bg-cozy-panel-deep/60 cursor-pointer"
+                            >
+                              <UserRound className="w-4 h-4 text-cozy-muted" />
+                              {currentUser ? 'Mi cuenta' : UI.enter}
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setShowUserMenu(false);
+                                setShowDevPanel(true);
+                              }}
+                              className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-cozy-ink hover:bg-cozy-panel-deep/60 cursor-pointer"
+                            >
+                              <Bug className="w-4 h-4 text-cozy-sky" />
+                              Modo desarrollador
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2121,6 +2188,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                             const label = `Nivel ${lvl} · ${info.name}`;
                             setRecentLevelSearches(pushRecent(RECENT_KEYS.levelSearches, label));
                             setPendingLevel(lvl);
+                            if (getDevLevelPick()) {
+                              // Back to the normal levels: forget the world picked in the developer panel
+                              setDevLevelPick(null);
+                              engine?.reloadLevel(lvl);
+                            }
                             engine?.loadLevel(lvl);
                             engine?.setCharacterPreview(true);
                             setPreviousTitleStep('select_level');
@@ -2374,18 +2446,29 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             )}
           </div>
-          {/* What to do now */}
-          {(combat.hint || combat.portalOpen) && (
+          {/* Only what needs you right now (caught, fainted, you won). Tips come from your companion (key I). */}
+          {(combat.urgent || combat.portalOpen) && (
             <div
               className={`rounded-xl text-center font-semibold shadow-md backdrop-blur-md ${
                 combat.urgent
                   ? 'bg-rose-600/90 text-white border border-rose-300 animate-pulse'
-                  : combat.portalOpen
-                    ? 'bg-sky-900/85 text-sky-100 border border-sky-400/60'
-                    : 'bg-stone-900/75 text-amber-100 border border-stone-700/70'
+                  : 'bg-sky-900/85 text-sky-100 border border-sky-400/60'
               } ${isMobileUi ? 'text-[10px] px-2 py-1' : 'text-[11px] px-3 py-1.5'}`}
             >
-              {combat.portalOpen ? '¡Ganaste! Entra al portal del centro' : combat.hint}
+              {combat.urgent ? combat.hint : '¡Ganaste! Entra al portal del centro'}
+            </div>
+          )}
+          {combat.tip && !combat.urgent && (
+            <div
+              role="status"
+              aria-live="polite"
+              className={`relative rounded-2xl bg-sky-50/95 text-sky-950 border-2 border-sky-300 shadow-lg ${isMobileUi ? 'px-2.5 py-1.5' : 'px-3 py-2'}`}
+            >
+              <span className={`flex items-center gap-1 font-bold text-sky-700 ${isMobileUi ? 'text-[9px]' : 'text-[10px]'} uppercase tracking-wider`}>
+                <Sparkles className="w-3 h-3" />
+                {combat.tip.from} dice
+              </span>
+              <span className={`block font-semibold leading-snug ${isMobileUi ? 'text-[10px]' : 'text-xs'}`}>{combat.tip.text}</span>
             </div>
           )}
         </div>
@@ -2402,7 +2485,22 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               : 'left-4 bottom-4'
           }`}
         >
-          <HeartRow hp={combat.hp} maxHp={combat.maxHp} hurt={hurtFlash} compact={isMobileUi} />
+          <div className="flex flex-col items-start gap-1.5">
+            <button
+              type="button"
+              onClick={() => engine?.askCompanionTip()}
+              className={`pointer-events-auto inline-flex items-center gap-1.5 rounded-full border shadow-md backdrop-blur-sm cursor-pointer transition-colors ${
+                combat.tip ? 'bg-sky-400 text-sky-950 border-sky-200' : 'bg-stone-950/55 text-sky-100 border-sky-300/40 hover:bg-stone-900/70'
+              } ${isMobileUi ? 'px-2.5 py-1 text-[11px]' : 'px-3 py-1 text-xs'} font-semibold`}
+              aria-label="Pedir un consejo a tu compañero"
+              title="Tu compañero vuela alrededor del jefe y te dice cómo vencerlo"
+            >
+              <Lightbulb className="w-3.5 h-3.5" />
+              Consejo
+              {!touchControlsEnabled && <kbd className="px-1 rounded bg-white/20 text-[10px] font-mono leading-tight">I</kbd>}
+            </button>
+            <HeartRow hp={combat.hp} maxHp={combat.maxHp} hurt={hurtFlash} compact={isMobileUi} />
+          </div>
         </div>
       )}
 
@@ -2940,7 +3038,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <div className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-stone-900/80 border border-stone-700/80 shadow-lg backdrop-blur-md">
                   <button
                     onClick={() => setShowBackpack((v) => !v)}
-                    title="Mochila (I)"
+                    title="Mochila (B)"
                     aria-label="Abrir mochila"
                     className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center cursor-pointer transition-colors ${
                       showBackpack ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-amber-300 hover:bg-stone-700'
@@ -3949,6 +4047,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     </div>
                     <div className="flex justify-between items-center py-1 border-b border-cozy-line">
                       <span className="text-cozy-muted">Abrir mochila</span>
+                      <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">B</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-cozy-line">
+                      <span className="text-cozy-muted">Consejo del compañero (jefes)</span>
                       <span className="font-mono bg-cozy-panel-deep px-2 py-0.5 rounded text-cozy-accent-deep">I</span>
                     </div>
                     <div className="flex justify-between items-center py-1 border-b border-cozy-line">
@@ -4396,6 +4498,53 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       <ConfirmDialog request={confirmRequest} onCancel={() => setConfirmRequest(null)} />
+      <DevPanel
+        open={showDevPanel}
+        hasAccess={devAccess}
+        devOn={devOn}
+        onUnlock={() => {
+          setDevAccess(true);
+          setDevAccessState(true);
+          setDevMode(true);
+          setDevOn(true);
+          showToast('Modo desarrollador: todo desbloqueado', 1800, 'success');
+        }}
+        onLock={() => {
+          setDevAccess(false);
+          setDevAccessState(false);
+          setDevMode(false);
+          setDevOn(false);
+          setShowDevPanel(false);
+          const max = maxPlayableLevel();
+          if (pendingLevel > max) setPendingLevel(max);
+          if (engine && engine.currentLevel > max) engine.reloadLevel(max);
+          showToast('Modo desarrollador bloqueado', 1600, 'neutral');
+        }}
+        onToggleDev={(on) => {
+          setDevMode(on);
+          setDevOn(on);
+          if (!on) {
+            // Back to your real progress
+            const max = maxPlayableLevel();
+            if (pendingLevel > max) setPendingLevel(max);
+            if (engine && engine.currentLevel > max) engine.reloadLevel(max);
+            showToast('Modo desarrollador desactivado', 1600, 'neutral');
+          }
+        }}
+        onPlay={(pick: DevPlay) => {
+          if (!isDevMode()) {
+            setDevMode(true);
+            setDevOn(true);
+          }
+          setDevLevelPick(pick.kind === 'handmade' ? null : { level: pick.level, kind: pick.kind, theme: pick.theme });
+          setShowDevPanel(false);
+          setPendingLevel(pick.level);
+          engine?.reloadLevel(pick.level);
+          handleStartGame(undefined, pick.level);
+          showToast(`Nivel ${pick.level} · ${levelInfo(pick.level).name}`, 2000, 'neutral');
+        }}
+        onClose={() => setShowDevPanel(false)}
+      />
     </div>
   );
 };

@@ -5,7 +5,8 @@
  *   - Plumarroca (cozy): three rock towers with spiral steps; the bird perches on top.
  *   - ERR0R.exe (aero): a central dais the glitch monster floats over.
  *   - Nave Nodriza (cosmic): open ground with cows grazing.
- *   - Huesudo (swamp): the giant rises from the swamp past the north edge.
+ *   - Huesudo (swamp): the giant ducks into the bog and rises somewhere else: around the edge
+ *     of the arena or out of the lake in the middle.
  *   - Rey Gnomo (garden): an open lawn.
  *   - Drácula (castle): a courtyard with four candelabra.
  * Tools (slingshot, stones, bat, net, bombs, torches) are placed as backpack pickups and
@@ -41,8 +42,10 @@ export interface BossSetup {
   cowSpots: THREE.Vector3[];
   /** Dracula: candelabra positions */
   candelabra: THREE.Vector3[];
-  /** Skeleton: base (waist) of the giant */
+  /** Skeleton: base (waist) of the giant where it first rises */
   giantBase: THREE.Vector3;
+  /** Skeleton: every place the giant can rise from (edge of the arena and the central lake) */
+  giantSpots: THREE.Vector3[];
   food: { pos: THREE.Vector3; kind: 'burger' | 'fries' }[];
   portal: VictoryPortalModel;
   portalPos: THREE.Vector3;
@@ -114,6 +117,7 @@ export function generateBossArena(level: number, root: THREE.Object3D, textures:
     cowSpots: [],
     candelabra: [],
     giantBase: new THREE.Vector3(0, Y - 2.4, -27.5),
+    giantSpots: [],
     food: [],
     portal: null as unknown as VictoryPortalModel,
     portalPos: new THREE.Vector3(0, Y, 2),
@@ -226,6 +230,50 @@ export function generateBossArena(level: number, root: THREE.Object3D, textures:
     item('piedra', 18, -4);
   } else if (kind === 'skeleton') {
     setup.home.copy(setup.giantBase);
+    // Where Huesudo can rise: north edge (first), the two sides, the two empty north corners
+    // and the bog lake in the middle of the arena
+    for (const [x, z] of [
+      [0, -27.5],
+      [-27.5, -6],
+      [27.5, -6],
+      [-24.5, -24.5],
+      [24.5, -24.5],
+      [0, 0],
+    ]) {
+      setup.giantSpots.push(new THREE.Vector3(x, Y - 2.4, z));
+    }
+    // The lake: dark bog water with reeds around it
+    const lake = new THREE.Mesh(
+      new THREE.CircleGeometry(5.3, 40),
+      new THREE.MeshStandardMaterial({ color: 0x2f4a1c, emissive: 0x1a2e0c, emissiveIntensity: 0.5, roughness: 0.25, metalness: 0.1, transparent: true, opacity: 0.92 })
+    );
+    lake.rotation.x = -Math.PI / 2;
+    lake.position.set(0, Y + 0.04, 0);
+    lake.receiveShadow = true;
+    root.add(lake);
+    const scum = new THREE.MeshBasicMaterial({ color: 0x84cc16, transparent: true, opacity: 0.35, depthWrite: false });
+    for (let k = 0; k < 7; k++) {
+      const a = rng() * Math.PI * 2;
+      const r = rng() * 4;
+      const pad = new THREE.Mesh(new THREE.CircleGeometry(0.35 + rng() * 0.4, 10), scum);
+      pad.rotation.x = -Math.PI / 2;
+      pad.position.set(Math.cos(a) * r, Y + 0.06, Math.sin(a) * r);
+      root.add(pad);
+    }
+    const reedM = new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 });
+    const tipM = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 });
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2 + rng() * 0.3;
+      const r = 5.0 + rng() * 0.6;
+      const h = 0.9 + rng() * 0.8;
+      const reed = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, h, 5), reedM);
+      reed.position.set(Math.cos(a) * r, Y + h / 2, Math.sin(a) * r);
+      reed.rotation.z = (rng() - 0.5) * 0.3;
+      root.add(reed);
+      const tip = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.22, 3, 6), tipM);
+      tip.position.set(reed.position.x, Y + h + 0.05, reed.position.z);
+      root.add(tip);
+    }
     // Stepping stones in the bog at the north side (decor + cover)
     for (const [x, z] of [
       [-10, -14],
@@ -313,7 +361,7 @@ export function generateBossArena(level: number, root: THREE.Object3D, textures:
     if (Math.abs(x) > HALF - 1 || Math.abs(z) > HALF - 1) continue;
     if (Math.abs(x) > HALF - TILE && Math.abs(z) > HALF - TILE) continue; // corners are empty
     if (Math.abs(x) < 6 && z > 18) continue; // keep the entrance clear
-    if (kind === 'skeleton' && z < -18 && Math.abs(x) < 10) continue; // the giant's spot
+    if (kind === 'skeleton' && setup.giantSpots.some((g) => Math.hypot(g.x - x, g.z - z) < 7)) continue; // the giant's spots
     theme.prop(x, Y, z, rng());
   }
 

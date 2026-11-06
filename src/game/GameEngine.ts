@@ -19,7 +19,7 @@ import { buildAeroWorld } from './levelAero';
 import { buildCosmicWorld } from './levelCosmic';
 import { buildSwampWorld } from './levelSwamp';
 import { makeGlowTexture } from './levelKit';
-import { LEVELS, markLevelComplete, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel } from './progress';
+import { LEVELS, markLevelComplete, isDevMode, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel } from './progress';
 import { generateLevel } from './levelGen';
 import { generateBossArena } from './bossArena';
 import { CombatStatus, CombatSystem } from './combat';
@@ -665,6 +665,19 @@ export class GameEngine {
   }
 
   /** Unloads the current level and builds another one (keeps player, companion & backpack). */
+  /** Boss fights: the companion flies around the boss and gives a tip (key I). False outside fights. */
+  public askCompanionTip(): boolean {
+    if (!this.combat || this.gameState !== 'playing') return false;
+    this.combat.askTip();
+    return true;
+  }
+
+  /** Rebuild a level even when it is the one already loaded (the developer panel changed what it is). */
+  public reloadLevel(level: number) {
+    this.currentLevel = -1;
+    this.loadLevel(level);
+  }
+
   public loadLevel(level: number) {
     level = Math.max(1, Math.floor(level));
     // In a party you go wherever the group is, even to a level you haven't unlocked yet
@@ -1980,7 +1993,8 @@ export class GameEngine {
       },
       () => {
         // Milestone: Summit Victory! (finishing a level unlocks its companion)
-        this.lastUnlocked = markLevelComplete(this.currentLevel);
+        // Developer mode never touches the saved progress
+        this.lastUnlocked = isDevMode() ? null : markLevelComplete(this.currentLevel);
         if (this.stalker) {
           this.stalker.isStunned = true;
           this.stalker.stunTimer = 999;

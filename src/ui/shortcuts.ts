@@ -22,6 +22,8 @@ export const POWER_SHORTCUTS: ShortcutRow[] = [
   { action: 'Elegir nivel', keys: '1–9 / flechas', context: 'Menú de niveles · Ranking' },
   { action: 'Tirar objeto', keys: 'Mayús+1–5', context: 'Jugando' },
   { action: 'Batear', keys: 'V', context: 'Lucha contra jefes' },
+  { action: 'Consejo de tu compañero', keys: 'I', context: 'Lucha contra jefes' },
+  { action: 'Mochila', keys: 'B (o I fuera de los jefes)', context: 'Jugando' },
   { action: 'Pantalla completa', keys: 'F', context: 'Siempre' },
   { action: 'Filtro foto anterior/siguiente', keys: '[  ]', context: 'Modo foto' },
   { action: 'Marco foto anterior/siguiente', keys: ',  .', context: 'Modo foto' },

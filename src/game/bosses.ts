@@ -4,9 +4,12 @@
  *                              knock it down mid-flight with the slingshot, then hit it on the floor.
  *   glitch   ERR0R.exe       — spawns glitch copies of the player; their light orbs hurt it.
  *   ufo      Nave Nodriza    — lasers from the sky; slingshot its glass; net the cows it abducts.
- *   skeleton Huesudo         — dancing skeletons carry players to its mouth; feed it bombs.
- *   gnome    Rey Gnomo       — mallet slams and shockwaves; net him, then hit him.
- *   dracula  Conde Drácula   — darkness and swoops; light the 4 candelabra to weaken him.
+ *   skeleton Huesudo         — ducks and rises around the arena or out of the lake; dancing skeletons
+ *                              carry players to its mouth (it chews and spits them); feed it bombs.
+ *   gnome    Rey Gnomo       — mallet slams and shockwaves; he grabs nets to throw at you. Net him,
+ *                              beat the gnomes that come to free him, then hit him.
+ *   dracula  Conde Drácula   — darkness and swoops; light the 4 candelabra (a torch lights 2) to weaken
+ *                              him. Stay too long in the dark and shadow hands grab you.
  * Each controller owns its models (added to the level root) and reports aim targets to the
  * combat system, which handles life, projectiles, the bat, stomps and party sync.
  */
@@ -28,6 +31,8 @@ import {
   createGiantSkeleton,
   createGlitchMonster,
   createGnomeKing,
+  createGnomeMinion,
+  createShadowHands,
   createUfo,
   DancerModel,
   DraculaModel,
@@ -35,6 +40,8 @@ import {
   GlitchMaterial,
   GlitchMonsterModel,
   GnomeKingModel,
+  GnomeMinionModel,
+  ShadowHandsModel,
   makeGlitchMaterial,
   UfoModel,
 } from './bossModels';
@@ -1053,33 +1060,74 @@ interface Dancer {
 
 class SkeletonBoss extends BossController {
   private m: GiantSkeletonModel;
-  private rise = 0;
+  /**
+   * rise   — coming out of the bog at `spot`
+   * up     — fighting: opens its mouth, slams its hands, calls the dancers
+   * crouch — ducks down into the bog…
+   * under  — …and moves underground to `next` (a green circle shows where it will come out)
+   */
+  private phase: 'rise' | 'up' | 'crouch' | 'under' = 'rise';
+  private phaseT = 0;
+  private upT = 14;
+  private waitT = 0;
+  private spot = 0;
+  private next = 0;
+  private yaw = 0;
   private mouthOpen = false;
-  private mouthT = 5;
+  private mouthT = 4;
   private chompT = 0;
   private slamT = 5;
   private spawnT = 3;
   private dancers: Dancer[] = [];
   private mouthPos = V();
-  private dropPoint: THREE.Vector3;
+  private dropPoint = V();
+  private chewPos = V();
+  /** Chewing a grabbed player */
+  private chew: { t: number; bites: number } | null = null;
   private hitCd = 0;
 
   constructor(c: CombatSystem) {
     super(c, 4 + (c.setup.diff > 0.5 ? 1 : 0));
     this.m = createGiantSkeleton();
     this.group.add(this.m.group);
-    this.group.position.copy(this.s.giantBase);
-    this.group.position.y -= 10;
-    this.dropPoint = V(0, this.s.floorY, this.s.giantBase.z + 5);
+    if (!this.s.giantSpots.length) this.s.giantSpots.push(this.s.giantBase.clone());
+    this.yaw = this.faceYaw(0);
+    this.placeAt(0, -11);
+  }
+
+  private get spots() {
+    return this.s.giantSpots;
+  }
+
+  /** The middle lake has nothing in front: it turns to the players. The edges face the arena. */
+  private isLake(i: number) {
+    const g = this.spots[i];
+    return Math.hypot(g.x, g.z) < 3;
+  }
+
+  private faceYaw(i: number): number {
+    const g = this.spots[i];
+    if (this.isLake(i)) return Math.atan2(this.c.playerPos.x - g.x, this.c.playerPos.z - g.z);
+    return Math.atan2(-g.x, -g.z);
+  }
+
+  private placeAt(i: number, dy: number) {
+    const g = this.spots[i];
+    this.group.position.set(g.x, g.y + dy, g.z);
+    this.group.rotation.y = this.yaw;
+  }
+
+  private bogPuff(at: THREE.Vector3, size = 3) {
+    this.c.addEffect(puffEffect(this.root, V(at.x + (Math.random() - 0.5) * 6, this.s.floorY + 0.2, at.z + (Math.random() - 0.5) * 6), 'rgba(132,204,22,0.6)', size, 0.6));
   }
 
   update(dt: number, time: number) {
     this.applyPulse(dt);
     this.updatePending(dt);
     this.hitCd -= dt;
-    const base = this.s.giantBase;
-    const pos = this.group.position;
     const p = this.c.playerPos;
+    const base = this.spots[this.spot];
+    const pos = this.group.position;
 
     if (this.dead) {
       this.deadT += dt;
@@ -1087,58 +1135,233 @@ class SkeletonBoss extends BossController {
       pos.y = base.y - 12 * k * k;
       this.m.group.rotation.x = -k * 0.5;
       this.m.jaw.rotation.x = 0.9;
-      if (Math.random() < dt * 6) this.c.addEffect(puffEffect(this.root, V(base.x + (Math.random() - 0.5) * 8, this.s.floorY + 0.5, base.z + 2), 'rgba(132,204,22,0.6)', 3, 0.7));
+      if (Math.random() < dt * 6) this.bogPuff(base, 3);
       if (k >= 1) this.group.visible = false;
       return;
     }
 
-    // Rises from the swamp at the start
-    if (this.rise < 1) {
-      this.rise = Math.min(1, this.rise + dt / 3);
-      pos.y = base.y - 10 * (1 - ease(this.rise));
-      if (Math.random() < dt * 10) this.c.addEffect(puffEffect(this.root, V(base.x + (Math.random() - 0.5) * 6, this.s.floorY, base.z + 2), 'rgba(132,204,22,0.6)', 3, 0.6));
+    this.phaseT += dt;
+    this.chompT = Math.max(0, this.chompT - dt);
+    switch (this.phase) {
+      case 'rise': {
+        const k = Math.min(1, this.phaseT / 2.2);
+        this.yaw = this.faceYaw(this.spot);
+        this.placeAt(this.spot, -11 * (1 - ease(k)));
+        this.m.group.rotation.x = 0.5 * (1 - k);
+        if (Math.random() < dt * 10) this.bogPuff(base);
+        if (k >= 1) {
+          this.phase = 'up';
+          this.phaseT = 0;
+          this.upT = 15 - 4 * this.s.diff + Math.random() * 4;
+          this.mouthT = 2.5;
+          this.waitT = 0;
+        }
+        break;
+      }
+      case 'up': {
+        // Turns a little towards the player (the lake one turns all the way)
+        const toP = Math.atan2(p.x - base.x, p.z - base.z);
+        let want = this.isLake(this.spot) ? toP : this.faceYaw(this.spot);
+        if (!this.isLake(this.spot)) {
+          let d = toP - want;
+          while (d > Math.PI) d -= Math.PI * 2;
+          while (d < -Math.PI) d += Math.PI * 2;
+          want += THREE.MathUtils.clamp(d, -0.5, 0.5);
+        }
+        this.yaw = turnTo(this.yaw, want, 0.8, dt);
+        this.group.rotation.y = this.yaw;
+        this.m.group.rotation.x = THREE.MathUtils.damp(this.m.group.rotation.x, 0, 4, dt);
+        this.upT -= dt;
+        const busy = this.chew || this.chompT > 0 || this.dancers.some((d) => d.state === 'carry');
+        if (this.upT <= 0 && !busy) {
+          // The host decides where it goes next and tells the party; the rest wait a moment
+          if (this.c.deps.isHost()) {
+            this.startCrouch(this.randomSpot(), true);
+          } else {
+            this.waitT += dt;
+            if (this.waitT > 3) this.startCrouch((this.spot + 1 + (this.maxHp - this.hp)) % this.spots.length, false);
+          }
+        }
+        break;
+      }
+      case 'crouch': {
+        // Leans forward, then ducks into the bog
+        const k = Math.min(1, this.phaseT / 1.6);
+        this.m.group.rotation.x = 0.55 * ease(Math.min(1, k * 1.6));
+        const sink = Math.max(0, (k - 0.35) / 0.65);
+        this.placeAt(this.spot, -11 * sink * sink);
+        if (Math.random() < dt * 12) this.bogPuff(base);
+        if (k >= 1) {
+          this.phase = 'under';
+          this.phaseT = 0;
+          this.spot = this.next;
+          const g = this.spots[this.spot];
+          const floorAt = V(g.x, this.s.floorY, g.z);
+          // A green circle shows where it will come out — and it knocks back whoever stands there
+          const lake = this.isLake(this.spot);
+          this.warn(floorAt, lake ? 4.2 : 3.4, 1.4, () => this.c.strike(floorAt, lake ? 4.2 : 3.4, 15, 12, 9), 0x84cc16);
+          this.c.say(lake ? '¡Huesudo va a salir del lago!' : '¡Huesudo cambia de lugar!', 'skel-move', 3);
+        }
+        break;
+      }
+      case 'under': {
+        const g = this.spots[this.spot];
+        this.yaw = this.faceYaw(this.spot);
+        this.placeAt(this.spot, -11);
+        if (Math.random() < dt * 14) this.bogPuff(g, 2.4);
+        if (this.phaseT >= 1.4) {
+          this.phase = 'rise';
+          this.phaseT = 0;
+          soundManager.playStalkerWarning();
+        }
+        break;
+      }
     }
 
     // Idle sway, looks at the player
-    this.m.skull.rotation.y = turnTo(this.m.skull.rotation.y, THREE.MathUtils.clamp(Math.atan2(p.x - pos.x, p.z - pos.z), -0.6, 0.6), 2, dt);
-    this.m.arms.forEach((a, i) => (a.rotation.x = -0.35 + Math.sin(time * 1.2 + i * 2) * 0.12));
+    const up = this.phase === 'up';
+    this.m.skull.rotation.y = turnTo(this.m.skull.rotation.y, THREE.MathUtils.clamp(Math.atan2(p.x - pos.x, p.z - pos.z) - this.yaw, -0.6, 0.6), 2, dt);
+    this.m.arms.forEach((a, i) => (a.rotation.x = -0.35 + Math.sin(time * 1.2 + i * 2) * 0.12 + (this.phase === 'crouch' ? -0.6 : 0)));
     for (const e of this.m.eyes) e.scale.setScalar(1 + Math.sin(time * 5) * 0.2);
 
-    // Mouth cycle
-    this.chompT = Math.max(0, this.chompT - dt);
-    this.mouthT -= dt;
-    if (this.mouthT <= 0 && this.rise >= 1) {
-      this.mouthOpen = !this.mouthOpen;
-      this.mouthT = this.mouthOpen ? 3.4 : 6.5 - 2 * this.s.diff;
-      if (this.mouthOpen) {
-        soundManager.playStalkerWarning();
-        if (this.has('bomba')) this.c.say('¡Huesudo abrió la boca! ¡Lánzale una bomba!', 'mouth', 5);
+    // Mouth cycle (only while it's up)
+    if (up && !this.chew) {
+      this.mouthT -= dt;
+      if (this.mouthT <= 0) {
+        this.mouthOpen = !this.mouthOpen;
+        this.mouthT = this.mouthOpen ? 3.4 : 6.5 - 2 * this.s.diff;
+        if (this.mouthOpen) {
+          soundManager.playStalkerWarning();
+          if (this.has('bomba')) this.c.say('¡Huesudo abrió la boca! ¡Lánzale una bomba!', 'mouth', 5);
+        }
       }
+    } else if (!up) {
+      this.mouthOpen = false;
     }
-    const jawTarget = this.chompT > 0 ? (Math.sin(this.chompT * 30) > 0 ? 0.8 : 0.05) : this.mouthOpen ? 0.85 : 0.04;
-    this.m.jaw.rotation.x = THREE.MathUtils.damp(this.m.jaw.rotation.x, jawTarget, 10, dt);
+    const chewing = !!this.chew || this.chompT > 0;
+    const jawTarget = chewing ? 0.45 + Math.sin(time * 16) * 0.42 : this.mouthOpen ? 0.85 : 0.04;
+    this.m.jaw.rotation.x = THREE.MathUtils.damp(this.m.jaw.rotation.x, jawTarget, chewing ? 22 : 10, dt);
+    this.m.skull.rotation.x = chewing ? Math.sin(time * 8) * 0.12 : THREE.MathUtils.damp(this.m.skull.rotation.x, 0, 6, dt);
     this.m.mouthGlow.visible = this.mouthOpen;
     this.group.updateMatrixWorld(true);
     this.m.skull.localToWorld(this.mouthPos.set(0, -1.0, 1.6));
 
-    // Hand slams on the north half of the arena
-    this.slamT -= dt;
-    if (this.slamT <= 0 && this.rise >= 1) {
-      this.slamT = 5.5 - 2 * this.s.diff;
-      if (p.z < 6 && !this.c.grab) {
-        const at = this.groundAt(0.6);
-        this.warn(at, 2.5, 1.3, () => this.slam(at));
+    // Where the dancers bring their catch: in front of the giant
+    const fwd = V(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    const h = this.s.half - 2;
+    this.dropPoint.set(
+      THREE.MathUtils.clamp(base.x + fwd.x * (this.isLake(this.spot) ? 3.2 : 5), -h, h),
+      this.s.floorY,
+      THREE.MathUtils.clamp(base.z + fwd.z * (this.isLake(this.spot) ? 3.2 : 5), -h, h)
+    );
+
+    // Hand slams on whoever is close to the giant
+    if (up) {
+      this.slamT -= dt;
+      if (this.slamT <= 0) {
+        this.slamT = 5.5 - 2 * this.s.diff;
+        if (Math.hypot(p.x - base.x, p.z - base.z) < 24 && !this.c.grab) {
+          const at = this.groundAt(0.6);
+          this.warn(at, 2.5, 1.3, () => this.slam(at));
+        }
       }
     }
+
+    this.updateChew(dt, fwd);
 
     // Dancing skeletons
     this.spawnT -= dt;
     const alive = this.dancers.filter((d) => d.state !== 'sink').length;
-    if (this.spawnT <= 0 && alive < 2 + Math.round(2 * this.s.diff) && this.rise >= 1) {
+    if (this.spawnT <= 0 && alive < 2 + Math.round(2 * this.s.diff) && (up || this.phase === 'under')) {
       this.spawnDancer();
       this.spawnT = 5 - 1.5 * this.s.diff;
     }
     this.updateDancers(dt, time);
+  }
+
+  private randomSpot(): number {
+    const n = this.spots.length;
+    if (n < 2) return 0;
+    let i = Math.floor(Math.random() * (n - 1));
+    if (i >= this.spot) i++;
+    return i;
+  }
+
+  private startCrouch(next: number, send: boolean) {
+    if (this.dead || next < 0 || next >= this.spots.length) return;
+    this.next = next;
+    if (this.phase !== 'up' && this.phase !== 'rise') return;
+    this.phase = 'crouch';
+    this.phaseT = 0;
+    this.mouthOpen = false;
+    if (send) this.c.deps.send('move', next, 0);
+    soundManager.playWoodRattle();
+  }
+
+  onEvent(kind: string, i: number) {
+    if (kind === 'move') {
+      if (this.phase === 'up' || this.phase === 'rise') this.startCrouch(i, false);
+      else this.next = i;
+    } else if (kind === 'chew') {
+      // A friend is being chewed: same animation here
+      this.chompT = 2.2;
+    }
+  }
+
+  /** The dancer reached the giant: it takes the player into its mouth and chews. */
+  private startChew() {
+    const g = this.c.grab;
+    if (!g || this.chew) return;
+    const before = g.holder;
+    g.holder = {
+      pos: this.chewPos,
+      onRelease: () => {
+        this.chew = null;
+      },
+    };
+    before.onRelease('eaten');
+    g.need = g.count + 8 + Math.round(this.s.diff * 4);
+    this.chew = { t: 0, bites: 0 };
+    this.mouthOpen = false;
+    this.c.deps.send('chew', 0, 0);
+    soundManager.playStalkerWarning();
+    this.c.say('¡Huesudo te está masticando! Pulsa saltar para escapar', 'chew', 2);
+  }
+
+  private updateChew(dt: number, fwd: THREE.Vector3) {
+    this.chewPos.copy(this.mouthPos).addScaledVector(fwd, 0.35);
+    this.chewPos.y -= 1.35;
+    const c = this.chew;
+    if (!c) return;
+    if (!this.c.grab) {
+      this.chew = null;
+      return;
+    }
+    c.t += dt;
+    // Three bites, crumbs flying
+    const biteAt = [0.55, 1.15, 1.75];
+    if (c.bites < biteAt.length && c.t >= biteAt[c.bites]) {
+      c.bites++;
+      this.c.invuln = 0;
+      this.c.damagePlayer(12, null, 0, 0);
+      soundManager.playEnemyBonk();
+      this.c.addEffect(burstEffect(this.root, this.mouthPos.clone(), new THREE.MeshStandardMaterial({ color: 0xe7e0cf }), 5, 0.12, 4, 0.5));
+      if (!this.c.grab) {
+        this.chew = null;
+        return;
+      }
+    }
+    if (c.t >= 2.2) {
+      // Spits the player back into the arena
+      this.chew = null;
+      this.c.releaseGrab('eaten');
+      const ph = this.c.physics;
+      ph.velocity.set(fwd.x * 11, 10, fwd.z * 11);
+      ph.isGrounded = false;
+      this.c.invuln = Math.max(this.c.invuln, 1.5);
+      this.c.addEffect(puffEffect(this.root, this.mouthPos.clone(), 'rgba(132,204,22,0.75)', 3, 0.5));
+      this.c.say('¡Huesudo te masticó y te escupió!', 'eaten', 2);
+    }
   }
 
   private slam(at: THREE.Vector3) {
@@ -1240,20 +1463,14 @@ class SkeletonBoss extends BossController {
           d.pos.z += (dz / dist) * 2.4 * dt;
           d.yaw = turnTo(d.yaw, Math.atan2(dx, dz), 6, dt);
         }
-        if (dist < 1.2 && this.c.grab) {
-          // Chomp!
-          this.chompT = 0.6;
-          this.c.damagePlayer(35, null);
-          if (this.c.grab) {
-            this.c.releaseGrab('eaten');
-            this.c.physics.respawnAtCheckpoint(0, true);
-          }
-          this.c.say('¡Huesudo te masticó! Vuelves a la entrada', 'eaten', 2);
+        if (dist < 1.2 && this.c.grab && this.phase === 'up') {
+          this.startChew();
         } else if (!this.c.grab) {
           d.state = 'dance';
           d.m.cage.visible = false;
         }
       }
+      if ((d.state as Dancer['state']) === 'sink') continue;
       // Dance moves
       const beat = time * 6 + d.phase;
       g.position.set(d.pos.x, d.pos.y + Math.abs(Math.sin(beat)) * 0.18, d.pos.z);
@@ -1282,28 +1499,30 @@ class SkeletonBoss extends BossController {
 
   targets(out: AimTarget[]) {
     if (this.dead) return;
-    out.push({
-      pos: this.mouthPos,
-      radius: 1.9,
-      accepts: ['bomba', 'piedra'],
-      priority: 1.5,
-      hit: (kind) => {
-        if (kind === 'piedra') {
-          this.c.say('Las piedras no le hacen nada: dale bombas', 'skel-stone', 3);
-          return;
-        }
-        if (!this.mouthOpen) {
-          this.c.say('¡Clank! Espera a que abra la boca', 'skel-closed', 2);
-          return;
-        }
-        if (this.hitCd > 0) return;
-        this.hitCd = 0.5;
-        this.mouthOpen = false;
-        this.mouthT = 4;
-        this.c.damageBoss(1);
-        if (this.hp > 0) this.c.say('¡Bum! Huesudo se tragó la bomba', 'skel-hit', 2);
-      },
-    });
+    if (this.phase === 'up') {
+      out.push({
+        pos: this.mouthPos,
+        radius: 1.9,
+        accepts: ['bomba', 'piedra'],
+        priority: 1.5,
+        hit: (kind) => {
+          if (kind === 'piedra') {
+            this.c.say('Las piedras no le hacen nada: dale bombas', 'skel-stone', 3);
+            return;
+          }
+          if (!this.mouthOpen) {
+            this.c.say('¡Clank! Espera a que abra la boca', 'skel-closed', 2);
+            return;
+          }
+          if (this.hitCd > 0) return;
+          this.hitCd = 0.5;
+          this.mouthOpen = false;
+          this.mouthT = 4;
+          this.c.damageBoss(1);
+          if (this.hp > 0) this.c.say('¡Bum! Huesudo se tragó la bomba', 'skel-hit', 2);
+        },
+      });
+    }
     for (const d of this.dancers) {
       if (d.state === 'sink') continue;
       out.push({
@@ -1324,8 +1543,10 @@ class SkeletonBoss extends BossController {
 
   hint(): string {
     const g = this.c.grab;
+    if (this.chew && g) return `¡Te está masticando! Pulsa saltar muchas veces (${g.count}/${g.need})`;
     if (g) return `¡Pulsa saltar muchas veces para soltarte! (${g.count}/${g.need})`;
-    if (!this.has('bomba')) return 'Junta bombas del suelo y cuidado con los esqueletos bailarines';
+    if (this.phase === 'crouch' || this.phase === 'under') return 'Huesudo se escondió en el pantano: mira el círculo verde, por ahí va a salir';
+    if (!this.has('bomba')) return 'Junta bombas del suelo y cuidado con los esqueletos bailarines: te llevan a su boca';
     if (this.mouthOpen) return '¡Huesudo abrió la boca! Lánzale una bomba';
     return 'Espera a que Huesudo abra la boca y lánzale una bomba';
   }
@@ -1333,6 +1554,8 @@ class SkeletonBoss extends BossController {
   onDefeat(instant: boolean) {
     super.onDefeat(instant);
     this.clearPending();
+    if (this.chew && this.c.grab) this.c.releaseGrab('other');
+    this.chew = null;
     for (const d of this.dancers) this.collapse(d);
     if (instant) this.group.visible = false;
   }
@@ -1347,18 +1570,45 @@ class SkeletonBoss extends BossController {
 // ===========================================================================
 // 5. REY GNOMO
 // ===========================================================================
+interface Minion {
+  kind: 'warrior' | 'helper';
+  m: GnomeMinionModel;
+  pos: THREE.Vector3;
+  yaw: number;
+  state: 'rise' | 'go' | 'act' | 'sink';
+  t: number;
+  cd: number;
+  center: THREE.Vector3;
+}
+
 class GnomeBoss extends BossController {
   private m: GnomeKingModel;
   private pos: THREE.Vector3;
   private yaw = 0;
-  private state: 'walk' | 'windup' | 'slam' | 'recover' | 'leap' | 'netted' = 'walk';
+  /**
+   * walk / windup / slam / recover / leap — mallet attacks
+   * fetch  — walks to a net lying on the floor and takes it
+   * aim    — spins the net over his head (a cyan circle shows where it lands)
+   * netted — caught by your net: warrior gnomes protect him, helpers pull the net off
+   */
+  private state: 'walk' | 'windup' | 'slam' | 'recover' | 'leap' | 'fetch' | 'aim' | 'netted' = 'walk';
   private t = 0;
   private leapT = 6;
   private leapFrom = V();
   private leapTo = V();
   private net: THREE.Mesh;
+  private handNet: THREE.Mesh;
   private hitCd = 0;
   private center = V();
+  private netCd = 7;
+  private fetchTo = V();
+  private aimAt = V();
+  private minions: Minion[] = [];
+  /** The net he threw, wrapped around the local player */
+  private playerNet: THREE.Mesh | null = null;
+  private trapPos = V();
+  private netDur = 5.5;
+  private minionMat = new THREE.MeshStandardMaterial({ color: 0xe7e0cf });
 
   constructor(c: CombatSystem) {
     super(c, 100 + 50 * c.setup.diff);
@@ -1369,7 +1619,12 @@ class GnomeBoss extends BossController {
     this.net = makeNetWrap(1.5, 3.6);
     this.net.visible = false;
     this.group.add(this.net);
+    // The net he carries before throwing it
+    this.handNet = makeNetWrap(0.45, 0.7);
+    this.handNet.visible = false;
+    this.root.add(this.handNet);
     this.m.mallet.rotation.x = 0.6;
+    this.netCd = 8 - 3 * c.setup.diff;
   }
 
   update(dt: number, time: number) {
@@ -1386,31 +1641,47 @@ class GnomeBoss extends BossController {
       const k = Math.min(1, this.deadT / 0.8);
       this.m.group.rotation.x = -k * 1.2;
       this.m.group.position.y = k * 0.4;
+      this.handNet.visible = false;
       if (this.deadT > 2.4 && this.group.visible) {
         this.group.visible = false;
         this.c.addEffect(burstEffect(this.root, this.pos.clone().add(V(0, 1.5, 0)), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.7 }), 16, 0.25, 8, 1.2));
       }
+      this.updateMinions(dt, time);
       return;
     }
 
     const dx = p.x - this.pos.x;
     const dz = p.z - this.pos.z;
     const dist = Math.hypot(dx, dz) || 1;
+    const walkAnim = () => this.m.feet.forEach((f, i) => (f.position.z = 0.03 + Math.sin(time * 8 + i * Math.PI) * 0.08));
     this.t += dt;
     switch (this.state) {
       case 'walk': {
         this.yaw = turnTo(this.yaw, Math.atan2(dx, dz), 3, dt);
-        const speed = 2.4 + 1.4 * diff;
+        // A trapped player gets the king's full attention
+        const speed = (2.4 + 1.4 * diff) * (this.c.grab && this.playerNet ? 1.5 : 1);
         if (dist > 2.6) {
           this.pos.x += Math.sin(this.yaw) * speed * dt;
           this.pos.z += Math.cos(this.yaw) * speed * dt;
         }
-        this.m.feet.forEach((f, i) => (f.position.z = 0.03 + Math.sin(time * 8 + i * Math.PI) * 0.08));
+        walkAnim();
         mallet.rotation.x = THREE.MathUtils.damp(mallet.rotation.x, 0.6, 6, dt);
         this.leapT -= dt;
+        this.netCd -= dt;
         if (dist < 4.2) {
           this.state = 'windup';
           this.t = 0;
+        } else if (this.netCd <= 0 && dist > 5 && !this.c.grab) {
+          // Is there a net lying around? He goes for it
+          const at = this.c.deps.items.nearestLying('red', this.pos, 20);
+          if (at) {
+            this.state = 'fetch';
+            this.t = 0;
+            this.fetchTo.copy(at);
+            this.c.say('¡El Rey Gnomo va por una red!', 'gnome-fetch', 4);
+          } else {
+            this.netCd = 3;
+          }
         } else if (this.leapT <= 0 && dist > 8) {
           this.state = 'leap';
           this.t = 0;
@@ -1420,6 +1691,42 @@ class GnomeBoss extends BossController {
           this.warn(this.leapTo, 3.0, 1.1, () => {}, 0xf59e0b);
           this.leapT = 7 - 2 * diff;
         }
+        break;
+      }
+      case 'fetch': {
+        const fx = this.fetchTo.x - this.pos.x;
+        const fz = this.fetchTo.z - this.pos.z;
+        const fd = Math.hypot(fx, fz) || 1;
+        this.yaw = turnTo(this.yaw, Math.atan2(fx, fz), 5, dt);
+        const speed = 3.6 + 1.6 * diff;
+        this.pos.x += (fx / fd) * Math.min(fd, speed * dt);
+        this.pos.z += (fz / fd) * Math.min(fd, speed * dt);
+        walkAnim();
+        // Someone took it first (or it takes too long): back to chasing
+        if (!this.c.deps.items.nearestLying('red', this.fetchTo, 1.5) || this.t > 9) {
+          this.state = 'walk';
+          this.netCd = 4;
+          break;
+        }
+        if (fd < 1.4 && this.c.deps.items.takeLying('red', this.fetchTo, 1.8)) {
+          this.state = 'aim';
+          this.t = 0;
+          this.handNet.visible = true;
+          this.aimAt.copy(this.groundAt(1.0));
+          this.warn(this.aimAt, 2.0, 1.1, () => this.throwNet(), 0x22d3ee);
+          soundManager.playWindGust();
+          this.c.say('¡El Rey Gnomo te va a lanzar la red! Muévete del círculo', 'gnome-aim', 2);
+        }
+        break;
+      }
+      case 'aim': {
+        this.yaw = turnTo(this.yaw, Math.atan2(this.aimAt.x - this.pos.x, this.aimAt.z - this.pos.z), 6, dt);
+        mallet.rotation.x = THREE.MathUtils.damp(mallet.rotation.x, 0.9, 6, dt);
+        // Net spinning over his head
+        const a = time * 9;
+        this.handNet.position.set(this.pos.x + Math.cos(a) * 1.2, this.pos.y + 4.3, this.pos.z + Math.sin(a) * 1.2);
+        this.handNet.rotation.y = a;
+        if (this.t > 2) this.state = 'recover';
         break;
       }
       case 'windup': {
@@ -1463,28 +1770,102 @@ class GnomeBoss extends BossController {
           this.t = 0;
         }
         break;
-      case 'netted':
+      case 'netted': {
         this.m.group.rotation.z = Math.sin(time * 10) * 0.08;
         mallet.rotation.x = 0.9;
+        // Every helper pulling at the net makes it come off sooner
+        const pulling = this.minions.filter((mi) => mi.kind === 'helper' && mi.state === 'act').length;
+        this.t += dt * 0.6 * pulling;
+        this.net.scale.setScalar(1 - Math.min(0.25, (this.t / this.netDur) * 0.25));
         if (this.t >= this.netDur) {
           this.net.visible = false;
+          this.net.scale.setScalar(1);
           this.m.group.rotation.z = 0;
           this.c.addEffect(puffEffect(this.root, this.pos.clone().add(V(0, 1.8, 0)), 'rgba(103,232,249,0.9)', 4, 0.4));
-          this.c.say('¡El Rey Gnomo rompió la red!', 'gnome-free', 2);
+          this.c.say(pulling ? '¡Los gnomos le quitaron la red al rey!' : '¡El Rey Gnomo rompió la red!', 'gnome-free', 2);
           this.state = 'recover';
           this.t = 0;
+          this.dismissMinions();
         }
         break;
+      }
     }
+    if (this.state !== 'aim') this.handNet.visible = false;
     const h = this.s.half - 2;
     this.pos.x = THREE.MathUtils.clamp(this.pos.x, -h, h);
     this.pos.z = THREE.MathUtils.clamp(this.pos.z, -h, h);
     this.group.position.copy(this.pos);
     this.group.rotation.y = this.yaw;
     this.center.copy(this.pos).add(V(0, 1.7, 0));
+
+    // The net around a trapped player
+    if (this.playerNet) {
+      if (!this.c.grab) this.freePlayerNet();
+      else this.playerNet.position.set(this.trapPos.x, this.trapPos.y + 0.9, this.trapPos.z);
+    }
+    this.updateMinions(dt, time);
   }
 
-  private netDur = 5.5;
+  /** The king throws the net he picked up at the cyan circle. */
+  private throwNet() {
+    if (this.dead || this.state !== 'aim') return;
+    this.handNet.visible = false;
+    this.state = 'recover';
+    this.t = 0;
+    this.netCd = 10 - 3 * this.s.diff;
+    const from = this.pos.clone().add(V(0, 4, 0));
+    const to = this.aimAt.clone();
+    const flying = new THREE.Mesh(
+      new THREE.CircleGeometry(1.6, 18),
+      new THREE.MeshBasicMaterial({ color: 0x67e8f9, wireframe: true, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
+    );
+    flying.rotation.x = -Math.PI / 2;
+    this.root.add(flying);
+    this.c.addEffect({
+      obj: flying,
+      t: 0,
+      dur: 0.45,
+      tick: (k) => {
+        flying.position.lerpVectors(from, to, k);
+        flying.position.y += Math.sin(Math.PI * k) * 2.5 + 0.3;
+        flying.scale.setScalar(0.4 + 0.6 * k);
+        flying.rotation.z += 0.3;
+      },
+    });
+    // Landing check right when it arrives
+    this.c.addEffect({
+      obj: new THREE.Object3D(),
+      t: 0,
+      dur: 0.46,
+      tick: (k) => {
+        if (k < 1 || this.dead) return;
+        const p = this.c.playerPos;
+        if (Math.hypot(p.x - to.x, p.z - to.z) < 2.0 && Math.abs(p.y - to.y) < 2.2) this.trapPlayer();
+        else this.c.addEffect(puffEffect(this.root, to.clone().add(V(0, 0.3, 0)), 'rgba(103,232,249,0.7)', 2.5, 0.4));
+      },
+    });
+  }
+
+  private trapPlayer() {
+    const p = this.c.physics.position;
+    this.trapPos.set(p.x, p.y - 0.9, p.z);
+    const need = 6 + Math.round(3 * this.s.diff);
+    const ok = this.c.grabPlayer({ pos: this.trapPos, onRelease: () => this.freePlayerNet() }, need);
+    if (!ok) return;
+    this.playerNet = makeNetWrap(0.75, 1.9);
+    this.playerNet.position.set(this.trapPos.x, this.trapPos.y + 0.9, this.trapPos.z);
+    this.root.add(this.playerNet);
+    soundManager.playEnemyBonk();
+    this.c.say('¡Te atrapó con la red! Pulsa saltar muchas veces para romperla', 'gnome-trap', 2);
+  }
+
+  private freePlayerNet() {
+    if (!this.playerNet) return;
+    this.root.remove(this.playerNet);
+    this.playerNet.geometry.dispose();
+    this.playerNet = null;
+    this.c.addEffect(puffEffect(this.root, this.trapPos.clone().add(V(0, 1.2, 0)), 'rgba(103,232,249,0.9)', 3, 0.4));
+  }
 
   private impact(at: THREE.Vector3, radius: number) {
     this.c.strike(at, radius, 22, 12, 7);
@@ -1495,16 +1876,136 @@ class GnomeBoss extends BossController {
 
   private netKing(local: boolean, dur?: number) {
     if (this.dead || this.state === 'netted') return;
-    this.netDur = dur ?? 5.5 - this.s.diff;
+    this.netDur = dur ?? 6.5 - this.s.diff;
     if (local) this.c.deps.send('stun', 0, this.netDur);
     this.state = 'netted';
     this.t = 0;
+    this.handNet.visible = false;
+    this.clearPending();
     this.net.visible = true;
+    this.net.scale.setScalar(1);
     if (this.pos.y > this.s.floorY) this.pos.y = this.s.floorY;
-    this.c.say('¡Atrapado! Golpéalo ahora', 'gnome-net', 2);
+    this.callMinions();
+    this.c.say('¡Atrapado! Salen gnomos a protegerlo: pégales a los que le quitan la red', 'gnome-net', 2);
+  }
+
+  /** Warriors defend the king; helpers run to him and pull the net off. */
+  private callMinions() {
+    const warriors = 1 + Math.round(2 * this.s.diff);
+    const helpers = 2;
+    const total = warriors + helpers;
+    for (let k = 0; k < total; k++) {
+      const kind: Minion['kind'] = k < warriors ? 'warrior' : 'helper';
+      const a = (k / total) * Math.PI * 2 + Math.random() * 0.4;
+      const r = kind === 'warrior' ? 4.5 : 6.5;
+      const h = this.s.half - 2;
+      const pos = V(
+        THREE.MathUtils.clamp(this.pos.x + Math.cos(a) * r, -h, h),
+        this.s.floorY,
+        THREE.MathUtils.clamp(this.pos.z + Math.sin(a) * r, -h, h)
+      );
+      const m = createGnomeMinion(kind);
+      m.group.position.set(pos.x, pos.y - 1.2, pos.z);
+      this.root.add(m.group);
+      this.minions.push({ kind, m, pos, yaw: 0, state: 'rise', t: 0, cd: 0.8, center: pos.clone() });
+      this.c.addEffect(puffEffect(this.root, pos.clone().add(V(0, 0.3, 0)), 'rgba(120,83,48,0.8)', 1.6, 0.4));
+    }
+    soundManager.playWoodRattle();
+  }
+
+  private dismissMinions() {
+    for (const mi of this.minions) {
+      if (mi.state === 'sink') continue;
+      mi.state = 'sink';
+      mi.t = 0;
+    }
+  }
+
+  private poof(mi: Minion) {
+    if (mi.state === 'sink') return;
+    mi.state = 'sink';
+    mi.t = 0.6; // skips most of the sink: it vanishes in a puff
+    mi.m.group.visible = false;
+    this.c.addEffect(burstEffect(this.root, mi.center.clone(), this.minionMat, 8, 0.12, 4, 0.7));
+    this.c.addEffect(puffEffect(this.root, mi.center.clone(), 'rgba(255,255,255,0.9)', 1.8, 0.35));
+    soundManager.playEnemyBoop();
+  }
+
+  private updateMinions(dt: number, time: number) {
+    const p = this.c.playerPos;
+    const floor = this.s.floorY;
+    for (let k = this.minions.length - 1; k >= 0; k--) {
+      const mi = this.minions[k];
+      mi.t += dt;
+      const g = mi.m.group;
+      if (mi.state === 'sink') {
+        g.position.y -= dt * 2.5;
+        if (mi.t > 1) {
+          disposeGroup(this.root, g);
+          this.minions.splice(k, 1);
+        }
+        continue;
+      }
+      if (mi.state === 'rise') {
+        mi.pos.y = floor - 1.2 * (1 - Math.min(1, mi.t / 0.6));
+        if (mi.t >= 0.6) {
+          mi.state = 'go';
+          mi.pos.y = floor;
+        }
+      } else {
+        const target = mi.kind === 'helper' ? this.pos : p;
+        const dx = target.x - mi.pos.x;
+        const dz = target.z - mi.pos.z;
+        const dist = Math.hypot(dx, dz) || 1;
+        mi.yaw = turnTo(mi.yaw, Math.atan2(dx, dz), 8, dt);
+        const reach = mi.kind === 'helper' ? 1.9 : 1.0;
+        if (dist > reach) {
+          const speed = mi.kind === 'helper' ? 3.4 : 3.0 + 1.2 * this.s.diff;
+          mi.pos.x += (dx / dist) * speed * dt;
+          mi.pos.z += (dz / dist) * speed * dt;
+          mi.state = 'go';
+        } else {
+          mi.state = 'act';
+        }
+        mi.cd -= dt;
+        if (mi.kind === 'warrior' && mi.state === 'act' && mi.cd <= 0 && Math.abs(p.y - mi.pos.y) < 1.6) {
+          mi.cd = 1.3 - 0.4 * this.s.diff;
+          this.c.damagePlayer(8, mi.pos, 7, 4);
+        }
+      }
+      // Animations
+      const walk = mi.state === 'go' || mi.state === 'rise';
+      mi.m.feet.forEach((f, i) => (f.position.z = 0.03 + (walk ? Math.sin(time * 14 + i * Math.PI) * 0.07 : 0)));
+      if (mi.kind === 'helper' && mi.state === 'act') {
+        // Tugging at the net: lean back, arms pulling
+        const tug = Math.sin(time * 10 + k);
+        mi.m.inner.rotation.x = -0.35 + tug * 0.12;
+        mi.m.arms[0].rotation.x = -1.4 + tug * 0.5;
+        mi.m.arms[1].rotation.x = -1.4 - tug * 0.5;
+      } else if (mi.kind === 'warrior' && mi.m.spear) {
+        mi.m.inner.rotation.x = 0;
+        mi.m.spear.position.z = 0.05 + (mi.state === 'act' && mi.cd > 0.9 ? 0.25 : 0);
+      } else {
+        mi.m.inner.rotation.x = 0;
+      }
+      g.position.set(mi.pos.x, mi.pos.y + (walk ? Math.abs(Math.sin(time * 14)) * 0.05 : 0), mi.pos.z);
+      g.rotation.y = mi.yaw;
+      mi.center.copy(mi.pos).add(V(0, 0.55, 0));
+    }
   }
 
   targets(out: AimTarget[]) {
+    for (const mi of this.minions) {
+      if (mi.state === 'sink') continue;
+      out.push({
+        pos: mi.center,
+        radius: 0.6,
+        accepts: ['bate', 'piedra', 'stomp'],
+        top: mi.pos.y + 1.25,
+        priority: mi.kind === 'helper' ? 1.2 : 0.8,
+        hit: () => this.poof(mi),
+      });
+    }
     if (this.dead) return;
     out.push({
       pos: this.center,
@@ -1533,8 +2034,16 @@ class GnomeBoss extends BossController {
   }
 
   hint(): string {
-    if (this.state === 'netted') return '¡Atrapado! Golpéalo con el bate, piedras o cayéndole encima';
-    if (!this.has('red')) return 'Busca una red para atrapar al Rey Gnomo · salta las ondas del mazo';
+    const g = this.c.grab;
+    if (g && this.playerNet) return `¡Estás atrapado en la red! Pulsa saltar muchas veces (${g.count}/${g.need})`;
+    if (this.state === 'netted') {
+      const helpers = this.minions.some((mi) => mi.kind === 'helper' && mi.state !== 'sink');
+      return helpers
+        ? '¡Atrapado! Pégales a los gnomos que le quitan la red y luego golpea al rey'
+        : '¡Atrapado! Golpéalo con el bate, piedras o cayéndole encima';
+    }
+    if (this.state === 'fetch' || this.state === 'aim') return '¡El rey tiene una red! Sal del círculo celeste antes de que la lance';
+    if (!this.has('red')) return 'Toma una red antes que el rey: si la agarra él, te la lanza a ti';
     return 'Lánzale la red al Rey Gnomo (objetivo marcado) · salta las ondas del mazo';
   }
 
@@ -1542,15 +2051,39 @@ class GnomeBoss extends BossController {
     super.onDefeat(instant);
     this.clearPending();
     this.net.visible = false;
+    this.handNet.visible = false;
+    this.dismissMinions();
+    if (this.playerNet && this.c.grab) this.c.releaseGrab('other');
     if (instant) this.group.visible = false;
+  }
+
+  dispose() {
+    for (const mi of this.minions) disposeGroup(this.root, mi.m.group);
+    this.minions = [];
+    this.freePlayerNet();
+    this.root.remove(this.handNet);
+    super.dispose();
   }
 }
 
 // ===========================================================================
 // 6. CONDE DRÁCULA
 // ===========================================================================
+interface ShadowHands {
+  m: ShadowHandsModel;
+  pos: THREE.Vector3;
+  t: number;
+  phase: 'warn' | 'rise' | 'hold' | 'sink';
+  /** Someone else's hands (party): only shown */
+  visual: boolean;
+  squeeze: number;
+}
+
 class DraculaBoss extends BossController {
   private m: DraculaModel;
+  /** Seconds spent in the dark (far from lit candelabra) */
+  private darkT = 0;
+  private hands: ShadowHands[] = [];
   private candles: CandelabraModel[] = [];
   private state: 'intro' | 'dark' | 'weak' | 'rise' = 'intro';
   private t = 3.5;
@@ -1607,6 +2140,7 @@ class DraculaBoss extends BossController {
         this.group.visible = false;
         this.c.addEffect(burstEffect(this.root, this.pos.clone(), new THREE.MeshStandardMaterial({ color: 0x1f1029 }), 18, 0.3, 7, 1.3));
       }
+      this.updateHands(dt, time);
       return;
     }
 
@@ -1651,14 +2185,18 @@ class DraculaBoss extends BossController {
             this.swoopT = 4.2 - 1.4 * this.s.diff;
           }
         }
-        // Torches light the candelabra
+        // Torches light the candelabra (each torch lights two, then it burns out)
         if (this.has('antorcha')) {
           this.candles.forEach((cm, i) => {
-            if (cm.lit) return;
+            if (cm.lit || !this.has('antorcha')) return;
             const at = cm.group.position;
-            if (Math.hypot(p.x - at.x, p.z - at.z) < 2.4 && Math.abs(p.y - at.y) < 2.5) this.light(i, true);
+            if (Math.hypot(p.x - at.x, p.z - at.z) < 2.4 && Math.abs(p.y - at.y) < 2.5) {
+              this.light(i, true);
+              this.c.deps.items.wear('antorcha');
+            }
           });
         }
+        this.updateDarkness(dt);
         break;
       }
       case 'weak': {
@@ -1682,6 +2220,129 @@ class DraculaBoss extends BossController {
     this.group.position.copy(this.pos);
     this.group.rotation.y = this.yaw;
     this.center.copy(this.pos).add(V(0, 1.4, 0));
+    if (this.state !== 'dark') {
+      this.darkT = 0;
+      this.releaseHands();
+    }
+    this.updateHands(dt, time);
+  }
+
+  /** Too long far from the light: shadow hands come out of the floor under you. */
+  private updateDarkness(dt: number) {
+    const p = this.c.playerPos;
+    if (this.c.grab || this.c.isDown || this.hands.some((h) => !h.visual && h.phase !== 'sink')) return;
+    const nearLight = this.candles.some((cm) => cm.lit && Math.hypot(p.x - cm.group.position.x, p.z - cm.group.position.z) < 7.5);
+    if (nearLight) {
+      this.darkT = Math.max(0, this.darkT - dt * 2);
+      return;
+    }
+    // The torch keeps them away a bit longer
+    this.darkT += dt * (this.has('antorcha') ? 0.5 : 1);
+    const limit = 8 - 2 * this.s.diff;
+    if (this.darkT > limit * 0.6) this.c.say('Las sombras se acercan… ¡ve a la luz de un candelabro!', 'drac-shadows', 6);
+    if (this.darkT >= limit) {
+      this.darkT = limit * 0.4;
+      const at = this.groundAt(0.3);
+      this.spawnHands(at, false);
+      this.c.deps.send('hands', 0, 1);
+    }
+  }
+
+  private spawnHands(at: THREE.Vector3, visual: boolean) {
+    const m = createShadowHands();
+    m.group.position.copy(at);
+    for (const a of m.arms) a.pivot.position.y = -1.9;
+    this.root.add(m.group);
+    this.hands.push({ m, pos: at.clone(), t: 0, phase: 'warn', visual, squeeze: 1 });
+    if (!visual) soundManager.playStalkerWarning();
+  }
+
+  private releaseHands() {
+    for (const h of this.hands) {
+      if (h.phase === 'hold' && !h.visual && this.c.grab) this.c.releaseGrab('other');
+      if (h.phase !== 'sink') {
+        h.phase = 'sink';
+        h.t = 0;
+      }
+    }
+  }
+
+  private updateHands(dt: number, time: number) {
+    const p = this.c.playerPos;
+    for (let k = this.hands.length - 1; k >= 0; k--) {
+      const h = this.hands[k];
+      h.t += dt;
+      const arms = h.m.arms;
+      (h.m.puddle.material as THREE.MeshBasicMaterial).opacity = h.phase === 'sink' ? Math.max(0, 0.85 - h.t) : Math.min(0.85, h.t * 1.5);
+      if (h.phase === 'warn') {
+        // The puddle spreads for a moment: time to run
+        h.m.puddle.scale.setScalar(0.4 + Math.min(1, h.t / 0.9) * 0.6);
+        if (h.t >= 0.9) {
+          h.phase = 'rise';
+          h.t = 0;
+        }
+      } else if (h.phase === 'rise') {
+        const k2 = Math.min(1, h.t / 0.35);
+        for (const a of arms) a.pivot.position.y = -1.9 * (1 - k2);
+        if (k2 >= 1) {
+          if (!h.visual && Math.hypot(p.x - h.pos.x, p.z - h.pos.z) < 1.6 && Math.abs(p.y - h.pos.y) < 1.5) {
+            const need = 6 + Math.round(3 * this.s.diff);
+            const ok = this.c.grabPlayer(
+              {
+                pos: h.pos,
+                onRelease: () => {
+                  if (h.phase !== 'sink') {
+                    h.phase = 'sink';
+                    h.t = 0;
+                  }
+                  this.darkT = 0;
+                },
+              },
+              need
+            );
+            if (ok) {
+              h.phase = 'hold';
+              h.t = 0;
+              this.c.say('¡Las manos de sombra te atraparon! Pulsa saltar para soltarte', 'drac-hands', 2);
+              continue;
+            }
+          }
+          h.phase = h.visual ? 'hold' : 'sink';
+          h.t = 0;
+        }
+      } else if (h.phase === 'hold') {
+        // Squeezes a little while you're caught
+        if (!h.visual) {
+          if (!this.c.grab) {
+            h.phase = 'sink';
+            h.t = 0;
+          } else {
+            h.squeeze -= dt;
+            if (h.squeeze <= 0) {
+              h.squeeze = 1.3;
+              this.c.invuln = 0;
+              this.c.damagePlayer(6, null, 0, 0);
+            }
+          }
+        } else if (h.t > 2.5) {
+          h.phase = 'sink';
+          h.t = 0;
+        }
+      } else if (h.phase === 'sink') {
+        for (const a of arms) a.pivot.position.y = -1.9 * Math.min(1, h.t / 0.5);
+        if (h.t > 0.9) {
+          disposeGroup(this.root, h.m.group);
+          this.hands.splice(k, 1);
+          continue;
+        }
+      }
+      // Arms lean in and fingers curl around the player
+      const grip = h.phase === 'hold' ? 1 : 0;
+      arms.forEach((a, i) => {
+        a.pivot.rotation.x = -0.35 - grip * 0.35 + Math.sin(time * 6 + i) * 0.08;
+        a.hand.rotation.x = -0.3 - grip * 0.9 + Math.sin(time * 9 + i * 2) * 0.1;
+      });
+    }
   }
 
   private hover(target: THREE.Vector3, dt: number, time: number) {
@@ -1736,23 +2397,31 @@ class DraculaBoss extends BossController {
     });
   }
 
-  onEvent(kind: string, i: number) {
+  onEvent(kind: string, i: number, _v: number, from: string) {
     if (kind === 'light') this.light(i, false);
+    else if (kind === 'hands' && this.state === 'dark') {
+      // A friend got caught in the dark: show the hands under them
+      const r = this.c.deps.remotes().find((x) => x.userId === from);
+      if (r) this.spawnHands(V(r.pos.x, this.s.floorY, r.pos.z), true);
+    }
   }
 
   hint(): string {
     const n = this.litCount();
+    const g = this.c.grab;
+    if (g) return `¡Las manos de sombra te tienen! Pulsa saltar muchas veces (${g.count}/${g.need})`;
     if (this.state === 'intro') return 'Drácula se acerca… toma una antorcha';
     if (this.state === 'weak') return '¡Está débil! Golpéalo ahora (bate, piedras o salto)';
     if (this.state === 'rise') return 'Drácula se recupera…';
-    if (!this.has('antorcha')) return `Toma una antorcha y prende los candelabros (${n}/${this.candles.length})`;
-    return `Acércate a los candelabros con la antorcha (${n}/${this.candles.length}) · esquiva sus picadas`;
+    if (!this.has('antorcha')) return `Toma una antorcha: cada una prende 2 candelabros (${n}/${this.candles.length}) · no te quedes mucho en la oscuridad`;
+    return `Acércate a los candelabros con la antorcha (${n}/${this.candles.length}) · quédate cerca de la luz y esquiva sus picadas`;
   }
 
   onDefeat(instant: boolean) {
     super.onDefeat(instant);
     this.clearPending();
     this.swoop = null;
+    this.releaseHands();
     this.c.darknessTarget = 0;
     this.candles.forEach((cm) => cm.setLit(true));
     if (instant) this.group.visible = false;
@@ -1760,6 +2429,8 @@ class DraculaBoss extends BossController {
 
   dispose() {
     for (const cm of this.candles) disposeGroup(this.root, cm.group);
+    for (const h of this.hands) disposeGroup(this.root, h.m.group);
+    this.hands = [];
     super.dispose();
   }
 }

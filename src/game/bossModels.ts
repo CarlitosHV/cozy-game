@@ -594,6 +594,56 @@ export function createGnomeKing(): GnomeKingModel {
   return { group, mallet, feet: parts.feet, scale };
 }
 
+export interface GnomeMinionModel {
+  group: THREE.Group;
+  /** Turned / tilted for the poke and tug animations */
+  inner: THREE.Group;
+  arms: THREE.Mesh[];
+  feet: THREE.Mesh[];
+  /** Warriors only */
+  spear: THREE.Group | null;
+}
+
+/** Little gnomes the king calls when he is netted: warriors (spear + shield) and helpers. */
+export function createGnomeMinion(kind: 'warrior' | 'helper'): GnomeMinionModel {
+  const group = new THREE.Group();
+  const inner = new THREE.Group();
+  inner.scale.setScalar(1.05);
+  group.add(inner);
+  const alert = basic(0x111111);
+  const parts = kind === 'warrior' ? gnome(inner, alert, 0xb91c1c, 0x475569) : gnome(inner, alert, 0x16a34a, 0xca8a04);
+  let spear: THREE.Group | null = null;
+  if (kind === 'warrior') {
+    // Helmet band, round shield and a little spear
+    const steel = std(0x94a3b8, 0.35, { metalness: 0.7 });
+    const helm = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.215, 0.1, 12, 1, true), steel);
+    helm.position.set(0, 0.8, -0.02);
+    inner.add(helm);
+    const shield = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.04, 14), std(0xb45309, 0.6));
+    shield.rotation.z = Math.PI / 2;
+    shield.position.set(-0.33, 0.33, 0.1);
+    inner.add(shield);
+    const boss = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), steel);
+    boss.position.set(-0.36, 0.33, 0.1);
+    inner.add(boss);
+    spear = new THREE.Group();
+    spear.position.set(0.33, 0.28, 0.05);
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.8, 6), std(0x78350f, 0.8));
+    shaft.rotation.x = Math.PI / 2;
+    shaft.position.z = 0.25;
+    spear.add(shaft);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.14, 6), steel);
+    tip.rotation.x = Math.PI / 2;
+    tip.position.z = 0.7;
+    spear.add(tip);
+    inner.add(spear);
+  }
+  group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+  });
+  return { group, inner, arms: parts.arms, feet: parts.feet, spear };
+}
+
 // ===========================================================================
 // 6. CONDE DRÁCULA + candelabra
 // ===========================================================================
@@ -704,3 +754,54 @@ export function createCandelabra(): CandelabraModel {
   };
   return model;
 }
+
+// ===========================================================================
+// Shadow hands (Drácula): black arms that come out of a puddle of darkness
+// ===========================================================================
+export interface ShadowHandsModel {
+  group: THREE.Group;
+  /** Each arm: pivot at the ground, `hand` at the tip (curls to grab) */
+  arms: { pivot: THREE.Group; hand: THREE.Group }[];
+  puddle: THREE.Mesh;
+}
+
+export function createShadowHands(): ShadowHandsModel {
+  const group = new THREE.Group();
+  const shadow = std(0x0a0612, 0.9, { emissive: new THREE.Color(0x2e1065), emissiveIntensity: 0.35 });
+  const puddle = new THREE.Mesh(
+    new THREE.CircleGeometry(1.5, 28),
+    new THREE.MeshBasicMaterial({ color: 0x05020a, transparent: true, opacity: 0.85, depthWrite: false })
+  );
+  puddle.rotation.x = -Math.PI / 2;
+  puddle.position.y = 0.04;
+  group.add(puddle);
+  const arms: ShadowHandsModel['arms'] = [];
+  const n = 5;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const pivot = new THREE.Group();
+    pivot.position.set(Math.cos(a) * 0.75, 0, Math.sin(a) * 0.75);
+    pivot.rotation.y = -a + Math.PI / 2;
+    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.14, 1.7, 7), shadow);
+    forearm.position.y = 0.85;
+    pivot.add(forearm);
+    const hand = new THREE.Group();
+    hand.position.y = 1.7;
+    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.3, 0.1), shadow);
+    hand.add(palm);
+    for (let k = 0; k < 4; k++) {
+      const f = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.022, 0.3, 5), shadow);
+      f.position.set(-0.1 + k * 0.067, 0.28, 0);
+      hand.add(f);
+    }
+    const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.025, 0.2, 5), shadow);
+    thumb.position.set(0.17, 0.08, 0);
+    thumb.rotation.z = -0.8;
+    hand.add(thumb);
+    pivot.add(hand);
+    group.add(pivot);
+    arms.push({ pivot, hand });
+  }
+  return { group, arms, puddle };
+}
+

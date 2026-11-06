@@ -23,6 +23,8 @@ import type { PlayerCharacterModel } from './models';
 import type { CharacterAppearance } from './character';
 import type { ProceduralTextures } from './textures';
 import { Effect, makeReticle, makeWaveRing, puffEffect } from './combatFx';
+import { COMPANION_POWERS } from './companionPowers';
+import { makeGlowTexture } from './levelKit';
 import { makeBat, makeBomb, makeBurger, makeFlame, makeFries, makeLightOrb, makeNetProjectile, makeStone } from './toolModels';
 import { BossController, createBossController } from './bosses';
 
@@ -93,6 +95,8 @@ export interface CombatStatus {
   down: boolean;
   /** Red, pulsing hint (grabbed, fainted) */
   urgent: boolean;
+  /** The companion is giving a tip (press I): who talks and what it says */
+  tip: { from: string; text: string } | null;
 }
 
 interface Shot {
@@ -165,7 +169,7 @@ export class CombatSystem {
   public elapsed = 0;
 
   private boss: BossController;
-  private invuln = 0;
+  public invuln = 0;
   private shots: Shot[] = [];
   private food: Food[] = [];
   private waves: Wave[] = [];
@@ -181,6 +185,12 @@ export class CombatSystem {
   private defeatTimer = -1;
   private msgCooldown: Record<string, number> = {};
   private stompCooldown = 0;
+  /** Companion tip (key I): it flies around the boss like a fairy guide while it talks */
+  private tip: { t: number; dur: number } | null = null;
+  private guide: THREE.Group | null = null;
+  private tipIntroShown = false;
+  private readonly _home = new THREE.Vector3();
+  private readonly _orbit = new THREE.Vector3();
   /** Fainted in a party: seconds left to be revived */
   private downT = -1;
   /** CPR being given to a friend */
@@ -646,6 +656,7 @@ export class CombatSystem {
     const model = this.deps.playerModel();
     model.group.visible = this.invuln > 0 && !this.isDown ? Math.floor(this.invuln * 12) % 2 === 0 : true;
     if (this.isDown) this.layDown(true);
+    this.updateTip(dt, time);
 
     // Darkness & torch
     this.darkness = THREE.MathUtils.damp(this.darkness, this.darknessTarget, 2.2, dt);
@@ -845,6 +856,85 @@ export class CombatSystem {
     this.prevJump = jump;
   }
 
+  /** Name of the one giving tips: your companion, or a little guide light without one. */
+  get guideName(): string {
+    const c = this.deps.playerModel().appearance.companion;
+    return (c && COMPANION_POWERS[c]?.companionName) || 'Lucecita';
+  }
+
+  /** Key I: the companion flies around the boss and tells you how to beat it. */
+  askTip() {
+    if (this.tip && this.tip.t < this.tip.dur - 0.8) {
+      this.tip.dur = this.tip.t + 0.8; // pressing again sends it back
+      return;
+    }
+    this.tip = { t: 0, dur: 7 };
+    soundManager.playTimeBonus();
+  }
+
+  /** Moves the companion (or the guide light) around the boss while it gives a tip. */
+  private updateTip(dt: number, time: number) {
+    if (!this.tipIntroShown && this.elapsed > 2.5) {
+      this.tipIntroShown = true;
+      this.deps.notify(`Pulsa I y ${this.guideName} te dirá cómo vencer a ${this.setup.short}`);
+    }
+    const model = this.deps.playerModel();
+    const sprite = model.companionSprite;
+    const useSprite = model.appearance.companion !== 'ninguno';
+    const tip = this.tip;
+    if (!tip) {
+      if (this.guide) this.guide.visible = false;
+      return;
+    }
+    tip.t += dt;
+    if (tip.t >= tip.dur) {
+      this.tip = null;
+      if (this.guide) this.guide.visible = false;
+      return;
+    }
+    // Out (0.7 s), orbiting, back (0.7 s)
+    const out = Math.min(1, tip.t / 0.7, (tip.dur - tip.t) / 0.7);
+    const k = out * out * (3 - 2 * out);
+    model.group.updateMatrixWorld(true);
+    model.group.localToWorld(this._home.set(0.42, 1.25, 0.15));
+    const focus = this.focus ?? this.playerPos;
+    const a = time * 2.6;
+    const r = 2.4;
+    this._orbit.set(focus.x + Math.cos(a) * r, focus.y + 0.8 + Math.sin(time * 3.3) * 0.5, focus.z + Math.sin(a) * r);
+    const world = this._home.lerp(this._orbit, k);
+    if (useSprite) {
+      sprite.position.copy(model.group.worldToLocal(world.clone()));
+      sprite.scale.setScalar(1 + k * 0.6);
+    } else {
+      if (!this.guide) {
+        const g = new THREE.Group();
+        const core = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), new THREE.MeshBasicMaterial({ color: 0xe0f2fe }));
+        g.add(core);
+        const glow = new THREE.Sprite(
+          new THREE.SpriteMaterial({ map: makeGlowTexture('rgba(125,211,252,0.95)'), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })
+        );
+        glow.scale.setScalar(1.1);
+        g.add(glow);
+        for (const s of [1, -1]) {
+          const wing = new THREE.Mesh(
+            new THREE.CircleGeometry(0.16, 10),
+            new THREE.MeshBasicMaterial({ color: 0xbae6fd, transparent: true, opacity: 0.7, side: THREE.DoubleSide })
+          );
+          wing.position.set(0.14 * s, 0.05, 0);
+          wing.name = 'wing';
+          g.add(wing);
+        }
+        this.deps.root.add(g);
+        this.guide = g;
+      }
+      this.guide.visible = true;
+      this.guide.position.copy(world);
+      this.guide.children.forEach((c, i) => {
+        if (c.name === 'wing') c.rotation.y = Math.sin(time * 30 + i) * 0.9;
+      });
+    }
+  }
+
   /** Fainted: wait for CPR (or wake up at the entrance when nobody can come). */
   private updateDown(dt: number) {
     if (!this.isDown) return;
@@ -906,6 +996,7 @@ export class CombatSystem {
   }
 
   getStatus(): CombatStatus {
+    const tipText = this.tip ? (this.defeated ? `¡Lo lograste! Ve al portal del centro` : this.boss.hint()) : null;
     let hint = this.defeated ? `¡Venciste a ${this.setup.short}!` : this.boss.hint();
     let urgent = !!this.grab;
     if (this.isDown) {
@@ -932,10 +1023,17 @@ export class CombatSystem {
       hurtId: this.hurtId,
       down: this.isDown,
       urgent,
+      tip: tipText ? { from: this.guideName, text: tipText } : null,
     };
   }
 
   dispose() {
+    if (this.guide) {
+      this.deps.root.remove(this.guide);
+      this.guide = null;
+    }
+    this.tip = null;
+    this.deps.playerModel().companionSprite.scale.setScalar(1);
     if (this.grab) {
       this.grab = null;
       this.deps.unlockMovement();

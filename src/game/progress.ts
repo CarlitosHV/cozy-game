@@ -8,6 +8,8 @@
  *  - Two generators: "Caja de arena" (open zone with orbs) and "Lucha contra jefes"
  *    (an arena with the world's boss). Which one a level gets is random but fixed per level.
  * Tip for testing: add ?desbloquear=todo to the URL to unlock everything (up to level 61).
+ * Developer mode (see devMode.ts): unlocks every level and companion without touching the saved
+ * progress, and can turn any level from 5 on into the world / boss you want to test.
  */
 import type { CompanionStyle } from './character';
 
@@ -36,8 +38,52 @@ export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: s
   castle: { name: 'Castillo Embrujado', desc: 'Torres bajo la luna, vampiros, hombres lobo y gárgolas.', accent: '#ef4444' },
 };
 
+// ---------------------------------------------------------------------------
+// Developer mode: everything unlocked + one level turned into the world / generator you pick.
+// ---------------------------------------------------------------------------
+export interface DevLevelPick {
+  level: number;
+  kind: 'sandbox' | 'boss';
+  theme: ThemeId;
+}
+export const DEV_MAX_LEVEL = 61;
+const DEV_KEY = 'cozy-dev-mode';
+let devOn = (() => {
+  try {
+    return window.localStorage.getItem(DEV_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+let devPick: DevLevelPick | null = null;
+
+export function isDevMode(): boolean {
+  return devOn;
+}
+
+export function setDevMode(on: boolean): void {
+  devOn = on;
+  if (!on) devPick = null;
+  try {
+    if (on) window.localStorage.setItem(DEV_KEY, '1');
+    else window.localStorage.removeItem(DEV_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** Turn a level (5+) into the world and generator chosen in the developer panel; null clears it. */
+export function setDevLevelPick(pick: DevLevelPick | null): void {
+  devPick = pick && pick.level > 4 ? { ...pick, level: Math.floor(pick.level) } : null;
+}
+
+export function getDevLevelPick(): DevLevelPick | null {
+  return devPick;
+}
+
 /** Theme of any level: 1 to 6 in order (cozy, cosmic, swamp, aero, garden, castle), then looping smoothly. */
 export function themeForLevel(level: number): ThemeId {
+  if (devPick && devPick.level === level) return devPick.theme;
   const idx = Math.max(0, Math.floor(level) - 1);
   return THEME_ORDER[idx % THEME_ORDER.length];
 }
@@ -98,9 +144,10 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
   skeleton: {
     name: 'Huesudo, el Esqueleto del Pantano',
     short: 'Huesudo',
-    desc: 'Un esqueleto gigante sale del pantano con esqueletos bailarines.',
+    desc: 'Un esqueleto gigante se esconde en el pantano y sale por cualquier lado, hasta del lago.',
     steps: [
-      'Los esqueletos bailarines te atrapan y te llevan a la boca de Huesudo',
+      'Huesudo se agacha y sale en otro lugar: el círculo verde avisa por dónde',
+      'Los esqueletos bailarines te atrapan y te llevan a su boca: te mastica y te escupe',
       'Si te atrapan, pulsa saltar muchas veces para soltarte',
       'Rescata a tus amigos golpeando al que tiene la jaula de huesos',
       'Junta bombas y lánzalas a la boca de Huesudo cuando la abra',
@@ -112,9 +159,10 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
     desc: 'El rey de los gnomos ataca con su mazo gigante.',
     steps: [
       'El Rey Gnomo golpea el suelo con su mazo: salta las ondas',
-      'Lánzale la red para atraparlo unos segundos',
+      'Si el rey toma una red del suelo, te la lanza: sal del círculo celeste',
+      'Lánzale tú la red para atraparlo unos segundos',
+      'Salen gnomos guerreros a protegerlo y ayudantes a quitarle la red: pégales',
       'Mientras está atrapado, golpéalo con el bate, piedras o cayéndole encima',
-      'Las redes se rompen: busca otra si se te acaba',
     ],
   },
   dracula: {
@@ -123,7 +171,8 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
     desc: 'Drácula oscurece todo; solo la luz de los candelabros lo debilita.',
     steps: [
       'Drácula oscurece la pantalla y ataca en picada: esquívalo',
-      'Toma una antorcha y acércate a los candelabros para prenderlos',
+      'Toma una antorcha y acércate a los candelabros: cada antorcha prende solo 2',
+      'No te quedes mucho en la oscuridad: salen manos de sombra del suelo',
       'Con todos los candelabros prendidos, Drácula cae debilitado',
       'Golpéalo mientras está débil: luego volverá a apagar las velas',
     ],
@@ -144,6 +193,7 @@ function mulberry(seed: number) {
 /** Handmade worlds 1-4; from 5 on, each level is randomly (but always the same) a sandbox or a boss fight. */
 export function levelKind(level: number): LevelKind {
   if (level <= 4) return 'handmade';
+  if (devPick && devPick.level === level) return devPick.kind;
   return mulberry(level * 7717 + 3 * 131)() < 0.3 ? 'boss' : 'sandbox';
 }
 
@@ -363,7 +413,8 @@ export function highestCompleted(): number {
 
 /** The furthest level you can play right now. */
 export function maxPlayableLevel(): number {
-  return data().highestCompleted + 1;
+  const normal = data().highestCompleted + 1;
+  return devOn ? Math.max(normal, DEV_MAX_LEVEL) : normal;
 }
 
 export function isLevelUnlocked(level: number): boolean {
@@ -375,7 +426,7 @@ export function isLevelCompleted(level: number): boolean {
 }
 
 export function isCompanionUnlocked(c: CompanionStyle): boolean {
-  if (c === 'ninguno') return true;
+  if (c === 'ninguno' || devOn) return true;
   const lvl = unlockLevelFor(c);
   return lvl === undefined ? true : data().highestCompleted >= lvl;
 }
