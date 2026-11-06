@@ -172,6 +172,37 @@ interface GameHUDProps {
 }
 
 // --- 360° Analog Virtual Joystick for Mobile Devices with Auto-Sprint ---
+/** Life as hearts (20 points each), filling from the left; the last one beats when low. */
+const HeartRow: React.FC<{ hp: number; maxHp: number; hurt: boolean; compact: boolean }> = ({ hp, maxHp, hurt, compact }) => {
+  const per = 20;
+  const count = Math.max(1, Math.ceil(maxHp / per));
+  const size = compact ? 'w-5 h-5' : 'w-6 h-6';
+  const low = hp > 0 && hp <= per;
+  return (
+    <div
+      className={`flex items-center gap-0.5 rounded-full bg-stone-950/45 backdrop-blur-sm px-1.5 py-1 shadow-md ${hurt ? 'animate-[cozy-shake_0.3s_ease-in-out]' : ''}`}
+      role="img"
+      aria-label={`Vida: ${Math.ceil(hp / per)} de ${count} corazones`}
+    >
+      {Array.from({ length: count }, (_, i) => {
+        const fill = Math.max(0, Math.min(1, (hp - i * per) / per));
+        const beating = low && fill > 0;
+        return (
+          <span key={i} className={`relative inline-block ${size} ${beating ? 'animate-pulse' : ''}`}>
+            <Heart className={`absolute inset-0 ${size} text-stone-900/80`} fill="currentColor" strokeWidth={2.2} />
+            <Heart className={`absolute inset-0 ${size} text-rose-200/40`} strokeWidth={2.2} />
+            {fill > 0 && (
+              <span className="absolute inset-0 overflow-hidden" style={{ width: `${fill * 100}%` }}>
+                <Heart className={`${size} text-rose-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]`} fill="currentColor" strokeWidth={2.2} />
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+};
+
 const VirtualJoystick: React.FC<{
   onMove: (forward: number, right: number, isSprint: boolean) => void;
   compact?: boolean;
@@ -2314,48 +2345,34 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {gameState === 'playing' && combat && (
         <div
           className={`absolute pointer-events-none z-20 flex flex-col gap-1.5 ${
-            isMobileUi ? 'right-2 top-[3.4rem] w-[min(44vw,240px)] pr-safe' : 'left-1/2 -translate-x-1/2 top-14 w-[min(92vw,460px)]'
+            isMobileUi ? 'right-2 top-[3.4rem] w-[min(44vw,220px)] pr-safe' : 'left-1/2 -translate-x-1/2 top-14 w-[min(80vw,340px)]'
           }`}
         >
-          {/* Boss bar */}
-          <div className={`rounded-2xl bg-stone-950/80 border border-rose-500/50 shadow-lg backdrop-blur-md ${isMobileUi ? 'px-2 py-1.5' : 'px-3 py-2'}`}>
-            <div className="flex items-center justify-between gap-2">
-              <span className={`flex items-center gap-1.5 font-bold text-rose-100 truncate ${isMobileUi ? 'text-[10px]' : 'text-xs'}`}>
-                <Skull className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                {isMobileUi ? combat.bossShort : combat.bossName}
-              </span>
-              <span className="text-[10px] font-mono text-rose-200 tabular-nums">
-                {combat.defeated ? '¡Derrotado!' : `${Math.max(0, Math.round((combat.bossHp / combat.bossMax) * 100))}%`}
-              </span>
-            </div>
-            <div className="mt-1 h-2.5 rounded-full bg-stone-800 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-rose-600 via-rose-500 to-orange-400 transition-[width] duration-300"
-                style={{ width: `${Math.max(0, Math.min(100, (combat.bossHp / combat.bossMax) * 100))}%` }}
-              />
-            </div>
-            {combat.bossMax <= 8 && (
-              <div className="mt-1 flex gap-1">
+          {/* Boss bar — one slim row so the arena stays visible */}
+          <div className={`rounded-xl bg-stone-950/75 border border-rose-500/40 shadow-md backdrop-blur-md flex items-center gap-2 ${isMobileUi ? 'px-2 py-1' : 'px-2.5 py-1'}`}>
+            <Skull className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span className={`font-bold text-rose-100 truncate shrink min-w-0 ${isMobileUi ? 'text-[10px] max-w-[40%]' : 'text-[11px] max-w-[45%]'}`}>
+              {isMobileUi ? combat.bossShort : combat.bossName}
+            </span>
+            {combat.defeated ? (
+              <span className="ml-auto text-[10px] font-semibold text-rose-200">¡Derrotado!</span>
+            ) : combat.bossMax <= 8 ? (
+              <div className="flex-1 flex gap-0.5 min-w-[3rem]" aria-label={`Vida del jefe: ${combat.bossHp} de ${combat.bossMax}`}>
                 {Array.from({ length: combat.bossMax }, (_, i) => (
-                  <span key={i} className={`h-1.5 flex-1 rounded-full ${i < combat.bossHp ? 'bg-rose-400' : 'bg-stone-700'}`} />
+                  <span
+                    key={i}
+                    className={`h-2 flex-1 rounded-full transition-colors duration-300 ${i < combat.bossHp ? 'bg-gradient-to-r from-rose-500 to-orange-400' : 'bg-stone-700'}`}
+                  />
                 ))}
               </div>
+            ) : (
+              <div className="flex-1 h-2 rounded-full bg-stone-800 overflow-hidden min-w-[3rem]">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-rose-600 via-rose-500 to-orange-400 transition-[width] duration-300"
+                  style={{ width: `${Math.max(0, Math.min(100, (combat.bossHp / combat.bossMax) * 100))}%` }}
+                />
+              </div>
             )}
-          </div>
-          {/* Player life */}
-          <div className={`rounded-2xl bg-stone-950/75 border border-emerald-500/40 shadow-lg backdrop-blur-md flex items-center gap-2 ${isMobileUi ? 'px-2 py-1' : 'px-3 py-1.5'}`}>
-            <Heart className={`w-4 h-4 shrink-0 ${combat.hp <= 30 ? 'text-rose-400 animate-pulse' : 'text-emerald-400'}`} fill="currentColor" />
-            <div className="flex-1 h-2.5 rounded-full bg-stone-800 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-[width] duration-200 ${
-                  combat.hp <= 30 ? 'bg-gradient-to-r from-rose-600 to-rose-400' : 'bg-gradient-to-r from-emerald-600 to-lime-400'
-                }`}
-                style={{ width: `${(combat.hp / combat.maxHp) * 100}%` }}
-              />
-            </div>
-            <span className="text-[10px] font-mono text-emerald-100 tabular-nums">
-              {combat.hp}/{combat.maxHp}
-            </span>
           </div>
           {/* What to do now */}
           {(combat.hint || combat.portalOpen) && (
@@ -2371,6 +2388,21 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               {combat.portalOpen ? '¡Ganaste! Entra al portal del centro' : combat.hint}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Player life in boss fights: hearts in the bottom-left corner (above the joystick on touch) */}
+      {gameState === 'playing' && combat && (
+        <div
+          className={`absolute pointer-events-none z-20 pl-safe pb-safe ${
+            touchControlsEnabled && !isAnyModalOpen
+              ? compactControls
+                ? 'left-3 bottom-[7.2rem]'
+                : 'left-5 bottom-[9.6rem] sm:left-6 sm:bottom-[10.8rem]'
+              : 'left-4 bottom-4'
+          }`}
+        >
+          <HeartRow hp={combat.hp} maxHp={combat.maxHp} hurt={hurtFlash} compact={isMobileUi} />
         </div>
       )}
 
