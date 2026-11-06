@@ -157,10 +157,23 @@ export class RemotePlayersManager {
   private windTime: number = 0;
   private unsubs: Array<() => void> = [];
 
+  /** Level the local player is on (players of the room who are elsewhere are hidden) */
+  private levelGetter: (() => number) | null = null;
+
   constructor(scene: THREE.Scene, textures: ProceduralTextures) {
     this.scene = scene;
     this.textures = textures;
     this.setupNetworkCallbacks();
+  }
+
+  public setLevelGetter(fn: () => number) {
+    this.levelGetter = fn;
+  }
+
+  /** False when we know the player is on another level than ours. */
+  private onMyLevel(levelId: unknown): boolean {
+    if (!this.levelGetter || typeof levelId !== 'number' || !Number.isFinite(levelId)) return true;
+    return levelId === this.levelGetter();
   }
 
   private isLocalPlayer(player: { userId?: string; id?: string; username?: string }): boolean {
@@ -207,7 +220,7 @@ export class RemotePlayersManager {
           const p = normalizeRemotePlayer(raw);
           if (this.isLocalPlayer(p)) continue;
           const id = p.userId || p.id;
-          if (!id) continue;
+          if (!id || !this.onMyLevel(p.levelId)) continue;
           seenIds.add(id);
           this.addOrUpdatePlayer(p);
         }
@@ -225,8 +238,29 @@ export class RemotePlayersManager {
         const p = normalizeRemotePlayer(raw);
         if (this.isLocalPlayer(p)) return;
         const id = p.userId || p.id;
-        if (!id) return;
+        if (!id || !this.onMyLevel(p.levelId)) return;
         this.addOrUpdatePlayer(p);
+      })
+    );
+
+    // New look or name of a party member
+    this.unsubs.push(
+      multiplayerClient.addPlayerProfileListener((data) => {
+        if (this.isLocalPlayer({ userId: data.userId })) return;
+        const entity = this.players.get(data.userId);
+        if (!entity) return;
+        this.addOrUpdatePlayer({
+          userId: data.userId,
+          username: data.displayName,
+          displayName: data.displayName,
+          appearance: data.appearance,
+          x: entity.targetPos.x,
+          y: entity.targetPos.y,
+          z: entity.targetPos.z,
+          yaw: entity.targetYaw,
+          anim: entity.anim,
+          lastUpdate: performance.now(),
+        });
       })
     );
 
@@ -234,6 +268,11 @@ export class RemotePlayersManager {
       multiplayerClient.addPlayerMovedListener((update) => {
         if (!update.userId) return;
         if (this.isLocalPlayer({ userId: update.userId })) return;
+        if (!this.onMyLevel(update.levelId)) {
+          // Still on (or already moved to) another level: don't draw a ghost on our map
+          if (this.players.has(update.userId)) this.removePlayer(update.userId);
+          return;
+        }
 
         let entity = this.players.get(update.userId);
         if (!entity) {

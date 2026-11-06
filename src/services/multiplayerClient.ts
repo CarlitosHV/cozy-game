@@ -117,6 +117,9 @@ export interface InviteResultPayload {
   accepted: boolean;
   roomId?: string;
   levelId: number;
+  fromUserId?: string;
+  toUserId?: string;
+  fromUsername?: string;
   reason?: 'declined' | 'expired' | string;
 }
 
@@ -133,6 +136,16 @@ export interface PlayerMovedPayload {
   yaw: number;
   anim: 'idle' | 'walk' | 'run' | 'jump' | 'fall';
   action?: string;
+  /** Level the player is on (players of the same room can be on different levels for a moment) */
+  levelId?: number;
+}
+
+/** A party member changed their character or its name. */
+export interface PlayerProfilePayload {
+  userId: string;
+  displayName: string;
+  appearance?: CharacterAppearance;
+  levelId?: number;
 }
 
 export interface PlayerLeftPayload {
@@ -266,6 +279,7 @@ class MultiplayerClient {
   private roomStateListeners: Set<(players: RemotePlayer[], raw: RoomStatePayload) => void> = new Set();
   private playerJoinedListeners: Set<(player: RemotePlayer) => void> = new Set();
   private playerMovedListeners: Set<(data: PlayerMovedPayload) => void> = new Set();
+  private playerProfileListeners: Set<(data: PlayerProfilePayload) => void> = new Set();
   private playerLeftListeners: Set<(data: PlayerLeftPayload) => void> = new Set();
   private inviteReceivedListeners: Set<(data: InviteReceivedPayload) => void> = new Set();
   private inviteSentListeners: Set<(data: InviteSentPayload) => void> = new Set();
@@ -308,6 +322,9 @@ class MultiplayerClient {
     events: WorldEventPayload[];
   } | null = null;
   private lastBlockSend = new Map<number, number>();
+  /** The character the player is wearing right now (sent when joining and when it changes) */
+  private localLook: CharacterAppearance | null = null;
+  private profileTimer: ReturnType<typeof setTimeout> | null = null;
 
   private lastSyncTime: number = 0;
   private syncThrottleMs: number = 33;
@@ -332,6 +349,11 @@ class MultiplayerClient {
   public addRoomStateListener(cb: (players: RemotePlayer[], raw: RoomStatePayload) => void): () => void {
     this.roomStateListeners.add(cb);
     return () => this.roomStateListeners.delete(cb);
+  }
+
+  public addPlayerProfileListener(cb: (data: PlayerProfilePayload) => void): () => void {
+    this.playerProfileListeners.add(cb);
+    return () => this.playerProfileListeners.delete(cb);
   }
 
   public addPlayerJoinedListener(cb: (player: RemotePlayer) => void): () => void {
@@ -613,6 +635,7 @@ class MultiplayerClient {
 
       const payload: PlayerMovedPayload = {
         userId,
+        levelId: Number.isFinite(data.levelId) ? data.levelId : undefined,
         x: Number.isFinite(data.x) ? data.x : Number(data.position?.x) || 0,
         y: Number.isFinite(data.y) ? data.y : Number(data.position?.y) || 0,
         z: Number.isFinite(data.z) ? data.z : Number(data.position?.z) || 0,
@@ -624,6 +647,7 @@ class MultiplayerClient {
       // Update cached player
       const cached = this.partyPlayers.get(userId);
       if (cached) {
+        if (payload.levelId !== undefined) cached.levelId = payload.levelId;
         cached.x = payload.x;
         cached.y = payload.y;
         cached.z = payload.z;
@@ -643,6 +667,33 @@ class MultiplayerClient {
 
       if (this.onPlayerMoved) {
         this.onPlayerMoved(payload);
+      }
+    });
+
+    // Backend Response: player:profile (new look or name of a party member)
+    this.socket.on('player:profile', (raw: any) => {
+      if (!raw) return;
+      const userId = getPlayerId(raw);
+      if (!userId) return;
+      const payload: PlayerProfilePayload = {
+        userId,
+        displayName: getPlayerDisplayName(raw),
+        appearance: raw.appearance,
+        levelId: Number.isFinite(raw.levelId) ? raw.levelId : undefined,
+      };
+      const cached = this.partyPlayers.get(userId);
+      if (cached) {
+        cached.displayName = payload.displayName;
+        cached.name = payload.displayName;
+        cached.playerName = payload.displayName;
+        if (payload.appearance) cached.appearance = payload.appearance;
+      }
+      for (const listener of this.playerProfileListeners) {
+        try {
+          listener(payload);
+        } catch (e) {
+          console.error('[MultiplayerClient] playerProfile listener error:', e);
+        }
       }
     });
 
@@ -879,12 +930,38 @@ class MultiplayerClient {
 
   private emitJoin(levelId: number, roomId: string) {
     if (!this.socket || !this.socket.connected) return;
-    const appearance = loadAppearance();
+    // The character as it is right now, name included, so the party sees it as you made it
+    const appearance = this.localLook || loadAppearance();
     this.socket.emit('room:join', {
       levelId,
       roomId,
       appearance,
+      name: appearance?.name,
     });
+  }
+
+  /**
+   * The player changed their character (Personalizar). Remembered for the next join and, while
+   * in a party room, sent to the others (grouped: the creator changes it on every click).
+   */
+  public setLocalLook(appearance: CharacterAppearance): void {
+    this.localLook = { ...appearance };
+    if (!this.isInPartyRoom()) return;
+    // Our own entry in the room list shows the new name right away
+    const selfId = this.selfPlayer?.userId || this.selfPlayer?.id;
+    const me = selfId ? this.partyPlayers.get(selfId) : undefined;
+    const typed = (appearance.name || '').trim();
+    if (me && typed && !/^(viajer[oa]|explorador[a]?)$/i.test(typed)) {
+      me.displayName = typed;
+      me.name = typed;
+      me.playerName = typed;
+    }
+    if (this.profileTimer) clearTimeout(this.profileTimer);
+    this.profileTimer = setTimeout(() => {
+      this.profileTimer = null;
+      if (!this.socket?.connected || !this.isInPartyRoom() || !this.localLook) return;
+      this.socket.emit('player:profile', { appearance: this.localLook, name: this.localLook.name });
+    }, 400);
   }
 
   /**

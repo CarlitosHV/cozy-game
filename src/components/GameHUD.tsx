@@ -107,6 +107,7 @@ import {
   COMPANIONS,
   loadAppearance,
   loadRoster,
+  sanitizeAppearance,
 } from '../game/character';
 import {
   PHOTO_FILTERS,
@@ -718,8 +719,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showToast(`Entraste a la sala · nivel ${levelId}`, 2200, 'success');
   };
 
+  /** Level to invite friends to: the one being played, or the one picked on the title screen. */
+  const inviteLevel = () => (engine && engine.gameState !== 'title' ? engine.currentLevel : pendingLevel);
+
   const handleInviteToPlay = (friend: FriendUser) => {
-    const levelId = engine?.currentLevel ?? pendingLevel;
+    const levelId = inviteLevel();
     multiplayerClient.connect();
     const currentRoom = multiplayerClient.getCurrentRoomId();
     multiplayerClient.sendInvite(friend._id, levelId, currentRoom || undefined);
@@ -743,6 +747,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       multiplayerClient.addPlayerJoinedListener((player) => {
         const name = getPlayerDisplayName(player);
         showToast(`¡${name} se unió a la sala!`, 3200, 'success');
+        setPartyMembers(
+          Array.from(multiplayerClient.getPartyPlayers().values()).map(getPlayerDisplayName)
+        );
+      })
+    );
+
+    unsubs.push(
+      // A friend renamed their character: refresh the names of the room
+      multiplayerClient.addPlayerProfileListener(() => {
         setPartyMembers(
           Array.from(multiplayerClient.getPartyPlayers().values()).map(getPlayerDisplayName)
         );
@@ -780,8 +793,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       multiplayerClient.addInviteResultListener((data) => {
         setIncomingInvite((cur) => (cur?.inviteId === data.inviteId ? null : cur));
         if (data.accepted && data.roomId) {
+          const me = apiClient.getCurrentUser()?._id;
+          const iInvited = Boolean(me && data.fromUserId === me);
           if (multiplayerClient.getCurrentRoomId() === data.roomId && multiplayerClient.isInPartyRoom()) {
             showToast('¡Invitación aceptada! Tu amigo se ha unido a la partida.', 2800, 'success');
+          } else if (iInvited && engine && engine.gameState !== 'title' && engine.currentLevel === data.levelId) {
+            // You invited from inside the level: keep playing where you are, your friend comes to you
+            engine.setPartyRoom(data.roomId, true);
+            sessionStorage.setItem(
+              'cozy_party_session',
+              JSON.stringify({ roomId: data.roomId, levelId: data.levelId, joinedAt: Date.now() })
+            );
+            showToast('¡Invitación aceptada! Tu amigo viene a tu nivel.', 2800, 'success');
           } else {
             enterPartyRoom(data.levelId, data.roomId);
           }
@@ -1053,12 +1076,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const handleProfileSynced = (profile: PlayerProfileData) => {
     setCurrentUser(apiClient.getCurrentUser());
     if (profile.appearance && engine) {
-      const fullAppearance = {
-        ...appearance,
-        ...(profile.appearance as Partial<CharacterAppearance>),
-      };
-      setAppearance(fullAppearance);
-      engine.setPlayerAppearance(fullAppearance);
+      const saved = profile.appearance as Record<string, unknown>;
+      // Only a character saved by the game itself is complete; older profiles hold the server's
+      // default look and would replace the one you made. In that case upload yours instead.
+      const madeInGame = 'sweaterColor' in saved || 'outfitStyle' in saved || 'eyeStyle' in saved;
+      if (madeInGame) {
+        const fullAppearance = sanitizeAppearance({ ...appearance, ...saved });
+        setAppearance(fullAppearance);
+        engine.setPlayerAppearance(fullAppearance);
+      } else if (apiClient.isAuthenticated()) {
+        apiClient.updateAppearance(appearance).catch(() => {});
+      }
     }
     if (profile.progress?.maxUnlockedLevel) {
       syncProgressFromBackend(profile.progress.maxUnlockedLevel - 1);
@@ -4103,7 +4131,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       <PartyRoomModal
         isOpen={showPartyModal}
         onClose={() => setShowPartyModal(false)}
-        levelId={engine?.currentLevel ?? pendingLevel}
+        levelId={inviteLevel()}
         onInviteFriend={handleInviteToPlay}
         onOpenFriends={() => {
           setShowPartyModal(false);

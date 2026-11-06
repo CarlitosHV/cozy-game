@@ -355,6 +355,9 @@ export class GameEngine {
 
     // 8b. Online Multiplayer Remote Players Manager
     this.remotePlayers = new RemotePlayersManager(this.scene, this.textures);
+    // Only show party members who are on the same level as us
+    this.remotePlayers.setLevelGetter(() => this.currentLevel);
+    multiplayerClient.setLocalLook(this.playerAppearance);
     // Shared puzzle progress inside a party: orbs found and rocks pushed by anyone count for everyone
     multiplayerClient.addWorldStateListener((data) => {
       if (data.levelId === this.currentLevel) this.applySharedWorld(data);
@@ -381,9 +384,12 @@ export class GameEngine {
         Number.isFinite(raw.yourSpawn.z)
       ) {
         this.hasAppliedRoomSpawn = true;
-        this.physics.position.set(raw.yourSpawn.x, raw.yourSpawn.y, raw.yourSpawn.z);
-        this.physics.velocity.set(0, 0, 0);
-        this.playerModel.group.position.copy(this.physics.position);
+        // The server's spawn is only a slot number in practice (levels start in different
+        // places): stand next to the others at the level's start, unless already on the way.
+        const start = this.world.checkpoints[0]?.spawnPos;
+        if (start && this.physics.position.distanceTo(start) < 4) {
+          this.physics.respawnAtCheckpoint(0, false, this.getPartySpawnOffset());
+        }
       }
     });
 
@@ -512,6 +518,8 @@ export class GameEngine {
   public setPlayerAppearance(appearance: CharacterAppearance, persist: boolean = true) {
     this.playerAppearance = { ...appearance };
     if (!isCompanionUnlocked(this.playerAppearance.companion)) this.playerAppearance.companion = 'ninguno';
+    // The party sees the new look (and name) too
+    multiplayerClient.setLocalLook(this.playerAppearance);
     const old = this.playerModel;
     const next = createPlayerCharacter(this.textures, this.playerAppearance);
     next.group.position.copy(old.group.position);
@@ -659,7 +667,8 @@ export class GameEngine {
   /** Unloads the current level and builds another one (keeps player, companion & backpack). */
   public loadLevel(level: number) {
     level = Math.max(1, Math.floor(level));
-    if (level === this.currentLevel || !isLevelUnlocked(level)) return;
+    // In a party you go wherever the group is, even to a level you haven't unlocked yet
+    if (level === this.currentLevel || (!isLevelUnlocked(level) && !this.partyRoomId)) return;
 
     // Tear down the old world
     this.disposeCombat();
@@ -1759,6 +1768,10 @@ export class GameEngine {
       this.world.levelUpdate?.(dt, time);
       if (this.partyRoomId && this.remotePlayers) {
         this.remotePlayers.update(dt);
+        // Keep telling the party where we are (reading the level intro, a menu, paused…),
+        // otherwise they'd see us at the server's default spot until we move
+        const p = this.physics.position;
+        multiplayerClient.syncPlayer(p.x, p.y, p.z, this.playerModel.group.rotation.y, 'idle');
       }
       return;
     }
