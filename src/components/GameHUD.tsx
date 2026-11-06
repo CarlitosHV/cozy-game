@@ -91,6 +91,8 @@ import {
   multiplayerClient,
   InviteReceivedPayload,
   getPlayerDisplayName,
+  RoomAllFinishedPayload,
+  RoomPlayerFinishedPayload,
 } from '../services/multiplayerClient';
 import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus, STACK_MAX, DURABILITY } from '../game/items';
 import type { CombatStatus } from '../game/combat';
@@ -159,6 +161,13 @@ interface GameHUDProps {
   isPortrait?: boolean;
   showEasterEgg?: boolean;
   onDismissEasterEgg?: () => void;
+  isSpectating?: boolean;
+  spectateTargetName?: string;
+  spectateRank?: number;
+  spectateTime?: number;
+  roomSummary?: RoomAllFinishedPayload | null;
+  roomFinishNotice?: RoomPlayerFinishedPayload | null;
+  onDismissRoomSummary?: () => void;
 }
 
 // --- 360° Analog Virtual Joystick for Mobile Devices with Auto-Sprint ---
@@ -447,6 +456,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   isPortrait = false,
   showEasterEgg = false,
   onDismissEasterEgg,
+  isSpectating = false,
+  spectateTargetName = '',
+  spectateRank = 1,
+  spectateTime = 0,
+  roomSummary = null,
+  roomFinishNotice = null,
+  onDismissRoomSummary,
 }) => {
   const [isMuted, setIsMuted] = useState(() => soundManager.getMuted());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -4170,6 +4186,149 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 className={`flex-1 ${BTN.primary}`}
               >
                 {UI.acceptRequest}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isSpectating && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-2 pointer-events-auto max-w-[94vw] animate-in fade-in slide-in-from-top-3 duration-300">
+          <div className="px-4 sm:px-5 py-2.5 rounded-2xl bg-black/80 backdrop-blur-md text-white border border-white/20 shadow-2xl flex flex-wrap items-center justify-center gap-3 sm:gap-4 text-xs font-medium">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-bold text-amber-300">Modo Espectador</span>
+              <span className="text-white/40">·</span>
+              <span className="text-emerald-300 font-semibold">
+                Meta alcanzada (#{spectateRank} en {spectateTime > 0 ? `${spectateTime.toFixed(1)}s` : `${elapsedTime.toFixed(1)}s`})
+              </span>
+            </div>
+
+            <div className="hidden sm:block h-4 w-px bg-white/20" />
+
+            <div className="flex items-center gap-2">
+              <span className="text-white/70">Observando a:</span>
+              <span className="font-bold text-white px-2.5 py-1 rounded-xl bg-white/15 border border-white/10 shadow-xs">
+                {spectateTargetName || 'Compañero'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => engine?.cycleSpectateTarget(-1)}
+                title="Jugador anterior (Q / Shift+Tab)"
+                className="px-2.5 py-1 rounded-xl bg-white/15 hover:bg-white/25 active:scale-95 text-xs font-semibold cursor-pointer transition-all flex items-center gap-1"
+              >
+                <span>◀</span>
+                <span className="hidden md:inline">Anterior (Q)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => engine?.cycleSpectateTarget(1)}
+                title="Siguiente jugador (E / Tab / Espacio)"
+                className="px-2.5 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-semibold cursor-pointer transition-all flex items-center gap-1 shadow-xs"
+              >
+                <span className="hidden md:inline">Siguiente (E)</span>
+                <span>▶</span>
+              </button>
+            </div>
+          </div>
+          <div className="text-[11px] text-white/80 drop-shadow-md bg-black/40 px-3 py-1 rounded-full backdrop-blur-xs">
+            Usa las teclas <span className="font-bold text-amber-300">E</span> o <span className="font-bold text-amber-300">Q</span> para cambiar de compañero
+          </div>
+        </div>
+      )}
+
+      {roomFinishNotice && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 pointer-events-none animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="px-4 py-2 rounded-2xl bg-amber-500/95 text-stone-950 font-bold text-xs shadow-xl border border-amber-300 flex items-center gap-2">
+            <span>🏁</span>
+            <span>
+              ¡{roomFinishNotice.displayName || roomFinishNotice.username || 'Un compañero'} llegó a la meta en puesto #{roomFinishNotice.rank ?? 1}
+              {roomFinishNotice.timeSeconds ? ` (${roomFinishNotice.timeSeconds.toFixed(1)}s)` : ''}!
+            </span>
+          </div>
+        </div>
+      )}
+
+      {roomSummary && (
+        <div className="fixed inset-0 flex items-center justify-center pointer-events-auto bg-black/60 backdrop-blur-sm p-4 sm:p-6 z-50 animate-in fade-in duration-300">
+          <div className="w-full max-w-md rounded-[1.75rem] cozy-panel p-6 flex flex-col items-center text-center font-ui gap-5 shadow-2xl border border-white/40">
+            <div className="space-y-1">
+              <div className="text-3xl">🏆</div>
+              <h2 className="text-2xl font-display font-bold text-cozy-ink">
+                ¡Todos completaron el nivel!
+              </h2>
+              <p className="text-xs text-cozy-muted">
+                Nivel {roomSummary.levelId} · Podio de la Sala
+              </p>
+            </div>
+
+            <div className="w-full space-y-2 max-h-60 overflow-y-auto pr-1">
+              {Array.isArray(roomSummary.summary) && roomSummary.summary.length > 0 ? (
+                roomSummary.summary.map((entry: any, i: number) => {
+                  const rank = entry.rank || i + 1;
+                  const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`;
+                  return (
+                    <div
+                      key={entry.userId || rank}
+                      className={`flex items-center justify-between p-3 rounded-2xl border ${
+                        rank === 1
+                          ? 'bg-amber-50 border-amber-300 text-amber-950 font-bold shadow-xs'
+                          : 'bg-stone-50 border-stone-200 text-stone-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-lg w-6 text-center">{medal}</span>
+                        <span className="text-xs font-semibold">
+                          {entry.displayName || entry.username || entry.name || 'Explorador'}
+                        </span>
+                      </div>
+                      <div className="text-xs font-mono font-bold text-emerald-700">
+                        {typeof entry.timeSeconds === 'number' ? `${entry.timeSeconds.toFixed(2)}s` : '--'}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-xs text-stone-500 py-3">¡Carrera completada con éxito!</p>
+              )}
+            </div>
+
+            <div className="w-full flex flex-col gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  multiplayerClient.emitAdvanceLevel();
+                  onDismissRoomSummary?.();
+                }}
+                className={`${BTN.primary} flex items-center justify-center gap-2`}
+              >
+                <span>Avanzar al siguiente nivel juntos</span>
+                <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onDismissRoomSummary?.();
+                  handleRestart(gameMode);
+                }}
+                className={BTN.ghost}
+              >
+                Reintentar nivel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onDismissRoomSummary?.();
+                  handleReturnToTitle();
+                }}
+                className="text-xs text-stone-500 hover:text-stone-800 cursor-pointer pt-1"
+              >
+                Salir al menú principal
               </button>
             </div>
           </div>

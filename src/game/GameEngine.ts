@@ -26,7 +26,14 @@ import { CombatStatus, CombatSystem } from './combat';
 import { PuzzleSystem } from './puzzles';
 import { CompanionStyle } from './character';
 import { RemotePlayersManager } from './RemotePlayersManager';
-import { multiplayerClient } from '../services/multiplayerClient';
+import {
+  multiplayerClient,
+  RoomPlayerFinishedPayload,
+  RoomAllFinishedPayload,
+  RoomLevelChangedPayload,
+  SpectateStartedPayload,
+  SpectateSwitchedPayload,
+} from '../services/multiplayerClient';
 import { apiClient } from '../services/apiClient';
 
 export { LEVELS };
@@ -74,6 +81,16 @@ export interface GameEngineCallbacks {
   onTimeTrialTick?: (timeRemaining: number, bonusNotice?: { seconds: number; reason: string }) => void;
   onStalkerProximity?: (distance: number, warningLevel: 'none' | 'caution' | 'danger') => void;
   onEasterEgg?: () => void;
+  onSpectateChange?: (
+    isSpectating: boolean,
+    targetUserId: string | null,
+    targetName: string,
+    rank?: number,
+    timeSeconds?: number
+  ) => void;
+  onRoomPlayerFinished?: (payload: RoomPlayerFinishedPayload) => void;
+  onRoomAllFinished?: (payload: RoomAllFinishedPayload) => void;
+  onRoomLevelChanged?: (payload: RoomLevelChangedPayload) => void;
 }
 
 export class GameEngine {
@@ -102,6 +119,7 @@ export class GameEngine {
   public puzzleSystem: PuzzleSystem = new PuzzleSystem();
   /** 3D online multiplayer avatars */
   public remotePlayers!: RemotePlayersManager;
+  private hasAppliedRoomSpawn = false;
   /** Boss fights: life bar, tools, the boss itself (null on other levels) */
   public combat: CombatSystem | null = null;
   private lookRaise = 0;
@@ -145,7 +163,17 @@ export class GameEngine {
   /** When true, Escape will not toggle pause (HUD overlays handle Esc first). */
   public pauseToggleBlocked: boolean = false;
   /** Private party room from invite:result (`party_*`). Null = public level room. */
-  private partyRoomId: string | null = null;
+  public partyRoomId: string | null = null;
+  public levelStartTime: number = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+  // Spectator Mode in Party Rooms
+  public isSpectating: boolean = false;
+  public spectateTargetUserId: string | null = null;
+  public spectateTargetName: string = '';
+  public spectateRank: number = 1;
+  public spectateTimeSeconds: number = 0;
+  public spectateSummary: RoomAllFinishedPayload | null = null;
+
   private reverseRunTimer: number = 0;
   private directionTurnCooldown: number = 0;
   private lastInputVector = new THREE.Vector2();
@@ -345,17 +373,86 @@ export class GameEngine {
     });
     multiplayerClient.addRoomStateListener((_players, raw) => {
       if (
+        !this.hasAppliedRoomSpawn &&
         this.gameState === 'playing' &&
         raw?.yourSpawn &&
         Number.isFinite(raw.yourSpawn.x) &&
         Number.isFinite(raw.yourSpawn.y) &&
         Number.isFinite(raw.yourSpawn.z)
       ) {
+        this.hasAppliedRoomSpawn = true;
         this.physics.position.set(raw.yourSpawn.x, raw.yourSpawn.y, raw.yourSpawn.z);
         this.physics.velocity.set(0, 0, 0);
         this.playerModel.group.position.copy(this.physics.position);
       }
     });
+
+    // Spectator and synchronized room progression listeners
+    multiplayerClient.addSpectateStartedListener((payload) => {
+      this.isSpectating = true;
+      this.spectateRank = payload.rank ?? this.spectateRank;
+      this.spectateTimeSeconds = payload.timeSeconds ?? this.spectateTimeSeconds;
+      if (payload.targetUserId) {
+        this.spectateTargetUserId = payload.targetUserId;
+        const ent = this.remotePlayers?.getPlayerEntity(payload.targetUserId);
+        this.spectateTargetName = ent?.username || 'Compañero';
+      } else if (!this.spectateTargetUserId) {
+        const next = this.remotePlayers?.getNextSpectateTarget(null);
+        if (next) {
+          this.spectateTargetUserId = next.userId;
+          this.spectateTargetName = next.username;
+        }
+      }
+      this.physics.isMovementLocked = true;
+      this.physics.velocity.set(0, 0, 0);
+      this.callbacks.onSpectateChange?.(
+        true,
+        this.spectateTargetUserId,
+        this.spectateTargetName,
+        this.spectateRank,
+        this.spectateTimeSeconds
+      );
+    });
+
+    multiplayerClient.addPlayerFinishedNoticeListener((payload) => {
+      this.callbacks.onRoomPlayerFinished?.(payload);
+      if (
+        this.isSpectating &&
+        this.spectateTargetUserId &&
+        (payload.userId === this.spectateTargetUserId || payload.id === this.spectateTargetUserId)
+      ) {
+        this.cycleSpectateTarget(1);
+      }
+    });
+
+    multiplayerClient.addSpectateSwitchedListener((payload) => {
+      this.spectateTargetUserId = payload.targetUserId;
+      const ent = this.remotePlayers?.getPlayerEntity(payload.targetUserId);
+      this.spectateTargetName = ent?.username || this.spectateTargetName || 'Compañero';
+      this.callbacks.onSpectateChange?.(
+        true,
+        this.spectateTargetUserId,
+        this.spectateTargetName,
+        this.spectateRank,
+        this.spectateTimeSeconds
+      );
+    });
+
+    multiplayerClient.addRoomAllFinishedListener((payload) => {
+      this.spectateSummary = payload;
+      this.callbacks.onRoomAllFinished?.(payload);
+      soundManager.playVictory();
+    });
+
+    multiplayerClient.addRoomLevelChangedListener((payload) => {
+      this.stopSpectating();
+      this.callbacks.onRoomLevelChanged?.(payload);
+      if (payload.levelId && payload.levelId !== this.currentLevel) {
+        this.loadLevel(payload.levelId);
+        this.beginRun(this.gameMode, false);
+      }
+    });
+
     this.resetCombat();
     if (this.partyRoomId) {
       multiplayerClient.joinLevel(this.currentLevel, this.partyRoomId);
@@ -623,9 +720,86 @@ export class GameEngine {
   /** From the victory screen: travel to the next level keeping your backpack. */
   public goToNextLevel() {
     const next = this.currentLevel + 1;
+    if (this.partyRoomId) {
+      multiplayerClient.emitAdvanceLevel();
+      return;
+    }
     if (!isLevelUnlocked(next)) return;
     this.loadLevel(next);
     this.beginRun(this.gameMode, false);
+  }
+
+  public startSpectating(targetUserId?: string, rank?: number, timeSeconds?: number) {
+    this.isSpectating = true;
+    if (typeof rank === 'number') this.spectateRank = rank;
+    if (typeof timeSeconds === 'number') this.spectateTimeSeconds = timeSeconds;
+    this.physics.isMovementLocked = true;
+    this.physics.velocity.set(0, 0, 0);
+    this.currentInput.forward = 0;
+    this.currentInput.right = 0;
+    this.currentInput.jump = false;
+    this.currentInput.sprint = false;
+    this.currentInput.crouch = false;
+
+    if (targetUserId) {
+      this.spectateTargetUserId = targetUserId;
+      const ent = this.remotePlayers?.getPlayerEntity(targetUserId);
+      this.spectateTargetName = ent?.username || 'Compañero';
+    } else {
+      const next = this.remotePlayers?.getNextSpectateTarget(null);
+      if (next) {
+        this.spectateTargetUserId = next.userId;
+        this.spectateTargetName = next.username;
+      }
+    }
+
+    this.callbacks.onSpectateChange?.(
+      true,
+      this.spectateTargetUserId,
+      this.spectateTargetName,
+      this.spectateRank,
+      this.spectateTimeSeconds
+    );
+  }
+
+  public setSpectateTarget(targetUserId: string) {
+    if (!this.isSpectating) return;
+    this.spectateTargetUserId = targetUserId;
+    const ent = this.remotePlayers?.getPlayerEntity(targetUserId);
+    this.spectateTargetName = ent?.username || 'Compañero';
+    multiplayerClient.emitSpectateSwitch(targetUserId);
+    this.callbacks.onSpectateChange?.(
+      true,
+      this.spectateTargetUserId,
+      this.spectateTargetName,
+      this.spectateRank,
+      this.spectateTimeSeconds
+    );
+  }
+
+  public cycleSpectateTarget(dir: 1 | -1 = 1) {
+    if (!this.isSpectating) return;
+    const next = this.remotePlayers?.getNextSpectateTarget(this.spectateTargetUserId, dir);
+    if (!next) return;
+    this.spectateTargetUserId = next.userId;
+    this.spectateTargetName = next.username;
+    multiplayerClient.emitSpectateSwitch(next.userId);
+    this.callbacks.onSpectateChange?.(
+      true,
+      this.spectateTargetUserId,
+      this.spectateTargetName,
+      this.spectateRank,
+      this.spectateTimeSeconds
+    );
+  }
+
+  public stopSpectating() {
+    this.isSpectating = false;
+    this.spectateTargetUserId = null;
+    this.spectateTargetName = '';
+    this.spectateSummary = null;
+    this.physics.isMovementLocked = false;
+    this.callbacks.onSpectateChange?.(false, null, '');
   }
 
   /** Uses the backpack item in a slot (0-4). */
@@ -695,6 +869,8 @@ export class GameEngine {
   }
 
   private beginRun(mode: GameMode | undefined, freshBackpack: boolean) {
+    this.stopSpectating();
+    this.levelStartTime = performance.now();
     this.lastUnlocked = null;
     this.clearPreviewCamera();
     this.resetCompanionPowers();
@@ -907,6 +1083,7 @@ export class GameEngine {
 
   public setPartyRoom(roomId: string | null, joinNow = true) {
     this.partyRoomId = roomId;
+    this.hasAppliedRoomSpawn = false;
     if (!roomId) {
       multiplayerClient.leaveRoom();
       this.remotePlayers?.clearAll();
@@ -919,6 +1096,7 @@ export class GameEngine {
   }
 
   public returnToTitle() {
+    this.stopSpectating();
     this.resetCombat();
     multiplayerClient.leaveRoom();
     this.partyRoomId = null;
@@ -1198,6 +1376,19 @@ export class GameEngine {
         this.startGame();
       }
       return;
+    }
+
+    if (this.isSpectating) {
+      if (e.code === 'KeyE' || e.code === 'Tab' || e.code === 'Space') {
+        e.preventDefault();
+        this.cycleSpectateTarget(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.code === 'KeyQ') {
+        e.preventDefault();
+        this.cycleSpectateTarget(-1);
+        return;
+      }
     }
 
     if (e.code === 'Escape') {
@@ -1777,15 +1968,24 @@ export class GameEngine {
       () => {
         // Milestone: Summit Victory! (finishing a level unlocks its companion)
         this.lastUnlocked = markLevelComplete(this.currentLevel);
-        this.gameState = 'victory';
-        this.callbacks.onStateChange('victory');
-        soundManager.playVictory();
         if (this.stalker) {
           this.stalker.isStunned = true;
           this.stalker.stunTimer = 999;
         }
         const theme = atmos(this.currentLevel);
         this.transitionWeather(theme.victoryWeather, 4.5, 'milestone', theme.victoryTitle, theme.victoryDesc);
+
+        if (this.partyRoomId) {
+          const timeSec = Math.max(1, Number(((performance.now() - this.levelStartTime) / 1000).toFixed(2)));
+          const relics = this.physics.collectedCount;
+          multiplayerClient.emitPlayerFinish(this.currentLevel, timeSec, relics);
+          this.startSpectating(undefined, 1, timeSec);
+          soundManager.playVictory();
+        } else {
+          this.gameState = 'victory';
+          this.callbacks.onStateChange('victory');
+          soundManager.playVictory();
+        }
       }
     );
 
@@ -1895,7 +2095,26 @@ export class GameEngine {
     this.cameraYaw = THREE.MathUtils.euclideanModulo(this.cameraYaw + Math.PI, Math.PI * 2) - Math.PI;
 
     // 8. Damped Third-Person Camera Follow
-    const playerPos = this.physics.position;
+    let followPos = this.physics.position;
+    if (this.isSpectating) {
+      let spectateEntity = this.spectateTargetUserId
+        ? this.remotePlayers?.getPlayerEntity(this.spectateTargetUserId)
+        : undefined;
+
+      if (!spectateEntity) {
+        const fallback = this.remotePlayers?.getNextSpectateTarget(null);
+        if (fallback) {
+          this.spectateTargetUserId = fallback.userId;
+          this.spectateTargetName = fallback.username;
+          spectateEntity = this.remotePlayers?.getPlayerEntity(fallback.userId);
+        }
+      }
+
+      if (spectateEntity) {
+        followPos = spectateEntity.currentPos;
+      }
+    }
+
     // Boss fights: when the boss is high above (bird on its tower, the UFO…) pull the camera back
     // and tilt it up a little — never so much that you lose sight of yourself and the ground
     // around you, where the warnings for falling rocks and lasers appear.
@@ -1903,8 +2122,8 @@ export class GameEngine {
     let back = 0;
     const focus = this.combat?.focus;
     if (focus) {
-      const dy = focus.y + 1.5 - (playerPos.y + 1.1);
-      const dxz = Math.hypot(focus.x - playerPos.x, focus.z - playerPos.z);
+      const dy = focus.y + 1.5 - (followPos.y + 1.1);
+      const dxz = Math.hypot(focus.x - followPos.x, focus.z - followPos.z);
       if (dy > 2 && dxz < 40) {
         const fade = THREE.MathUtils.clamp((40 - dxz) / 10, 0, 1);
         raise = THREE.MathUtils.clamp(dy * 0.12, 0, 1.1) * fade;
@@ -1914,7 +2133,7 @@ export class GameEngine {
     // Slow, smooth changes so the view doesn't bob around while dodging
     this.lookRaise = THREE.MathUtils.damp(this.lookRaise, raise, 1.2, dt);
     this.lookBack = THREE.MathUtils.damp(this.lookBack, back, 1.2, dt);
-    this.targetLookAt.set(playerPos.x, playerPos.y + 1.1 + this.lookRaise, playerPos.z);
+    this.targetLookAt.set(followPos.x, followPos.y + 1.1 + this.lookRaise, followPos.z);
 
     const camDist = Math.min(14, this.cameraDistance + this.lookBack);
     const cosPitch = Math.cos(this.cameraPitch);
@@ -1924,9 +2143,9 @@ export class GameEngine {
     const offsetY = sinPitch * camDist;
 
     this.targetCameraPos.set(
-      playerPos.x - offsetX,
-      playerPos.y + 1.1 + offsetY,
-      playerPos.z - offsetZ
+      followPos.x - offsetX,
+      followPos.y + 1.1 + offsetY,
+      followPos.z - offsetZ
     );
 
     // Exponential camera damping for buttery smooth motion
@@ -1940,9 +2159,9 @@ export class GameEngine {
     // Fade out foliage or trees that block the camera view of the player
     this.updateTreeOcclusion(dt);
 
-    // Follow light with player
-    this.dirLight.position.set(playerPos.x + 25, playerPos.y + 45, playerPos.z + 20);
-    this.dirLight.target.position.copy(playerPos);
+    // Follow light with player or spectated friend
+    this.dirLight.position.set(followPos.x + 25, followPos.y + 45, followPos.z + 20);
+    this.dirLight.target.position.copy(followPos);
     this.dirLight.target.updateMatrixWorld();
 
     // 8. Online Multiplayer Sync & Remote Players update
@@ -1961,9 +2180,9 @@ export class GameEngine {
         anim = 'walk';
       }
       multiplayerClient.syncPlayer(
-        playerPos.x,
-        playerPos.y,
-        playerPos.z,
+        this.physics.position.x,
+        this.physics.position.y,
+        this.physics.position.z,
         this.playerModel.group.rotation.y,
         anim
       );

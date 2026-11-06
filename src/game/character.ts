@@ -296,7 +296,7 @@ const STORAGE_KEY = 'aether-leap-characters-v2';
 const LEGACY_KEY = 'aether-leap-character-v1';
 
 /** Merges any partial/old stored data over the defaults so new fields never break. */
-export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType): CharacterAppearance {
+export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote: boolean = false): CharacterAppearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const body: BodyType = forcedBody ?? (r.bodyType === 'chica' ? 'chica' : 'chico');
   const out: CharacterAppearance = defaultAppearanceFor(body);
@@ -307,39 +307,99 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType): Charact
   const clamp = (v: unknown, min: number, max: number, fallback: number) =>
     typeof v === 'number' && isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
 
-  if (typeof r.name === 'string' && r.name.trim()) out.name = r.name.slice(0, 24);
-  if (typeof r.displayName === 'string' && r.displayName.trim()) out.name = r.displayName.slice(0, 24);
+  if (typeof r.displayName === 'string' && r.displayName.trim()) out.name = r.displayName.trim().slice(0, 24);
+  else if (typeof r.name === 'string' && r.name.trim()) out.name = r.name.trim().slice(0, 24);
+  else if (typeof r.playerName === 'string' && r.playerName.trim()) out.name = r.playerName.trim().slice(0, 24);
+
   if (isHex(r.skinColor)) out.skinColor = r.skinColor;
   if (isHex(r.hairColor)) out.hairColor = r.hairColor;
-  if (isHex(r.hatColor)) out.hatColor = r.hatColor;
+
   if (isHex(r.sweaterColor)) out.sweaterColor = r.sweaterColor;
-  if (isHex(r.shirtColor)) out.sweaterColor = r.shirtColor;
+  else if (isHex(r.shirtColor)) out.sweaterColor = r.shirtColor;
+
   if (isHex(r.detailColor)) out.detailColor = r.detailColor;
-  if (isHex(r.pantsColor)) out.detailColor = r.pantsColor;
-  if (oneOf(r.outfitStyle, outfitStylesFor(body))) out.outfitStyle = r.outfitStyle;
-  if (isHex(r.scarfColor)) out.scarfColor = r.scarfColor;
+  else if (isHex(r.pantsColor)) out.detailColor = r.pantsColor;
+
+  if (isHex(r.hatColor)) out.hatColor = r.hatColor;
+  else if (out.detailColor) out.hatColor = out.detailColor;
+
   if (isHex(r.bootColor)) out.bootColor = r.bootColor;
-  if (isHex(r.shoesColor)) out.bootColor = r.shoesColor;
-  if (oneOf(r.hairStyle, hairStylesFor(body))) out.hairStyle = r.hairStyle;
-  else if (r.hairStyle === 'ponytail') out.hairStyle = 'coleta';
-  else if (r.hairStyle === 'cozy_messy' || r.hairStyle === 'short_crop') out.hairStyle = 'flequillo';
-  if (oneOf(r.hatStyle, hatStylesFor(body))) out.hatStyle = r.hatStyle;
-  else if (typeof r.hat === 'string') {
-    if (r.hat === 'none' || r.hat === 'ninguno') out.hatStyle = 'ninguno';
-    else if (r.hat.includes('beanie') || r.hat.includes('gorro')) out.hatStyle = 'gorro';
-    else if (r.hat.includes('cap') || r.hat.includes('gorra')) out.hatStyle = 'gorra';
+  else if (isHex(r.shoesColor)) out.bootColor = r.shoesColor;
+
+  if (isHex(r.scarfColor)) out.scarfColor = r.scarfColor;
+  else if (out.detailColor) out.scarfColor = out.detailColor;
+
+  // Outfit & shirt style
+  if (oneOf(r.outfitStyle, outfitStylesFor(body))) {
+    out.outfitStyle = r.outfitStyle;
+  } else if (typeof r.shirtStyle === 'string') {
+    const s = r.shirtStyle.toLowerCase();
+    if (s.includes('hoodie') || s.includes('sudadera')) out.outfitStyle = 'sudadera';
+    else if (s.includes('jacket') || s.includes('chaqueta')) out.outfitStyle = 'chaqueta';
+    else if (s.includes('overall') || s.includes('overol')) out.outfitStyle = 'overol';
+    else if (s.includes('dress') || s.includes('vestido')) out.outfitStyle = 'vestido';
+    else if (s.includes('poncho')) out.outfitStyle = 'poncho';
+    else out.outfitStyle = 'sueter';
   }
-  if (oneOf(r.eyeStyle, EYE_STYLES)) out.eyeStyle = r.eyeStyle;
-  else if (typeof r.eyesStyle === 'string') {
-    if (r.eyesStyle.includes('big') || r.eyesStyle.includes('grand')) out.eyeStyle = 'grandes';
-    else if (r.eyesStyle.includes('happy') || r.eyesStyle.includes('felic')) out.eyeStyle = 'felices';
+
+  // Hair style
+  if (oneOf(r.hairStyle, hairStylesFor(body))) {
+    out.hairStyle = r.hairStyle;
+  } else if (typeof r.hairStyle === 'string') {
+    const h = r.hairStyle.toLowerCase();
+    if (h.includes('cozy_messy') || h.includes('messy') || h.includes('flequillo')) out.hairStyle = 'flequillo';
+    else if (h.includes('short_crop') || h.includes('crop') || h.includes('rapado') || h.includes('corto')) out.hairStyle = 'rapado';
+    else if (h.includes('spike') || h.includes('puntas')) out.hairStyle = 'puntas';
+    else if (h.includes('ponytail') || h.includes('coleta')) out.hairStyle = 'coleta';
+    else if (h.includes('braid') || h.includes('trenza')) out.hairStyle = 'trenzas';
+    else if (h.includes('bun') || h.includes('chongo')) out.hairStyle = 'chongo';
+    else if (h.includes('long') || h.includes('largo')) out.hairStyle = 'largo';
+  }
+
+  // Hat style
+  if (oneOf(r.hatStyle, hatStylesFor(body))) {
+    out.hatStyle = r.hatStyle;
+  } else if (typeof r.hat === 'string') {
+    const h = r.hat.toLowerCase();
+    if (h === 'none' || h === 'ninguno') out.hatStyle = 'ninguno';
+    else if (h.includes('beanie') || h.includes('gorro')) out.hatStyle = 'gorro';
+    else if (h.includes('cap') || h.includes('gorra')) out.hatStyle = 'gorra';
+    else if (h.includes('sunhat') || h.includes('sombrero')) out.hatStyle = 'sombrero';
+    else if (h.includes('flower') || h.includes('flores')) out.hatStyle = 'flores';
+    else if (h.includes('ear') || h.includes('orejas')) out.hatStyle = 'orejas';
+  }
+
+  // Eyes
+  if (oneOf(r.eyeStyle, EYE_STYLES)) {
+    out.eyeStyle = r.eyeStyle;
+  } else if (typeof r.eyesStyle === 'string') {
+    const e = r.eyesStyle.toLowerCase();
+    if (e.includes('big') || e.includes('grand') || e.includes('bright')) out.eyeStyle = 'grandes';
+    else if (e.includes('happy') || e.includes('felic')) out.eyeStyle = 'felices';
     else out.eyeStyle = 'redondos';
   }
-  if (oneOf(r.accessory, ACCESSORIES)) out.accessory = r.accessory;
-  else if (typeof r.glasses === 'string' && r.glasses !== 'none') out.accessory = 'lentes';
-  if (oneOf(r.companion, COMPANIONS) && isCompanionUnlocked(r.companion)) out.companion = r.companion;
-  if (typeof r.backpack === 'boolean') out.backpack = r.backpack;
-  else if (typeof r.backpack === 'string') out.backpack = r.backpack !== 'none';
+
+  // Accessories
+  if (oneOf(r.accessory, ACCESSORIES)) {
+    out.accessory = r.accessory;
+  } else if (typeof r.glasses === 'string' && r.glasses !== 'none' && r.glasses !== 'ninguno') {
+    out.accessory = 'lentes';
+  }
+
+  // Companion
+  if (oneOf(r.companion, COMPANIONS)) {
+    if (isRemote || isCompanionUnlocked(r.companion)) {
+      out.companion = r.companion;
+    }
+  }
+
+  // Backpack
+  if (typeof r.backpack === 'boolean') {
+    out.backpack = r.backpack;
+  } else if (typeof r.backpack === 'string') {
+    out.backpack = r.backpack !== 'none' && r.backpack !== 'ninguno' && r.backpack !== 'false';
+  }
+
   out.height = clamp(r.height, 0.88, 1.12, out.height);
   out.build = clamp(r.build, 0.88, 1.15, out.build);
   return out;

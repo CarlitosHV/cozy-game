@@ -37,7 +37,8 @@ function shade(hex: string, factor: number): THREE.Color {
 
 export function createPlayerCharacter(
   textures: ProceduralTextures,
-  appearance: CharacterAppearance = DEFAULT_APPEARANCE
+  appearance: CharacterAppearance = DEFAULT_APPEARANCE,
+  isRemote: boolean = false
 ): PlayerCharacterModel {
   const look = appearance;
   const isChica = look.bodyType === 'chica';
@@ -1374,6 +1375,17 @@ export function createPlayerCharacter(
     }
     companionAnim?.(windTime, dt);
   };
+
+  if (isRemote) {
+    group.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        if (mesh !== body && mesh !== head) {
+          mesh.castShadow = false;
+        }
+      }
+    });
+  }
 
   return {
     group,

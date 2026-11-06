@@ -124,8 +124,17 @@ export default function App() {
   const [stalkerDistance, setStalkerDistance] = useState<number>(24);
   const [stalkerWarningLevel, setStalkerWarningLevel] = useState<'none' | 'caution' | 'danger'>('none');
 
+  // Spectator mode & room synchronization states
+  const [isSpectating, setIsSpectating] = useState<boolean>(false);
+  const [spectateTargetName, setSpectateTargetName] = useState<string>('');
+  const [spectateRank, setSpectateRank] = useState<number>(1);
+  const [spectateTime, setSpectateTime] = useState<number>(0);
+  const [roomSummary, setRoomSummary] = useState<any | null>(null);
+  const [roomFinishNotice, setRoomFinishNotice] = useState<any | null>(null);
+
   const weatherTimerRef = useRef<number | null>(null);
   const timeBonusTimerRef = useRef<number | null>(null);
+  const finishNoticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -170,6 +179,26 @@ export default function App() {
         setStalkerWarningLevel(warningLevel);
       },
       onEasterEgg: () => setShowEasterEgg(true),
+      onSpectateChange: (spectating, _targetUserId, targetName, rank, timeSeconds) => {
+        setIsSpectating(spectating);
+        setSpectateTargetName(targetName || '');
+        if (typeof rank === 'number') setSpectateRank(rank);
+        if (typeof timeSeconds === 'number') setSpectateTime(timeSeconds);
+      },
+      onRoomPlayerFinished: (payload) => {
+        if (finishNoticeTimerRef.current) window.clearTimeout(finishNoticeTimerRef.current);
+        setRoomFinishNotice(payload);
+        finishNoticeTimerRef.current = window.setTimeout(() => {
+          setRoomFinishNotice(null);
+        }, 4000);
+      },
+      onRoomAllFinished: (summary) => {
+        setRoomSummary(summary);
+      },
+      onRoomLevelChanged: () => {
+        setIsSpectating(false);
+        setRoomSummary(null);
+      },
     });
 
     engineRef.current = engine;
@@ -177,6 +206,7 @@ export default function App() {
     return () => {
       if (weatherTimerRef.current) window.clearTimeout(weatherTimerRef.current);
       if (timeBonusTimerRef.current) window.clearTimeout(timeBonusTimerRef.current);
+      if (finishNoticeTimerRef.current) window.clearTimeout(finishNoticeTimerRef.current);
       engine.dispose();
       engineRef.current = null;
     };
@@ -213,6 +243,13 @@ export default function App() {
         isPortrait={isPortrait}
         showEasterEgg={showEasterEgg}
         onDismissEasterEgg={() => setShowEasterEgg(false)}
+        isSpectating={isSpectating}
+        spectateTargetName={spectateTargetName}
+        spectateRank={spectateRank}
+        spectateTime={spectateTime}
+        roomSummary={roomSummary}
+        roomFinishNotice={roomFinishNotice}
+        onDismissRoomSummary={() => setRoomSummary(null)}
       />
     </div>
   );

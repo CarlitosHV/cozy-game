@@ -60,6 +60,32 @@ export interface LeaderboardEntry {
   createdAt?: string;
 }
 
+export interface RoomPlayerSummary {
+  userId: string;
+  id?: string;
+  username: string;
+  displayName?: string;
+  name?: string;
+  playerName?: string;
+  levelId?: number;
+  isFinished?: boolean;
+  finishTimeSeconds?: number;
+  rank?: number;
+  isSpectating?: boolean;
+  spectateTargetUserId?: string;
+}
+
+export interface RoomDetail {
+  roomId: string;
+  levelId: number;
+  playerCount: number;
+  maxPlayers: number;
+  finishedCount: number;
+  allFinished: boolean;
+  spectatorCount: number;
+  players: RoomPlayerSummary[];
+}
+
 export interface LeaderboardTables {
   normal?: LeaderboardEntry[];
   contrareloj?: LeaderboardEntry[];
@@ -449,11 +475,34 @@ class ApiClient {
    * PUT /api/v1/player/appearance
    */
   public async updateAppearance(appearance: Partial<CharacterAppearance>): Promise<void> {
+    const payload = {
+      ...appearance,
+      // Map frontend names to backend specification names
+      shirtColor: appearance.sweaterColor,
+      pantsColor: appearance.detailColor,
+      shoesColor: appearance.bootColor,
+      hatColor: appearance.hatColor,
+      shirtStyle: appearance.outfitStyle === 'sudadera' ? 'hoodie' : appearance.outfitStyle,
+      hat:
+        appearance.hatStyle === 'gorro'
+          ? 'beanie_cozy'
+          : appearance.hatStyle === 'gorra'
+          ? 'cap'
+          : appearance.hatStyle === 'sombrero'
+          ? 'sunhat'
+          : appearance.hatStyle === 'flores'
+          ? 'flower_crown'
+          : appearance.hatStyle === 'orejas'
+          ? 'ears'
+          : 'none',
+      glasses: appearance.accessory === 'lentes' ? 'reading' : 'none',
+      backpack: appearance.backpack ? 'explorer_pack' : 'none',
+    };
     await this.request(
       '/player/appearance',
       {
         method: 'PUT',
-        body: JSON.stringify(appearance),
+        body: JSON.stringify(payload),
       },
       true
     );
@@ -838,6 +887,52 @@ class ApiClient {
   /** DELETE /api/v1/friends/:userId */
   public async removeFriend(userId: string): Promise<void> {
     await this.request(`/friends/${encodeURIComponent(userId)}`, { method: 'DELETE' }, true);
+  }
+
+  // --- Rooms Endpoints (/api/v1/rooms) ---
+
+  /** POST /api/v1/rooms/create */
+  public async createRoom(levelId: number = 1, customCode?: string): Promise<{ roomId: string; levelId: number }> {
+    const res = await this.request<{
+      status: string;
+      data: { roomId: string; levelId: number };
+    }>('/rooms/create', {
+      method: 'POST',
+      body: JSON.stringify({ levelId, ...(customCode ? { customCode } : {}) }),
+    });
+    return res.data;
+  }
+
+  /** GET /api/v1/rooms */
+  public async listRooms(): Promise<RoomDetail[]> {
+    const res = await this.request<{
+      status: string;
+      totalActiveRooms: number;
+      rooms: RoomDetail[];
+    }>('/rooms', { method: 'GET' });
+    return res.rooms ?? [];
+  }
+
+  /** GET /api/v1/rooms/my-room */
+  public async getMyRoom(): Promise<RoomDetail | null> {
+    try {
+      const res = await this.request<{
+        status: string;
+        data: RoomDetail;
+      }>('/rooms/my-room', { method: 'GET' }, true);
+      return res.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** GET /api/v1/rooms/:roomId */
+  public async getRoom(roomId: string): Promise<RoomDetail | null> {
+    const res = await this.request<{
+      status: string;
+      data: RoomDetail;
+    }>(`/rooms/${encodeURIComponent(roomId)}`, { method: 'GET' });
+    return res.data ?? null;
   }
 
   // --- System Diagnostics (Specification 5) ---

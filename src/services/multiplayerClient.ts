@@ -5,7 +5,7 @@
 
 import { io, Socket } from 'socket.io-client';
 import { apiClient } from './apiClient';
-import { CharacterAppearance } from '../game/character';
+import { CharacterAppearance, loadAppearance } from '../game/character';
 
 export interface RemotePlayer {
   userId: string;
@@ -185,6 +185,72 @@ export interface WorldBlockPayload {
   z: number;
 }
 
+export interface SpectateActivePlayer {
+  userId: string;
+  id?: string;
+  username: string;
+  displayName?: string;
+  name?: string;
+  playerName?: string;
+  position?: { x: number; y: number; z: number; yaw?: number };
+}
+
+export interface SpectateStartedPayload {
+  isSpectating: boolean;
+  targetUserId?: string;
+  rank?: number;
+  timeSeconds?: number;
+  activePlayers?: SpectateActivePlayer[];
+  message?: string;
+}
+
+export interface RoomPlayerFinishedPayload {
+  userId: string;
+  id?: string;
+  username?: string;
+  displayName?: string;
+  name?: string;
+  playerName?: string;
+  timeSeconds?: number;
+  rank?: number;
+  isSpectating?: boolean;
+  allFinished?: boolean;
+  finishedCount?: number;
+  totalPlayers?: number;
+  remainingPlayers?: Array<{ userId: string; displayName?: string; username?: string }>;
+}
+
+export interface RoomSummaryEntry {
+  rank: number;
+  userId: string;
+  id?: string;
+  username: string;
+  displayName?: string;
+  name?: string;
+  playerName?: string;
+  timeSeconds: number;
+}
+
+export interface RoomAllFinishedPayload {
+  roomId: string;
+  levelId: number;
+  summary: RoomSummaryEntry[];
+  canAdvance: boolean;
+  nextLevelId: number;
+  message?: string;
+}
+
+export interface RoomLevelChangedPayload {
+  roomId: string;
+  levelId: number;
+  message?: string;
+  players?: any[];
+}
+
+export interface SpectateSwitchedPayload {
+  targetUserId: string;
+}
+
 class MultiplayerClient {
   private socket: Socket | null = null;
   private currentLevelId: number | null = null;
@@ -210,6 +276,13 @@ class MultiplayerClient {
   private worldOrbListeners: Set<(data: WorldOrbPayload) => void> = new Set();
   private worldBlockListeners: Set<(data: WorldBlockPayload) => void> = new Set();
   private worldEventListeners: Set<(data: WorldEventPayload) => void> = new Set();
+
+  // Spectator and synchronized level progression listeners
+  private spectateStartedListeners: Set<(data: SpectateStartedPayload) => void> = new Set();
+  private playerFinishedNoticeListeners: Set<(data: RoomPlayerFinishedPayload) => void> = new Set();
+  private roomAllFinishedListeners: Set<(data: RoomAllFinishedPayload) => void> = new Set();
+  private roomLevelChangedListeners: Set<(data: RoomLevelChangedPayload) => void> = new Set();
+  private spectateSwitchedListeners: Set<(data: SpectateSwitchedPayload) => void> = new Set();
 
   // Backward compatibility legacy properties
   public onRoomState?: (players: RemotePlayer[]) => void;
@@ -316,6 +389,31 @@ class MultiplayerClient {
     return () => this.worldEventListeners.delete(cb);
   }
 
+  public addSpectateStartedListener(cb: (data: SpectateStartedPayload) => void): () => void {
+    this.spectateStartedListeners.add(cb);
+    return () => this.spectateStartedListeners.delete(cb);
+  }
+
+  public addPlayerFinishedNoticeListener(cb: (data: RoomPlayerFinishedPayload) => void): () => void {
+    this.playerFinishedNoticeListeners.add(cb);
+    return () => this.playerFinishedNoticeListeners.delete(cb);
+  }
+
+  public addRoomAllFinishedListener(cb: (data: RoomAllFinishedPayload) => void): () => void {
+    this.roomAllFinishedListeners.add(cb);
+    return () => this.roomAllFinishedListeners.delete(cb);
+  }
+
+  public addRoomLevelChangedListener(cb: (data: RoomLevelChangedPayload) => void): () => void {
+    this.roomLevelChangedListeners.add(cb);
+    return () => this.roomLevelChangedListeners.delete(cb);
+  }
+
+  public addSpectateSwitchedListener(cb: (data: SpectateSwitchedPayload) => void): () => void {
+    this.spectateSwitchedListeners.add(cb);
+    return () => this.spectateSwitchedListeners.delete(cb);
+  }
+
   // --- Getters & Status ---
 
   public getStatus(): ConnectionStatus {
@@ -336,6 +434,16 @@ class MultiplayerClient {
 
   public getPartyPlayers(): RemotePlayer[] {
     return Array.from(this.partyPlayers.values());
+  }
+
+  public getPartyPlayer(userId: string): RemotePlayer | undefined {
+    if (!userId) return undefined;
+    return (
+      this.partyPlayers.get(userId) ||
+      Array.from(this.partyPlayers.values()).find(
+        (p) => p.userId === userId || p.id === userId || p.socketId === userId
+      )
+    );
   }
 
   public getPartyCount(): number {
@@ -708,11 +816,75 @@ class MultiplayerClient {
         this.onSocketError(data);
       }
     });
+
+    // --- Spectator & Room Synchronized Progression (Spec sections 3 & 4) ---
+
+    this.socket.on('spectate:started', (data: SpectateStartedPayload) => {
+      if (!data) return;
+      for (const listener of this.spectateStartedListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] spectateStarted listener error:', e);
+        }
+      }
+    });
+
+    this.socket.on('room:player_finished', (data: RoomPlayerFinishedPayload) => {
+      if (!data) return;
+      for (const listener of this.playerFinishedNoticeListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] playerFinishedNotice listener error:', e);
+        }
+      }
+    });
+
+    this.socket.on('spectate:switched', (data: SpectateSwitchedPayload) => {
+      if (!data) return;
+      for (const listener of this.spectateSwitchedListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] spectateSwitched listener error:', e);
+        }
+      }
+    });
+
+    this.socket.on('room:all_finished', (data: RoomAllFinishedPayload) => {
+      if (!data) return;
+      for (const listener of this.roomAllFinishedListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] roomAllFinished listener error:', e);
+        }
+      }
+    });
+
+    this.socket.on('room:level_changed', (data: RoomLevelChangedPayload) => {
+      if (!data || typeof data.levelId !== 'number') return;
+      this.currentLevelId = data.levelId;
+      if (data.roomId) this.currentRoomId = data.roomId;
+      for (const listener of this.roomLevelChangedListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] roomLevelChanged listener error:', e);
+        }
+      }
+    });
   }
 
   private emitJoin(levelId: number, roomId: string) {
     if (!this.socket || !this.socket.connected) return;
-    this.socket.emit('room:join', { levelId, roomId });
+    const appearance = loadAppearance();
+    this.socket.emit('room:join', {
+      levelId,
+      roomId,
+      appearance,
+    });
   }
 
   /**
@@ -833,6 +1005,8 @@ class MultiplayerClient {
     this.socket?.emit('invite:respond', { inviteId, accept, reason });
   }
 
+  private lastSyncPos = { x: 0, y: 0, z: 0, yaw: 0, anim: 'idle' };
+
   public syncPlayer(
     x: number,
     y: number,
@@ -845,8 +1019,30 @@ class MultiplayerClient {
     if (!this.currentRoomId?.startsWith('party_')) return;
 
     const now = performance.now();
-    if (now - this.lastSyncTime < this.syncThrottleMs) return;
+    const dt = now - this.lastSyncTime;
+    if (dt < 48) return; // ~20 Hz standard multiplayer platformer cadence
+
+    const dx = Math.abs(x - this.lastSyncPos.x);
+    const dy = Math.abs(y - this.lastSyncPos.y);
+    const dz = Math.abs(z - this.lastSyncPos.z);
+    const dyaw = Math.abs(yaw - this.lastSyncPos.yaw);
+    const isStationary =
+      dx < 0.015 &&
+      dy < 0.015 &&
+      dz < 0.015 &&
+      dyaw < 0.02 &&
+      anim === this.lastSyncPos.anim &&
+      !action;
+
+    // When standing still, only send a heartbeat sync every 280ms
+    if (isStationary && dt < 280) return;
+
     this.lastSyncTime = now;
+    this.lastSyncPos.x = x;
+    this.lastSyncPos.y = y;
+    this.lastSyncPos.z = z;
+    this.lastSyncPos.yaw = yaw;
+    this.lastSyncPos.anim = anim;
 
     this.socket.emit('player:sync', {
       x: Number(x.toFixed(3)),
@@ -861,6 +1057,36 @@ class MultiplayerClient {
   public triggerCompanionPower(powerType: string): void {
     if (!this.socket || !this.socket.connected) return;
     this.socket.emit('companion:power', { powerType });
+  }
+
+  // --- Spectator & Room Sync Emitters (Spec 3 & 4) ---
+
+  /** Client notifies server that player finished the level */
+  public emitPlayerFinish(levelId: number, timeSeconds: number, relicsFound: number = 0): void {
+    if (!this.socket || !this.socket.connected) return;
+    this.socket.emit('room:player_finish', {
+      levelId,
+      timeSeconds: Number(timeSeconds.toFixed(2)),
+      relicsFound,
+    });
+  }
+
+  /** Spectator switches camera focus to another active player */
+  public emitSpectateSwitch(targetUserId: string): void {
+    if (!this.socket || !this.socket.connected) return;
+    this.socket.emit('spectate:switch', { targetUserId });
+  }
+
+  /** Requests all room members to advance together to the next level */
+  public emitAdvanceLevel(): void {
+    if (!this.socket || !this.socket.connected) return;
+    this.socket.emit('room:advance_level');
+  }
+
+  /** Requests room level change to a specific level (1-10) */
+  public emitLevelChange(levelId: number): void {
+    if (!this.socket || !this.socket.connected) return;
+    this.socket.emit('room:level_change', { levelId });
   }
 }
 

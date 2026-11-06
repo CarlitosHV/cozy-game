@@ -1,14 +1,14 @@
 /**
  * RemotePlayersManager
  * Manages 3D avatars for other online players in the Three.js scene.
- * Receives multiplayerClient events, instantiates PlayerCharacterModel,
- * manages billboard name tags, and applies smooth linear (lerp) & angular interpolation.
+ * Receives multiplayerClient events, instantiates PlayerCharacterModel with lightweight remote optimizations,
+ * manages billboard name tags with texture caching, and applies smooth linear (lerp) & angular interpolation.
  */
 
 import * as THREE from 'three';
 import { ProceduralTextures } from './textures';
 import { sanitizeAppearance } from './character';
-import { createPlayerCharacter, PlayerCharacterModel } from './models';
+import { createPlayerCharacter, disposePlayerCharacter, PlayerCharacterModel } from './models';
 import {
   multiplayerClient,
   RemotePlayer,
@@ -23,6 +23,7 @@ import { makeLabel } from './combatFx';
 interface RemotePlayerEntity {
   userId: string;
   username: string;
+  appearanceKey: string;
   model: PlayerCharacterModel;
   nameTag: THREE.Sprite;
   currentPos: THREE.Vector3;
@@ -39,26 +40,29 @@ interface RemotePlayerEntity {
   downLabel?: THREE.Sprite;
 }
 
-function createNameTagSprite(username: string): THREE.Sprite {
-  const label = (username || 'Explorador').trim() || 'Explorador';
-  const trimmed = label.length > 16 ? `${label.slice(0, 15)}…` : label;
+// Texture cache for billboard name tags to avoid per-player canvas redrawing
+const nameTagTextureCache = new Map<string, { texture: THREE.CanvasTexture; aspect: number }>();
 
-  const padX = 28;
-  const padY = 16;
+function getNameTagTexture(label: string): { texture: THREE.CanvasTexture; aspect: number } {
+  const cached = nameTagTextureCache.get(label);
+  if (cached) return cached;
+
+  const trimmed = label.length > 18 ? `${label.slice(0, 17)}…` : label;
+  const padX = 26;
   const canvas = document.createElement('canvas');
   const measure = canvas.getContext('2d');
-  const font = '600 34px "Outfit", "Nunito", system-ui, sans-serif';
-  let textW = 140;
+  const font = 'bold 30px "Outfit", "Nunito", system-ui, sans-serif';
+  let textW = 120;
   if (measure) {
     measure.font = font;
     textW = Math.ceil(measure.measureText(trimmed).width);
   }
 
-  const dotR = 7;
-  const gap = 14;
+  const dotR = 6;
+  const gap = 12;
   const contentW = dotR * 2 + gap + textW;
-  const w = Math.min(512, Math.max(180, contentW + padX * 2));
-  const h = 64;
+  const w = Math.min(384, Math.max(160, contentW + padX * 2));
+  const h = 56;
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d');
@@ -66,15 +70,15 @@ function createNameTagSprite(username: string): THREE.Sprite {
   if (ctx) {
     ctx.clearRect(0, 0, w, h);
 
-    const x = 6;
-    const y = 6;
-    const bw = w - 12;
-    const bh = h - 12;
+    const x = 4;
+    const y = 4;
+    const bw = w - 8;
+    const bh = h - 8;
     const r = bh / 2;
 
-    ctx.shadowColor = 'rgba(61, 74, 82, 0.28)';
-    ctx.shadowBlur = 10;
-    ctx.shadowOffsetY = 3;
+    ctx.shadowColor = 'rgba(20, 28, 35, 0.35)';
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 2;
 
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -85,30 +89,30 @@ function createNameTagSprite(username: string): THREE.Sprite {
     ctx.closePath();
 
     const fill = ctx.createLinearGradient(0, y, 0, y + bh);
-    fill.addColorStop(0, 'rgba(255, 250, 242, 0.94)');
-    fill.addColorStop(1, 'rgba(255, 241, 222, 0.92)');
+    fill.addColorStop(0, 'rgba(255, 252, 246, 0.96)');
+    fill.addColorStop(1, 'rgba(250, 238, 220, 0.94)');
     ctx.fillStyle = fill;
     ctx.fill();
 
     ctx.shadowColor = 'transparent';
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 0;
-    ctx.strokeStyle = 'rgba(214, 184, 148, 0.85)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(195, 165, 130, 0.85)';
+    ctx.lineWidth = 1.8;
     ctx.stroke();
 
-    const cx = x + padX * 0.55 + dotR;
+    const cx = x + padX * 0.5 + dotR;
     const cy = y + bh / 2;
-    ctx.fillStyle = '#5b8f72';
+    ctx.fillStyle = '#10b981'; // vibrant online green dot
     ctx.beginPath();
     ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
     ctx.beginPath();
-    ctx.arc(cx - 2, cy - 2, 2.2, 0, Math.PI * 2);
+    ctx.arc(cx - 1.5, cy - 1.5, 2, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#3d4a52';
+    ctx.fillStyle = '#2d3748';
     ctx.font = font;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -119,6 +123,16 @@ function createNameTagSprite(username: string): THREE.Sprite {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
+
+  const entry = { texture, aspect: w / h };
+  nameTagTextureCache.set(label, entry);
+  return entry;
+}
+
+function createNameTagSprite(username: string): THREE.Sprite {
+  const label = (username || 'Explorador').trim() || 'Explorador';
+  const { texture, aspect } = getNameTagTexture(label);
+
   const mat = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
@@ -128,10 +142,10 @@ function createNameTagSprite(username: string): THREE.Sprite {
   });
 
   const sprite = new THREE.Sprite(mat);
-  const worldH = 0.20;
-  const worldW = worldH * (w / h);
+  const worldH = 0.22;
+  const worldW = worldH * aspect;
   sprite.scale.set(worldW, worldH, 1);
-  sprite.position.set(0, 1.48, 0);
+  sprite.position.set(0, 1.55, 0); // Position comfortably above head and hats
   sprite.renderOrder = 10;
   return sprite;
 }
@@ -153,12 +167,35 @@ export class RemotePlayersManager {
     const self = multiplayerClient.getSelf();
     const selfId = self?.userId || self?.id;
     const pId = player.userId || player.id;
+
     if (selfId && pId && selfId === pId) return true;
-    if (self?.username && player.username && self.username === player.username) return true;
 
     const me = apiClient.getCurrentUser();
-    if (!me) return false;
-    return pId === me._id || player.username === me.username;
+    if (me && pId && (pId === me._id || (me as unknown as { id?: string }).id === pId)) return true;
+
+    // If both sides have IDs and they are different, it is NEVER local player
+    if (pId && selfId && pId !== selfId) {
+      return false;
+    }
+
+    // Only compare usernames if they are non-default and non-empty
+    if (self?.username && player.username) {
+      const u1 = self.username.trim().toLowerCase();
+      const u2 = player.username.trim().toLowerCase();
+      if (u1 && u2 && u1 !== 'explorador' && u1 !== 'viajero' && u1 !== 'viajera' && u1 === u2) {
+        return true;
+      }
+    }
+
+    if (me?.username && player.username) {
+      const u1 = me.username.trim().toLowerCase();
+      const u2 = player.username.trim().toLowerCase();
+      if (u1 && u2 && u1 !== 'explorador' && u1 !== 'viajero' && u1 !== 'viajera' && u1 === u2) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private setupNetworkCallbacks() {
@@ -169,8 +206,9 @@ export class RemotePlayersManager {
         for (const raw of players) {
           const p = normalizeRemotePlayer(raw);
           if (this.isLocalPlayer(p)) continue;
-          if (!p.userId) continue;
-          seenIds.add(p.userId);
+          const id = p.userId || p.id;
+          if (!id) continue;
+          seenIds.add(id);
           this.addOrUpdatePlayer(p);
         }
 
@@ -185,18 +223,27 @@ export class RemotePlayersManager {
     this.unsubs.push(
       multiplayerClient.addPlayerJoinedListener((raw) => {
         const p = normalizeRemotePlayer(raw);
-        if (this.isLocalPlayer(p) || !p.userId) return;
+        if (this.isLocalPlayer(p)) return;
+        const id = p.userId || p.id;
+        if (!id) return;
         this.addOrUpdatePlayer(p);
       })
     );
 
     this.unsubs.push(
       multiplayerClient.addPlayerMovedListener((update) => {
+        if (!update.userId) return;
+        if (this.isLocalPlayer({ userId: update.userId })) return;
+
         let entity = this.players.get(update.userId);
         if (!entity) {
+          // Look up party cache in case player metadata was received earlier
+          const cached = multiplayerClient.getPartyPlayer(update.userId);
+          const displayName = cached ? getPlayerDisplayName(cached) : 'Explorador';
           this.addOrUpdatePlayer({
             userId: update.userId,
-            username: 'Explorador',
+            username: displayName,
+            appearance: cached?.appearance,
             x: update.x,
             y: update.y,
             z: update.z,
@@ -207,6 +254,7 @@ export class RemotePlayersManager {
           });
           entity = this.players.get(update.userId);
         }
+
         if (entity) {
           entity.targetPos.set(update.x, update.y, update.z);
           entity.targetYaw = update.yaw;
@@ -218,7 +266,10 @@ export class RemotePlayersManager {
 
     this.unsubs.push(
       multiplayerClient.addPlayerLeftListener((data) => {
-        this.removePlayer(data.userId);
+        const id = data.userId || data.id;
+        if (id) {
+          this.removePlayer(id);
+        }
       })
     );
   }
@@ -226,17 +277,17 @@ export class RemotePlayersManager {
   private addOrUpdatePlayer(p: RemotePlayer) {
     const userId = p.userId || p.id;
     if (!userId) return;
+    if (this.isLocalPlayer(p)) return;
 
     let entity = this.players.get(userId);
     const displayName = getPlayerDisplayName(p);
+    const appearance = sanitizeAppearance(p.appearance, undefined, true);
+    const appearanceKey = JSON.stringify(appearance);
 
     if (!entity) {
       try {
-        const appearance = sanitizeAppearance({
-          ...(p.appearance || {}),
-          name: displayName,
-        });
-        const model = createPlayerCharacter(this.textures, appearance);
+        // Instantiate character in lightweight remote mode (reduced shadow casters)
+        const model = createPlayerCharacter(this.textures, appearance, true);
         const nameTag = createNameTagSprite(displayName);
         model.group.add(nameTag);
 
@@ -252,6 +303,7 @@ export class RemotePlayersManager {
         entity = {
           userId,
           username: displayName,
+          appearanceKey,
           model,
           nameTag,
           currentPos: pos.clone(),
@@ -269,6 +321,45 @@ export class RemotePlayersManager {
         return;
       }
     } else {
+      // Re-add to scene if it was detached during level change or reconnect
+      if (entity.model.group.parent !== this.scene) {
+        this.scene.add(entity.model.group);
+      }
+      entity.model.group.visible = true;
+
+      // Update appearance if new appearance data arrived or changed
+      const hasRealAppearance = Boolean(p.appearance && Object.keys(p.appearance).length > 0);
+      if (hasRealAppearance && entity.appearanceKey !== appearanceKey) {
+        try {
+          // Dispose old model
+          disposePlayerCharacter(entity.model);
+          this.scene.remove(entity.model.group);
+
+          // Build updated model with real appearance
+          const newModel = createPlayerCharacter(this.textures, appearance, true);
+          newModel.group.position.copy(entity.currentPos);
+          newModel.group.rotation.y = entity.currentYaw;
+
+          // Re-attach nameTag
+          newModel.group.add(entity.nameTag);
+          this.scene.add(newModel.group);
+
+          entity.model = newModel;
+          entity.appearanceKey = appearanceKey;
+        } catch (err) {
+          console.warn('[RemotePlayers] Could not update model appearance:', err);
+        }
+      }
+
+      // Update name tag if name changed from placeholder to real username
+      if (displayName && displayName !== entity.username && displayName !== 'Explorador') {
+        entity.model.group.remove(entity.nameTag);
+        entity.nameTag.material.dispose();
+        entity.nameTag = createNameTagSprite(displayName);
+        entity.model.group.add(entity.nameTag);
+        entity.username = displayName;
+      }
+
       if (Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) {
         entity.targetPos.set(p.x, p.y, p.z);
       }
@@ -285,7 +376,11 @@ export class RemotePlayersManager {
         this.scene.remove(entity.downLabel);
         entity.downLabel.material.dispose();
       }
+      if (entity.cage) {
+        this.scene.remove(entity.cage);
+      }
       this.scene.remove(entity.model.group);
+      disposePlayerCharacter(entity.model);
       entity.nameTag.material.dispose();
       this.players.delete(userId);
     }
@@ -293,7 +388,35 @@ export class RemotePlayersManager {
 
   /** Positions of everyone else in the room (boss fights: rescues, host choice). */
   public getPlayersInfo(): { userId: string; username: string; pos: THREE.Vector3; grabbed: boolean; down: boolean }[] {
-    return [...this.players.values()].map((e) => ({ userId: e.userId, username: e.username, pos: e.currentPos, grabbed: e.grabbed, down: e.down }));
+    return [...this.players.values()].map((e) => ({
+      userId: e.userId,
+      username: e.username,
+      pos: e.currentPos,
+      grabbed: e.grabbed,
+      down: e.down,
+    }));
+  }
+
+  public getPlayerEntity(userId: string): RemotePlayerEntity | undefined {
+    return this.players.get(userId);
+  }
+
+  public getActivePlayers(): { userId: string; username: string; pos: THREE.Vector3 }[] {
+    return [...this.players.values()].map((e) => ({
+      userId: e.userId,
+      username: e.username,
+      pos: e.currentPos,
+    }));
+  }
+
+  public getNextSpectateTarget(currentUserId?: string | null, dir: 1 | -1 = 1): { userId: string; username: string } | null {
+    const active = this.getActivePlayers();
+    if (active.length === 0) return null;
+    if (!currentUserId) return { userId: active[0].userId, username: active[0].username };
+    const idx = active.findIndex((p) => p.userId === currentUserId);
+    if (idx === -1) return { userId: active[0].userId, username: active[0].username };
+    const nextIdx = (idx + dir + active.length) % active.length;
+    return { userId: active[nextIdx].userId, username: active[nextIdx].username };
   }
 
   /** A friend fainted in a boss fight: lay them down with a "¡RCP!" sign until revived. */
@@ -341,6 +464,7 @@ export class RemotePlayersManager {
     for (const [id] of this.players) {
       this.removePlayer(id);
     }
+    this.players.clear();
   }
 
   public dispose() {
@@ -360,17 +484,25 @@ export class RemotePlayersManager {
       entity.currentPos.lerp(entity.targetPos, lerpFactor);
       entity.model.group.position.copy(entity.currentPos);
 
-      // Shortest-arc angular yaw interpolation
-      let dyaw = entity.targetYaw - entity.currentYaw;
-      while (dyaw > Math.PI) dyaw -= 2 * Math.PI;
-      while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+      // Branchless shortest-arc angular yaw interpolation
+      const dyaw = Math.atan2(
+        Math.sin(entity.targetYaw - entity.currentYaw),
+        Math.cos(entity.targetYaw - entity.currentYaw)
+      );
       entity.currentYaw += dyaw * lerpFactor;
       entity.model.group.rotation.y = entity.currentYaw;
+
       if (entity.down) {
         entity.model.group.rotation.order = 'YXZ';
         entity.model.group.rotation.x = -Math.PI / 2;
         entity.model.group.position.y += 0.3;
-        if (entity.downLabel) entity.downLabel.position.set(entity.currentPos.x, entity.currentPos.y + 1.6 + Math.sin(this.windTime * 4) * 0.08, entity.currentPos.z);
+        if (entity.downLabel) {
+          entity.downLabel.position.set(
+            entity.currentPos.x,
+            entity.currentPos.y + 1.6 + Math.sin(this.windTime * 4) * 0.08,
+            entity.currentPos.z
+          );
+        }
       }
 
       // Animate limbs & companion
