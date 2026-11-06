@@ -914,7 +914,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const id = window.setInterval(read, 100);
     return () => window.clearInterval(id);
   }, [engine, gameState]);
-  const powerInfo = power ? COMPANION_POWERS[power.companion] : undefined;
+  const basePowerInfo = power ? COMPANION_POWERS[power.companion] : undefined;
 
   // Backpack (5 slots) status, polled with the same rhythm
   // Open-world levels: orbs found / total
@@ -979,6 +979,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           prev.portalOpen === st.portalOpen &&
           Math.abs(prev.darkness - st.darkness) < 0.02 &&
           (prev.grabbed?.count ?? -1) === (st.grabbed?.count ?? -1) &&
+          prev.action?.name === st.action?.name &&
+          Math.ceil(prev.action?.cd ?? 0) === Math.ceil(st.action?.cd ?? 0) &&
+          prev.objective?.have === st.objective?.have &&
           prev.bossName === st.bossName
         )
           return prev;
@@ -997,6 +1000,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const id = window.setInterval(read, 100);
     return () => window.clearInterval(id);
   }, [engine, gameState]);
+
+  // Boss fights: the power button is your companion's special move against this boss
+  const bossAct = combat?.action ?? null;
+  const powerInfo =
+    bossAct && basePowerInfo ? { ...basePowerInfo, powerName: bossAct.name, desc: bossAct.desc } : basePowerInfo;
+  const shownPower: CompanionPowerStatus | null =
+    bossAct && power ? { ...power, state: bossAct.cd > 0 ? 'hungry' : 'ready', timeLeft: bossAct.cd, duration: bossAct.cdMax } : power;
 
   // Level selection on the title screen (the world behind the menu switches too)
   // Default to the furthest level reached ("continue")
@@ -1397,13 +1407,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
       if (gameState === 'game_over' && e.code === 'Enter') {
         e.preventDefault();
-        handleRestart('time_trial');
+        handleRestart(engine?.gameOverReason ? gameMode : 'time_trial');
         return;
       }
 
       if (gameState === 'game_over' && e.code === 'KeyR') {
         e.preventDefault();
-        handleRestart('time_trial');
+        handleRestart(engine?.gameOverReason ? gameMode : 'time_trial');
         return;
       }
 
@@ -2446,6 +2456,19 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             )}
           </div>
+          {combat.objective && !combat.defeated && (
+            <div
+              className={`self-center inline-flex items-center gap-1.5 rounded-full border shadow-md backdrop-blur-md font-bold tabular-nums ${
+                combat.objective.have <= 1
+                  ? 'bg-rose-600/90 text-white border-rose-300 animate-pulse'
+                  : 'bg-stone-950/75 text-amber-100 border-amber-300/40'
+              } ${isMobileUi ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-0.5 text-[11px]'}`}
+              aria-label={`${combat.objective.label}: ${combat.objective.have} de ${combat.objective.total}`}
+            >
+              <span aria-hidden>🐄</span>
+              {combat.objective.label} {combat.objective.have}/{combat.objective.total}
+            </div>
+          )}
           {/* Only what needs you right now (caught, fainted, you won). Tips come from your companion (key I). */}
           {(combat.urgent || combat.portalOpen) && (
             <div
@@ -2711,33 +2734,33 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             )}
 
             {/* Companion Power badge (hidden on mobile touch — action button covers it) */}
-            {power && powerInfo && !touchControlsEnabled && (
+            {shownPower && powerInfo && !touchControlsEnabled && (
               <span className="inline-flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => engine?.activateCompanionPower()}
                   title={`${powerInfo.powerName}: ${powerInfo.desc}`}
                   className={`relative overflow-hidden flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-xl border text-left text-xs shadow-md backdrop-blur-md transition-colors cursor-pointer ${
-                    power.state === 'ready'
+                    shownPower.state === 'ready'
                       ? 'bg-stone-900/85 border-amber-400/70 hover:bg-stone-800'
-                      : power.state === 'active'
+                      : shownPower.state === 'active'
                       ? 'bg-stone-900/90 border-emerald-400/70'
                       : 'bg-stone-900/80 border-stone-700'
                   }`}
                 >
-                  {power.state === 'active' && (
+                  {shownPower.state === 'active' && (
                     <span
                       className="absolute left-0 bottom-0 h-[3px] bg-emerald-400 transition-[width] duration-100"
-                      style={{ width: `${Math.max(0, (power.timeLeft / power.duration) * 100)}%` }}
+                      style={{ width: `${Math.max(0, (shownPower.timeLeft / shownPower.duration) * 100)}%` }}
                     />
                   )}
                   <span
                     className={`w-7 h-7 rounded-lg flex items-center justify-center text-stone-900 ${
-                      power.state === 'hungry' ? 'opacity-50 grayscale' : ''
-                    } ${power.state === 'active' ? 'animate-pulse' : ''}`}
+                      shownPower.state === 'hungry' ? 'opacity-50 grayscale' : ''
+                    } ${shownPower.state === 'active' ? 'animate-pulse' : ''}`}
                     style={{ backgroundColor: powerInfo.color }}
                   >
-                    {COMPANION_ICONS[power.companion]}
+                    {COMPANION_ICONS[shownPower.companion]}
                   </span>
                   <span className="flex flex-col leading-tight">
                     <span className="text-[9px] uppercase tracking-wider text-stone-400 font-semibold">
@@ -2745,16 +2768,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     </span>
                     <span
                       className={`font-semibold ${
-                        power.state === 'ready'
+                        shownPower.state === 'ready'
                           ? 'text-amber-300'
-                          : power.state === 'active'
+                          : shownPower.state === 'active'
                           ? 'text-emerald-300'
                           : 'text-stone-400'
                       }`}
                     >
-                      {power.state === 'ready' && <>¡Listo!</>}
-                      {power.state === 'active' && `Activo · ${Math.ceil(power.timeLeft)}s`}
-                      {power.state === 'hungry' && 'Con hambre · dale una baya'}
+                      {shownPower.state === 'ready' && <>¡Listo!</>}
+                      {shownPower.state === 'active' && `Activo · ${Math.ceil(shownPower.timeLeft)}s`}
+                      {shownPower.state === 'hungry' && (bossAct ? `Recargando · ${Math.ceil(bossAct.cd)}s` : 'Con hambre · dale una baya')}
                     </span>
                   </span>
                 </button>
@@ -3089,7 +3112,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
 
               <div className={`absolute flex flex-col items-end pointer-events-auto z-20 pr-safe pb-safe ${compactControls ? 'bottom-3 right-3 gap-2' : 'bottom-5 right-5 sm:bottom-6 sm:right-6 gap-3'}`}>
-                {power && powerInfo && (
+                {shownPower && powerInfo && (
                   <button
                     onTouchStart={(e) => {
                       e.preventDefault();
@@ -3100,17 +3123,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     className={`flex items-center gap-1.5 rounded-2xl text-[10px] sm:text-xs font-bold shadow-lg transition-transform active:scale-95 cursor-pointer touch-none select-none border-2 ${
                       compactControls ? 'px-2.5 py-1.5' : 'px-3.5 py-2'
                     } ${
-                      power.state === 'ready'
+                      shownPower.state === 'ready'
                         ? 'text-stone-950 border-amber-200'
                         : 'bg-stone-900/80 text-stone-400 border-stone-700/80'
                     }`}
-                    style={{ touchAction: 'none', backgroundColor: power.state === 'ready' ? powerInfo.color : undefined }}
+                    style={{ touchAction: 'none', backgroundColor: shownPower.state === 'ready' ? powerInfo.color : undefined }}
                   >
-                    {COMPANION_ICONS[power.companion]}
+                    {COMPANION_ICONS[shownPower.companion]}
                     <span>
-                      {power.state === 'ready' && 'Poder'}
-                      {power.state === 'active' && `${Math.ceil(power.timeLeft)}s`}
-                      {power.state === 'hungry' && 'Hambre'}
+                      {shownPower.state === 'ready' && (bossAct ? bossAct.name : 'Poder')}
+                      {shownPower.state === 'active' && `${Math.ceil(shownPower.timeLeft)}s`}
+                      {shownPower.state === 'hungry' && (bossAct ? `${Math.ceil(bossAct.cd)}s` : 'Hambre')}
                     </span>
                   </button>
                 )}
@@ -3781,8 +3804,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto cozy-scrim p-6 z-30">
           <div className="w-full max-w-sm rounded-[1.75rem] cozy-panel p-6 flex flex-col items-center text-center animate-in fade-in zoom-in-95 font-ui gap-6">
             <div className="space-y-2">
-              <h2 className="text-2xl font-display font-bold text-cozy-ink">¡Tiempo agotado!</h2>
-              <p className="text-xs text-cozy-muted inline-flex items-center justify-center gap-1 flex-wrap">
+              <h2 className="text-2xl font-display font-bold text-cozy-ink">{engine?.gameOverReason ? '¡Perdiste la batalla!' : '¡Tiempo agotado!'}</h2>
+              {engine?.gameOverReason && <p className="text-sm text-cozy-muted">{engine.gameOverReason}</p>}
+              <p className={`text-xs text-cozy-muted items-center justify-center gap-1 flex-wrap ${engine?.gameOverReason ? 'hidden' : 'inline-flex'}`}>
                 <span>Descanso {checkpointIndex}/3</span>
                 <HelpTip label={TIPS.descanso} />
                 <span>· Reliquias {collectedCount}/{totalCollectibles}</span>
@@ -3790,6 +3814,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </p>
             </div>
 
+            {engine?.gameOverReason ? (
+              <div className="w-full flex flex-col gap-3">
+                <button onClick={() => handleRestart(gameMode)} className={BTN.primary}>
+                  Intentar de nuevo
+                </button>
+                <button onClick={() => engine?.returnToTitle()} className={BTN.ghost}>
+                  Volver al menú
+                </button>
+              </div>
+            ) : (
             <div className="w-full flex flex-col gap-3">
               <button
                 onClick={() => requestRestartRun('time_trial')}
@@ -3823,6 +3857,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 Modo libre
               </button>
             </div>
+            )}
           </div>
         </div>
       )}

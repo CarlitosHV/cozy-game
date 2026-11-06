@@ -1,9 +1,10 @@
 /**
  * The six bosses of "Lucha contra jefes" (one per world):
- *   bird     Plumarroca      — throws rocks from its towers and flies off when someone gets close;
+ *   bird     Plumarroca      — throws rocks from its towers, sends crows, flies off when someone gets close;
  *                              knock it down mid-flight with the slingshot, then hit it on the floor.
  *   glitch   ERR0R.exe       — spawns glitch copies of the player; their light orbs hurt it.
- *   ufo      Nave Nodriza    — lasers from the sky; slingshot its glass; net the cows it abducts.
+ *   ufo      Nave Nodriza    — lasers and aliens from the sky; slingshot its glass; net the cows it
+ *                              abducts — if it takes every cow, you lose.
  *   skeleton Huesudo         — ducks and rises around the arena or out of the lake; dancing skeletons
  *                              carry players to its mouth (it chews and spits them); feed it bombs.
  *   gnome    Rey Gnomo       — mallet slams and shockwaves; he grabs nets to throw at you. Net him,
@@ -15,16 +16,21 @@
  */
 import * as THREE from 'three';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
-import type { AimTarget, CombatSystem, HitKind } from './combat';
+import type { AimTarget, CombatSystem, CompanionAction, HitKind } from './combat';
+import type { CompanionStyle } from './character';
 import type { BossSetup } from './bossArena';
 import type { ItemType } from './items';
 import { burstEffect, makeTelegraph, puffEffect, Telegraph } from './combatFx';
 import {
   BirdModel,
   CandelabraModel,
+  CrowModel,
+  AlienModel,
   CowModel,
   createBirdBoss,
   createCandelabra,
+  createCrow,
+  createAlien,
   createCow,
   createDancer,
   createDracula,
@@ -106,6 +112,36 @@ export abstract class BossController {
 
   onEvent(_kind: string, _i: number, _v: number, _from: string) {}
 
+  /** The special move each companion has against this boss (see the table in each boss). */
+  companionAction(_c: CompanionStyle): CompanionAction | null {
+    return null;
+  }
+
+  /** Extra goal shown under the boss bar (e.g. cows left) */
+  objective(): { label: string; have: number; total: number } | null {
+    return null;
+  }
+
+  /** Helpers to call: base amount + `perFriend` for every extra player in the party. */
+  protected scaled(base: number, perFriend = 1): number {
+    return Math.round(base + perFriend * (this.c.partySize - 1));
+  }
+
+  /** Puts items in your backpack (or at your feet when it is full). */
+  protected gift(type: ItemType, amount = 1) {
+    if (this.c.deps.items.grant(type, amount)) {
+      soundManager.playCollectible();
+      return;
+    }
+    const p = this.c.playerPos;
+    this.c.deps.items.spawnDrop(type, V(p.x + 0.6, p.y + 0.95, p.z));
+  }
+
+  /** Jade (guardian) eats boss helpers that come close to you. */
+  protected guarding(pos: THREE.Vector3): boolean {
+    return this.c.guardT > 0 && pos.distanceTo(this.c.playerPos) < 2.6;
+  }
+
   /** Point the camera keeps in view */
   focusPoint(): THREE.Vector3 {
     return this.group.position;
@@ -170,8 +206,24 @@ export abstract class BossController {
 // ===========================================================================
 // 1. PLUMARROCA
 // ===========================================================================
+interface Crow {
+  m: CrowModel;
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  state: 'circle' | 'dive' | 'fall';
+  t: number;
+  angle: number;
+  center: THREE.Vector3;
+}
+
 class BirdBoss extends BossController {
   private m: BirdModel;
+  /** Crows that peck the players (more for bigger parties) */
+  private crows: Crow[] = [];
+  private crowT = 4;
+  /** Nubi's rain cloud: no rocks while it lasts */
+  private noRockT = 0;
+  private cloud: THREE.Group | null = null;
   private perch = 0;
   /**
    * perched  — throws rocks; flies away as soon as someone gets close (or a stone startles it)
@@ -301,6 +353,8 @@ class BirdBoss extends BossController {
     this.applyPulse(dt);
     this.updatePending(dt);
     this.updateRocks(dt);
+    this.updateCrows(dt, time);
+    this.updateCloud(dt, time);
     this.hitCd -= dt;
     const pos = this.group.position;
     this.center.copy(pos).add(V(0, 1.5, 0));
@@ -387,10 +441,182 @@ class BirdBoss extends BossController {
       }
     }
     this.throwT -= dt;
-    if (this.throwT <= 0) {
+    if (this.throwT <= 0 && this.noRockT <= 0) {
       this.throwRock(0);
       if (this.s.diff > 0.55) this.throwRock(2.6);
       this.throwT = 2.6 - 1.0 * this.s.diff;
+    }
+    // Calls crows from its nest
+    this.crowT -= dt;
+    if (this.crowT <= 0) {
+      this.crowT = 6.5 - 2 * this.s.diff;
+      if (this.crows.filter((c) => c.state !== 'fall').length < this.scaled(1 + Math.round(this.s.diff * 2), 2)) this.spawnCrow();
+    }
+  }
+
+  private spawnCrow() {
+    const m = createCrow();
+    const at = this.group.position.clone().add(V(0, 1.8, 0));
+    m.group.position.copy(at);
+    this.root.add(m.group);
+    this.crows.push({ m, pos: at, vel: V(), state: 'circle', t: -Math.random(), angle: Math.random() * Math.PI * 2, center: at.clone() });
+    soundManager.playWindGust();
+  }
+
+  private dropCrow(cr: Crow) {
+    if (cr.state === 'fall') return;
+    cr.state = 'fall';
+    cr.t = 0;
+    this.c.addEffect(burstEffect(this.root, cr.pos.clone(), new THREE.MeshStandardMaterial({ color: 0x111827 }), 7, 0.08, 4, 0.6));
+    soundManager.playEnemyBoop();
+  }
+
+  private updateCrows(dt: number, time: number) {
+    const p = this.c.playerPos;
+    for (let k = this.crows.length - 1; k >= 0; k--) {
+      const cr = this.crows[k];
+      cr.t += dt;
+      const g = cr.m.group;
+      if (cr.state === 'fall') {
+        cr.pos.y -= dt * 6;
+        g.rotation.z += dt * 8;
+        if (cr.t > 0.8 || cr.pos.y < this.s.floorY) {
+          disposeGroup(this.root, g);
+          this.crows.splice(k, 1);
+        }
+        g.position.copy(cr.pos);
+        continue;
+      }
+      if (this.dead) {
+        this.dropCrow(cr);
+        continue;
+      }
+      if (this.guarding(cr.pos)) {
+        this.dropCrow(cr);
+        this.c.say('¡Jade se comió un cuervo!', 'jade-crow', 2);
+        continue;
+      }
+      const target = V();
+      if (cr.state === 'circle') {
+        // Circles over your head, then dives
+        cr.angle += dt * 2.2;
+        target.set(p.x + Math.cos(cr.angle) * 2.8, p.y + 2.6 + Math.sin(time * 3 + k) * 0.3, p.z + Math.sin(cr.angle) * 2.8);
+        cr.pos.lerp(target, Math.min(1, dt * 2.5));
+        if (cr.t > 2.2 - this.s.diff * 0.8) {
+          cr.state = 'dive';
+          cr.t = 0;
+          cr.vel.copy(V(p.x, p.y + 1.1, p.z).sub(cr.pos).normalize().multiplyScalar(9 + 3 * this.s.diff));
+        }
+      } else {
+        cr.pos.addScaledVector(cr.vel, dt);
+        if (cr.pos.distanceTo(V(p.x, p.y + 1.1, p.z)) < 0.8) {
+          this.c.damagePlayer(6, cr.pos, 5, 3, 'crow');
+          cr.state = 'circle';
+          cr.t = -0.5;
+        } else if (cr.t > 1.0) {
+          cr.state = 'circle';
+          cr.t = 0;
+        }
+      }
+      g.position.copy(cr.pos);
+      const dir = cr.state === 'dive' ? cr.vel : target.clone().sub(cr.pos);
+      g.rotation.y = Math.atan2(dir.x, dir.z);
+      g.rotation.x = cr.state === 'dive' ? 0.6 : 0;
+      const flap = Math.sin(time * 22 + k) * 0.8;
+      cr.m.wings[0].rotation.z = flap;
+      cr.m.wings[1].rotation.z = -flap;
+      cr.center.copy(cr.pos);
+    }
+  }
+
+  private updateCloud(dt: number, time: number) {
+    if (this.noRockT <= 0) {
+      if (this.cloud) {
+        disposeGroup(this.root, this.cloud);
+        this.cloud = null;
+      }
+      return;
+    }
+    this.noRockT -= dt;
+    if (!this.cloud) {
+      const g = new THREE.Group();
+      const mat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 1, transparent: true, opacity: 0.92 });
+      for (const [x, y, r] of [[0, 0, 1.2], [1.1, -0.1, 0.9], [-1.1, -0.1, 0.9], [0.5, 0.4, 0.8], [-0.5, 0.35, 0.8]]) {
+        const b = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), mat);
+        b.position.set(x, y, 0);
+        g.add(b);
+      }
+      this.root.add(g);
+      this.cloud = g;
+    }
+    this.cloud.position.copy(this.group.position).add(V(0, 4.2 + Math.sin(time * 2) * 0.2, 0));
+    if (Math.random() < dt * 14) {
+      const at = this.cloud.position.clone().add(V((Math.random() - 0.5) * 2.4, -1, (Math.random() - 0.5) * 1.2));
+      this.c.addEffect(puffEffect(this.root, at, 'rgba(125,211,252,0.9)', 0.4, 0.4));
+    }
+  }
+
+  companionAction(c: CompanionStyle): CompanionAction | null {
+    const bird = () => this.group.position;
+    const me = () => this.c.playerPos;
+    switch (c) {
+      case 'nube':
+        return {
+          name: 'Nubarrón',
+          desc: 'Una nube de lluvia moja a Plumarroca: no lanza piedras por 9 s',
+          target: bird,
+          run: () => {
+            this.noRockT = 9;
+            this.c.say('¡Plumarroca está empapada y no puede lanzar piedras!', 'act-cloud', 1);
+          },
+        };
+      case 'estrella':
+        return {
+          name: 'Estrella fugaz',
+          desc: 'Derriba a Plumarroca si vuela; si está posada, la espanta',
+          target: bird,
+          run: () => {
+            if (this.state === 'flying') this.knockDown(true);
+            else if (this.state === 'perched') this.flyTo(this.otherPerch(this.perch), true);
+          },
+        };
+      case 'luciernaga':
+        return {
+          name: 'Destello',
+          desc: 'Un destello deslumbra a todos los cuervos y los tumba',
+          target: me,
+          run: () => {
+            for (const cr of this.crows) this.dropCrow(cr);
+          },
+        };
+      case 'catarina':
+        return {
+          name: 'Caparazón',
+          desc: 'Las piedras de Plumarroca no te hacen daño por 10 s',
+          target: me,
+          run: () => this.c.immunity('rock', 10),
+        };
+      case 'hada':
+        return {
+          name: 'Polvo de hada',
+          desc: 'Te da 6 piedras (y una resortera si no tienes)',
+          target: me,
+          run: () => {
+            if (!this.has('resortera')) this.gift('resortera');
+            this.gift('piedra', 6);
+          },
+        };
+      case 'serpiente':
+        return {
+          name: 'Guardiana',
+          desc: 'Jade se come a los cuervos que se te acerquen por 12 s',
+          target: me,
+          run: () => {
+            this.c.guardT = 12;
+          },
+        };
+      default:
+        return null;
     }
   }
 
@@ -422,7 +648,7 @@ class BirdBoss extends BossController {
       if (f >= 1) {
         this.root.remove(r.mesh);
         this.rocks.splice(k, 1);
-        this.c.strike(r.to, 1.9, 15, 9, 6);
+        this.c.strike(r.to, 1.9, 15, 9, 6, 'rock');
         soundManager.playWoodRattle();
         this.c.addEffect(burstEffect(this.root, r.to.clone().add(V(0, 0.3, 0)), r.mesh.material as THREE.Material, 7, 0.22, 4, 0.7));
         this.c.addEffect(puffEffect(this.root, r.to.clone().add(V(0, 0.4, 0)), 'rgba(214,200,180,0.85)', 2.5, 0.4));
@@ -431,6 +657,10 @@ class BirdBoss extends BossController {
   }
 
   targets(out: AimTarget[]) {
+    for (const cr of this.crows) {
+      if (cr.state === 'fall') continue;
+      out.push({ pos: cr.center, radius: 0.55, accepts: ['bate', 'piedra', 'stomp'], priority: 0.9, hit: () => this.dropCrow(cr) });
+    }
     if (this.dead || this.state === 'falling') return;
     if (this.state === 'grounded') {
       out.push({
@@ -500,6 +730,9 @@ class BirdBoss extends BossController {
 
   dispose() {
     for (const r of this.rocks) this.root.remove(r.mesh);
+    for (const cr of this.crows) disposeGroup(this.root, cr.m.group);
+    this.crows = [];
+    if (this.cloud) disposeGroup(this.root, this.cloud);
     super.dispose();
   }
 }
@@ -539,8 +772,11 @@ class GlitchBoss extends BossController {
     this.group.position.copy(h);
   }
 
+  /** Chispa's flash: no copies and no "pantallazo" while it lasts */
+  private stunT = 0;
+
   private maxClones() {
-    return 2 + Math.round(this.s.diff * 2);
+    return this.scaled(2 + Math.round(this.s.diff * 2), 1);
   }
 
   private floorAt(x: number, z: number) {
@@ -595,8 +831,14 @@ class GlitchBoss extends BossController {
     this.corePos.copy(pos).add(this.m.group.position);
 
     // Copies of the player
+    this.stunT = Math.max(0, this.stunT - dt);
     this.spawnT -= dt;
-    if (this.spawnT <= 0 && this.clones.length < this.maxClones()) {
+    if (this.stunT > 0) {
+      this.waveWarn = -1;
+      this.waveT = Math.max(this.waveT, 1);
+      this.m.eye.scale.setScalar(0.6);
+    }
+    if (this.spawnT <= 0 && this.clones.length < this.maxClones() && this.stunT <= 0) {
       this.spawnClone();
       this.spawnT = 4.6 - 1.6 * this.s.diff;
     }
@@ -607,10 +849,10 @@ class GlitchBoss extends BossController {
       if (this.waveWarn < 0) {
         this.m.eye.scale.setScalar(1);
         soundManager.playStalkerWarning();
-        this.c.shockwave(V(pos.x, this.s.floorY, pos.z), 34, 9 + 3 * this.s.diff, 14, 0xff00e6, 0.9);
+        this.c.shockwave(V(pos.x, this.s.floorY, pos.z), 34, 9 + 3 * this.s.diff, 14, 0xff00e6, 0.9, 'wave');
         this.waveT = 6.5 - 2 * this.s.diff;
       }
-    } else {
+    } else if (this.stunT <= 0) {
       this.waveT -= dt;
       if (this.waveT <= 0) {
         this.waveWarn = 1.0;
@@ -676,7 +918,7 @@ class GlitchBoss extends BossController {
         cl.model.group.position.x += (Math.random() - 0.5) * 0.06;
         cl.model.group.rotation.y = cl.yaw;
         if (cl.state === 'chase' && d < 0.9 && Math.abs(p.y - cl.pos.y) < 1.5) {
-          if (this.c.damagePlayer(12, cl.pos, 11, 6)) {
+          if (this.c.damagePlayer(12, cl.pos, 11, 6, 'clone')) {
             cl.state = 'recoil';
             cl.t = 0;
           }
@@ -684,6 +926,69 @@ class GlitchBoss extends BossController {
       }
       cl.center.copy(cl.model.group.position).add(V(0, 0.8, 0));
       cl.model.updateAnimation(moving, true, dt, time);
+    }
+    for (const cl of [...this.clones]) {
+      if (cl.state !== 'drop' && this.guarding(cl.pos)) {
+        this.killClone(cl, true);
+        this.c.say('¡Jade se comió una copia! Recoge su orbe', 'jade-clone', 2);
+      }
+    }
+  }
+
+  companionAction(c: CompanionStyle): CompanionAction | null {
+    const core = () => this.corePos;
+    const me = () => this.c.playerPos;
+    switch (c) {
+      case 'nube':
+        return {
+          name: 'Lluvia eléctrica',
+          desc: 'La lluvia hace cortocircuito: todas las copias desaparecen',
+          target: core,
+          run: () => {
+            for (const cl of [...this.clones]) this.killClone(cl, false);
+          },
+        };
+      case 'estrella':
+        return {
+          name: 'Luz estelar',
+          desc: 'Te da 2 orbes de luz para lanzarle',
+          target: me,
+          run: () => this.gift('luz', 2),
+        };
+      case 'luciernaga':
+        return {
+          name: 'Destello cegador',
+          desc: 'ERR0R.exe queda cegado 8 s: no hace copias ni pantallazos',
+          target: core,
+          run: () => {
+            this.stunT = 8;
+          },
+        };
+      case 'catarina':
+        return {
+          name: 'Escudo de catarina',
+          desc: 'Los golpes de las copias no te hacen daño por 10 s',
+          target: me,
+          run: () => this.c.immunity('clone', 10),
+        };
+      case 'hada':
+        return {
+          name: 'Hechizo sanador',
+          desc: 'Te cura 2 corazones',
+          target: me,
+          run: () => this.c.healPlayer(40),
+        };
+      case 'serpiente':
+        return {
+          name: 'Guardiana',
+          desc: 'Jade se come las copias que se te acercan (sueltan su orbe) por 12 s',
+          target: me,
+          run: () => {
+            this.c.guardT = 12;
+          },
+        };
+      default:
+        return null;
     }
   }
 
@@ -764,9 +1069,29 @@ interface Cow {
   center: THREE.Vector3;
 }
 
+interface Alien {
+  m: AlienModel;
+  pos: THREE.Vector3;
+  yaw: number;
+  state: 'drop' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'dead';
+  t: number;
+  hp: number;
+  from: THREE.Vector3;
+  lungeTo: THREE.Vector3;
+  hit: boolean;
+  center: THREE.Vector3;
+  beam: THREE.Mesh | null;
+}
+
 class UfoBoss extends BossController {
   private m: UfoModel;
   private cows: Cow[] = [];
+  /** Xenomorph-like aliens it drops on the players (more for bigger parties) */
+  private aliens: Alien[] = [];
+  private alienT = 5;
+  /** Nubi's fog: it can't find cows while it lasts */
+  private noAbductT = 0;
+  private lost = false;
   private abducting = -1;
   private abductT = 9;
   private laserT = 3;
@@ -848,7 +1173,8 @@ class UfoBoss extends BossController {
     }
 
     // The host decides which cow gets abducted (so the whole party sees the same)
-    if (this.abducting < 0 && this.c.deps.isHost()) {
+    this.noAbductT = Math.max(0, this.noAbductT - dt);
+    if (this.abducting < 0 && this.c.deps.isHost() && this.noAbductT <= 0) {
       this.abductT -= dt;
       if (this.abductT <= 0) {
         const free = this.cows.map((cw, i) => (cw.state === 'graze' ? i : -1)).filter((i) => i >= 0);
@@ -861,6 +1187,245 @@ class UfoBoss extends BossController {
       }
     }
     this.updateCows(dt, time);
+
+    // Aliens down the green beam
+    this.alienT -= dt;
+    if (this.alienT <= 0) {
+      this.alienT = 8 - 2.5 * this.s.diff;
+      if (this.aliens.filter((a) => a.state !== 'dead').length < this.scaled(1 + Math.round(this.s.diff * 2), 1)) this.spawnAlien();
+    }
+    this.updateAliens(dt, time);
+
+    // Every cow taken: the mission is lost
+    if (!this.lost && this.cowsLeft() === 0) {
+      this.lost = true;
+      this.c.lose('¡La Nave Nodriza se llevó todas las vacas!');
+    }
+  }
+
+  private cowsLeft(): number {
+    return this.cows.filter((cw) => cw.state !== 'gone').length;
+  }
+
+  objective() {
+    return { label: 'Vacas', have: this.cowsLeft(), total: this.cows.length };
+  }
+
+  private spawnAlien() {
+    const m = createAlien();
+    const u = this.group.position;
+    const h = this.s.half - 3;
+    const at = V(THREE.MathUtils.clamp(u.x, -h, h), this.s.floorY, THREE.MathUtils.clamp(u.z, -h, h));
+    const from = V(at.x, u.y - 1.6, at.z);
+    m.group.position.copy(from);
+    this.root.add(m.group);
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.9, 1.4, u.y - 1.4 - at.y, 16, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+    );
+    beam.position.set(at.x, (u.y - 1.4 + at.y) / 2, at.z);
+    this.root.add(beam);
+    this.aliens.push({ m, pos: at, yaw: Math.random() * 6, state: 'drop', t: 0, hp: 2, from, lungeTo: V(), hit: false, center: at.clone(), beam });
+    soundManager.playStalkerWarning();
+    this.c.say('¡Bajó un alien! Pégale con el bate o la resortera', 'alien', 6);
+  }
+
+  private hurtAlien(a: Alien, dmg: number) {
+    if (a.state === 'dead' || a.state === 'drop') return;
+    a.hp -= dmg;
+    this.c.addEffect(puffEffect(this.root, a.center.clone(), 'rgba(134,239,172,0.9)', 1.6, 0.3));
+    if (a.hp > 0) {
+      a.state = 'recover';
+      a.t = 0;
+      return;
+    }
+    a.state = 'dead';
+    a.t = 0;
+    this.c.addEffect(burstEffect(this.root, a.center.clone(), new THREE.MeshStandardMaterial({ color: 0x84cc16 }), 10, 0.1, 5, 0.8));
+    soundManager.playEnemyBoop();
+  }
+
+  private updateAliens(dt: number, time: number) {
+    const p = this.c.playerPos;
+    const floor = this.s.floorY;
+    for (let k = this.aliens.length - 1; k >= 0; k--) {
+      const a = this.aliens[k];
+      a.t += dt;
+      const g = a.m.group;
+      if (a.beam && a.state !== 'drop') {
+        disposeGroup(this.root, a.beam);
+        a.beam = null;
+      }
+      if (a.state === 'dead') {
+        a.m.body.rotation.x = Math.min(1.4, a.t * 3);
+        g.position.y = a.pos.y - Math.max(0, a.t - 0.5) * 1.5;
+        if (a.t > 1.6) {
+          disposeGroup(this.root, g);
+          this.aliens.splice(k, 1);
+        }
+        continue;
+      }
+      if (this.dead) {
+        a.state = 'dead';
+        a.t = 0;
+        continue;
+      }
+      if (a.state !== 'drop' && this.guarding(a.pos)) {
+        a.hp = 0;
+        this.hurtAlien(a, 9);
+        this.c.say('¡Jade se comió un alien!', 'jade-alien', 2);
+        continue;
+      }
+      const dx = p.x - a.pos.x;
+      const dz = p.z - a.pos.z;
+      const dist = Math.hypot(dx, dz) || 1;
+      let run = 0;
+      switch (a.state) {
+        case 'drop': {
+          const k2 = Math.min(1, a.t / 1.2);
+          g.position.lerpVectors(a.from, a.pos, ease(k2));
+          if (a.beam) (a.beam.material as THREE.MeshBasicMaterial).opacity = 0.35 * (1 - k2 * 0.5);
+          if (k2 >= 1) {
+            a.state = 'hunt';
+            a.t = 0;
+          }
+          break;
+        }
+        case 'hunt': {
+          a.yaw = turnTo(a.yaw, Math.atan2(dx, dz), 7, dt);
+          const speed = 3.6 + 1.6 * this.s.diff;
+          if (dist > 2.4) {
+            a.pos.x += (dx / dist) * speed * dt;
+            a.pos.z += (dz / dist) * speed * dt;
+            run = 1;
+          } else if (Math.abs(p.y - a.pos.y) < 1.6) {
+            a.state = 'windup';
+            a.t = 0;
+          }
+          break;
+        }
+        case 'windup':
+          a.yaw = turnTo(a.yaw, Math.atan2(dx, dz), 10, dt);
+          if (a.t >= 0.45 - 0.15 * this.s.diff) {
+            a.state = 'lunge';
+            a.t = 0;
+            a.hit = false;
+            a.from.copy(a.pos);
+            a.lungeTo.set(a.pos.x + (dx / dist) * 3.4, floor, a.pos.z + (dz / dist) * 3.4);
+            soundManager.playWindGust();
+          }
+          break;
+        case 'lunge': {
+          const k2 = Math.min(1, a.t / 0.38);
+          a.pos.lerpVectors(a.from, a.lungeTo, k2);
+          if (!a.hit && Math.hypot(p.x - a.pos.x, p.z - a.pos.z) < 1.0 && Math.abs(p.y - a.pos.y) < 1.6) {
+            a.hit = true;
+            this.c.damagePlayer(12, a.pos, 9, 5, 'alien');
+          }
+          if (k2 >= 1) {
+            a.state = 'recover';
+            a.t = 0;
+          }
+          break;
+        }
+        case 'recover':
+          if (a.t >= 0.8) {
+            a.state = 'hunt';
+            a.t = 0;
+          }
+          break;
+      }
+      const h = this.s.half - 1;
+      a.pos.x = THREE.MathUtils.clamp(a.pos.x, -h, h);
+      a.pos.z = THREE.MathUtils.clamp(a.pos.z, -h, h);
+      if (a.state !== 'drop') {
+        a.pos.y = floor;
+        g.position.copy(a.pos);
+        g.position.y += a.state === 'lunge' ? Math.sin(Math.min(1, a.t / 0.38) * Math.PI) * 0.8 : 0;
+      }
+      g.rotation.y = a.yaw;
+      // Animation: crouch before the jump, legs running, tail swaying, jaw snapping
+      const crouch = a.state === 'windup' ? 0.35 : a.state === 'lunge' ? -0.2 : 0;
+      a.m.body.rotation.x = crouch;
+      a.m.body.position.y = 0.95 - (a.state === 'windup' ? 0.18 : 0);
+      a.m.legs.forEach((l, i) => (l.rotation.x = run ? Math.sin(time * 16 + i * Math.PI) * 0.7 : 0));
+      a.m.arms.forEach((l, i) => (l.rotation.x = (a.state === 'lunge' ? -1.2 : 0) + (run ? Math.sin(time * 16 + i * Math.PI + 1) * 0.5 : 0)));
+      a.m.tail.forEach((t, i) => (t.rotation.y = Math.sin(time * 4 + i * 0.6) * 0.25));
+      a.m.jaw.position.y = -0.13 - (a.state === 'windup' || a.state === 'lunge' ? 0.05 + Math.abs(Math.sin(time * 20)) * 0.04 : 0);
+      a.center.copy(a.pos).add(V(0, 1.0, 0));
+    }
+  }
+
+  companionAction(c: CompanionStyle): CompanionAction | null {
+    const ufo = () => this.glassPos;
+    const me = () => this.c.playerPos;
+    switch (c) {
+      case 'nube':
+        return {
+          name: 'Neblina',
+          desc: 'Una niebla esconde las vacas: la nave no puede secuestrar por 12 s',
+          target: ufo,
+          run: () => this.calm(12, true),
+        };
+      case 'estrella':
+        return {
+          name: 'Estrella fugaz',
+          desc: 'Una estrella golpea el vidrio de la nave',
+          target: ufo,
+          run: () => this.c.damageBoss(7),
+        };
+      case 'luciernaga':
+        return {
+          name: 'Destello',
+          desc: 'Un destello deslumbra a todos los aliens y los tumba',
+          target: me,
+          run: () => {
+            for (const a of this.aliens) this.hurtAlien(a, 9);
+          },
+        };
+      case 'catarina':
+        return {
+          name: 'Escudo antiláser',
+          desc: 'Los láseres de la nave no te hacen daño por 12 s',
+          target: me,
+          run: () => this.c.immunity('laser', 12),
+        };
+      case 'hada':
+        return {
+          name: 'Burbuja mágica',
+          desc: 'Envuelve a todas las vacas: la nave no se las puede llevar por un rato',
+          target: () => (this.abducting >= 0 ? this.cows[this.abducting].center : ufo()),
+          run: () => {
+            this.cows.forEach((cw, i) => {
+              if (cw.state === 'graze' || cw.state === 'lifting') this.netCow(i, true);
+            });
+          },
+        };
+      case 'serpiente':
+        return {
+          name: 'Guardiana',
+          desc: 'Jade se come a los aliens que se te acercan por 12 s',
+          target: me,
+          run: () => {
+            this.c.guardT = 12;
+          },
+        };
+      default:
+        return null;
+    }
+  }
+
+  /** No abductions for a while (Nubi's fog); the whole party gets it. */
+  private calm(seconds: number, local: boolean) {
+    this.noAbductT = Math.max(this.noAbductT, seconds);
+    if (local) this.c.deps.send('calm', 0, seconds);
+    if (this.abducting >= 0) {
+      const cow = this.cows[this.abducting];
+      cow.state = 'netted';
+      cow.t = 0.01;
+      cow.vy = 0;
+      this.abducting = -1;
+    }
   }
 
   private laserAt(at: THREE.Vector3) {
@@ -877,7 +1442,7 @@ class UfoBoss extends BossController {
       beam.rotateX(Math.PI / 2);
       this.root.add(beam);
       this.beams.push({ mesh: beam, t: 0.35 });
-      this.c.strike(at, 1.8, 20, 9, 7);
+      this.c.strike(at, 1.8, 20, 9, 7, 'laser');
       soundManager.playSteamPuff();
       this.c.addEffect(puffEffect(this.root, at.clone().add(V(0, 0.3, 0)), 'rgba(255,45,85,0.95)', 3, 0.35));
     });
@@ -924,17 +1489,7 @@ class UfoBoss extends BossController {
     this.m.beam.visible = false;
     this.cows.forEach((cow, i) => {
       const g = cow.m.group;
-      if (cow.state === 'gone') {
-        cow.t -= dt;
-        if (cow.t <= 0) {
-          cow.state = 'graze';
-          cow.pos.copy(cow.home);
-          g.visible = true;
-          g.rotation.set(0, cow.yaw, 0);
-          this.c.addEffect(puffEffect(this.root, cow.home.clone().add(V(0, 1, 0)), 'rgba(255,255,255,0.9)', 2.5, 0.4));
-        }
-        return;
-      }
+      if (cow.state === 'gone') return; // taken for good
       if (cow.state === 'graze') {
         if (cow.pos.distanceTo(cow.wander) < 0.3 || Math.random() < dt * 0.15) {
           const a = Math.random() * Math.PI * 2;
@@ -969,10 +1524,13 @@ class UfoBoss extends BossController {
           cow.t = 20;
           g.visible = false;
           this.abducting = -1;
-          if (this.c.deps.isHost()) {
-            this.c.healBoss(16);
-            this.c.say('¡La nave se curó con una vaca! Usa la red para salvarlas', 'ufo-heal', 2);
-          }
+          if (this.c.deps.isHost()) this.c.healBoss(16);
+          const left = this.cowsLeft();
+          this.c.say(
+            left > 0 ? `¡Se llevó una vaca! Quedan ${left}. Si se lleva todas, pierdes` : '¡Se llevó la última vaca!',
+            'ufo-heal',
+            1
+          );
         }
       } else if (cow.state === 'netted') {
         cow.t -= dt;
@@ -993,6 +1551,17 @@ class UfoBoss extends BossController {
   }
 
   targets(out: AimTarget[]) {
+    for (const a of this.aliens) {
+      if (a.state === 'dead' || a.state === 'drop') continue;
+      out.push({
+        pos: a.center,
+        radius: 0.75,
+        accepts: ['bate', 'piedra', 'stomp'],
+        top: a.pos.y + 1.6,
+        priority: 0.9,
+        hit: (kind) => this.hurtAlien(a, kind === 'piedra' ? 1 : 2),
+      });
+    }
     if (this.dead) return;
     out.push({
       pos: this.glassPos,
@@ -1012,13 +1581,15 @@ class UfoBoss extends BossController {
     });
   }
 
-  onEvent(kind: string, i: number) {
+  onEvent(kind: string, i: number, v: number) {
     if (kind === 'abduct') this.startAbduct(i);
     else if (kind === 'net') this.netCow(i, false);
+    else if (kind === 'calm') this.calm(v, false);
   }
 
   hint(): string {
     if (this.abducting >= 0) return this.has('red') ? '¡Secuestra una vaca! Lánzale la red a la vaca' : '¡Secuestra una vaca! Busca una red para salvarla';
+    if (this.aliens.some((a) => a.state !== 'dead' && a.state !== 'drop')) return '¡Aliens! Pégales con el bate (o 2 piedras) antes de que salten sobre ti';
     if (!this.has('resortera')) return 'Toma la resortera y junta piedras';
     if (!this.has('piedra')) return 'Junta piedras del suelo para la resortera';
     return 'Dispara al vidrio de la nave con la resortera · esquiva los círculos rojos';
@@ -1029,6 +1600,7 @@ class UfoBoss extends BossController {
     this.clearPending();
     this.abducting = -1;
     this.crashFrom.copy(this.group.position);
+    if (!instant) this.c.say(`¡Salvaste ${this.cowsLeft()} de ${this.cows.length} vacas!`, 'cows-saved', 99);
     for (const cow of this.cows) {
       if (cow.state === 'lifting') {
         cow.state = 'netted';
@@ -1039,6 +1611,11 @@ class UfoBoss extends BossController {
   }
 
   dispose() {
+    for (const a of this.aliens) {
+      disposeGroup(this.root, a.m.group);
+      if (a.beam) disposeGroup(this.root, a.beam);
+    }
+    this.aliens = [];
     for (const cow of this.cows) disposeGroup(this.root, cow.m.group);
     for (const b of this.beams) disposeGroup(this.root, b.mesh);
     super.dispose();
@@ -1085,6 +1662,8 @@ class SkeletonBoss extends BossController {
   /** Chewing a grabbed player */
   private chew: { t: number; bites: number } | null = null;
   private hitCd = 0;
+  /** Nubi's steam: it can't see you to slam its hands */
+  private noSlamT = 0;
 
   constructor(c: CombatSystem) {
     super(c, 4 + (c.setup.diff > 0.5 ? 1 : 0));
@@ -1256,7 +1835,8 @@ class SkeletonBoss extends BossController {
     );
 
     // Hand slams on whoever is close to the giant
-    if (up) {
+    this.noSlamT = Math.max(0, this.noSlamT - dt);
+    if (up && this.noSlamT <= 0) {
       this.slamT -= dt;
       if (this.slamT <= 0) {
         this.slamT = 5.5 - 2 * this.s.diff;
@@ -1272,7 +1852,7 @@ class SkeletonBoss extends BossController {
     // Dancing skeletons
     this.spawnT -= dt;
     const alive = this.dancers.filter((d) => d.state !== 'sink').length;
-    if (this.spawnT <= 0 && alive < 2 + Math.round(2 * this.s.diff) && (up || this.phase === 'under')) {
+    if (this.spawnT <= 0 && alive < this.scaled(2 + Math.round(2 * this.s.diff), 1) && (up || this.phase === 'under')) {
       this.spawnDancer();
       this.spawnT = 5 - 1.5 * this.s.diff;
     }
@@ -1387,9 +1967,80 @@ class SkeletonBoss extends BossController {
         hand.scale.setScalar(k > 0.8 ? Math.max(0.01, 1 - (k - 0.8) * 5) : 1);
       },
     });
-    this.c.strike(at, 2.6, 20, 12, 7);
+    this.c.strike(at, 2.6, 20, 12, 7, 'slam');
     soundManager.playWoodRattle();
     this.c.addEffect(puffEffect(this.root, at.clone().add(V(0, 0.4, 0)), 'rgba(132,204,22,0.7)', 4, 0.5));
+  }
+
+  companionAction(c: CompanionStyle): CompanionAction | null {
+    const mouth = () => this.mouthPos;
+    const me = () => this.c.playerPos;
+    switch (c) {
+      case 'nube':
+        return {
+          name: 'Nube de vapor',
+          desc: 'El pantano echa vapor: Huesudo no te ve y no golpea con las manos por 12 s',
+          target: mouth,
+          run: () => {
+            this.noSlamT = 12;
+            this.clearPending();
+          },
+        };
+      case 'estrella':
+        return {
+          name: 'Bombas estelares',
+          desc: 'Te da 2 bombas',
+          target: me,
+          run: () => this.gift('bomba', 2),
+        };
+      case 'luciernaga':
+        return {
+          name: 'Luz de pantano',
+          desc: 'La luz hace que Huesudo abra la boca: ¡lánzale una bomba!',
+          target: mouth,
+          run: () => {
+            if (this.phase !== 'up' || this.chew) {
+              this.c.say('Huesudo está escondido… inténtalo cuando salga', 'act-skel', 1);
+              return;
+            }
+            this.mouthOpen = true;
+            this.mouthT = 5;
+            this.c.say('¡Huesudo abrió la boca! ¡Lánzale una bomba!', 'mouth', 1);
+          },
+        };
+      case 'catarina':
+        return {
+          name: 'Concha dura',
+          desc: 'Los esqueletos bailarines no te pueden agarrar por 12 s',
+          target: me,
+          run: () => this.c.immunity('grab', 12),
+        };
+      case 'hada':
+        return {
+          name: 'Rescate de hada',
+          desc: 'Te suelta si te tienen atrapado y te cura 1 corazón',
+          target: me,
+          anytime: true,
+          run: () => {
+            if (this.c.grab) this.c.releaseGrab('friend');
+            this.c.healPlayer(20);
+          },
+        };
+      case 'serpiente':
+        return {
+          name: 'Cazadora de huesos',
+          desc: 'Jade derriba a todos los esqueletos bailarines',
+          target: me,
+          run: () => {
+            for (const d of this.dancers) {
+              if (d.state === 'carry' && this.c.grab) this.c.releaseGrab('friend');
+              this.collapse(d);
+            }
+          },
+        };
+      default:
+        return null;
+    }
   }
 
   private spawnDancer() {
@@ -1434,7 +2085,12 @@ class SkeletonBoss extends BossController {
           d.pos.z += (dz / dist) * speed * dt;
         }
         d.yaw = turnTo(d.yaw, Math.atan2(dx, dz), 6, dt);
-        if (dist < 0.85 && Math.abs(p.y - d.pos.y) < 1.5) {
+        if (this.guarding(d.pos)) {
+          this.collapse(d);
+          this.c.say('¡Jade derribó a un esqueleto!', 'jade-dancer', 2);
+          continue;
+        }
+        if (dist < 0.85 && Math.abs(p.y - d.pos.y) < 1.5 && !this.c.isImmune('grab')) {
           const need = 7 + Math.round(this.s.diff * 4);
           const ok = this.c.grabPlayer(
             {
@@ -1609,6 +2265,11 @@ class GnomeBoss extends BossController {
   private trapPos = V();
   private netDur = 5.5;
   private minionMat = new THREE.MeshStandardMaterial({ color: 0xe7e0cf });
+  /** Nubi's puddle: he slips around, slow and without leaps */
+  private slowT = 0;
+  /** Lila's spell: asleep (like netted, but nobody comes to help) */
+  private asleep = false;
+  private zzz: THREE.Sprite | null = null;
 
   constructor(c: CombatSystem) {
     super(c, 100 + 50 * c.setup.diff);
@@ -1650,6 +2311,8 @@ class GnomeBoss extends BossController {
       return;
     }
 
+    this.slowT = Math.max(0, this.slowT - dt);
+    if (this.slowT > 0) this.m.group.rotation.z = Math.sin(time * 6) * 0.12;
     const dx = p.x - this.pos.x;
     const dz = p.z - this.pos.z;
     const dist = Math.hypot(dx, dz) || 1;
@@ -1659,7 +2322,8 @@ class GnomeBoss extends BossController {
       case 'walk': {
         this.yaw = turnTo(this.yaw, Math.atan2(dx, dz), 3, dt);
         // A trapped player gets the king's full attention
-        const speed = (2.4 + 1.4 * diff) * (this.c.grab && this.playerNet ? 1.5 : 1);
+        const speed = (2.4 + 1.4 * diff) * (this.c.grab && this.playerNet ? 1.5 : 1) * (this.slowT > 0 ? 0.5 : 1);
+        if (this.slowT > 0) this.leapT = Math.max(this.leapT, 1);
         if (dist > 2.6) {
           this.pos.x += Math.sin(this.yaw) * speed * dt;
           this.pos.z += Math.cos(this.yaw) * speed * dt;
@@ -1777,12 +2441,17 @@ class GnomeBoss extends BossController {
         const pulling = this.minions.filter((mi) => mi.kind === 'helper' && mi.state === 'act').length;
         this.t += dt * 0.6 * pulling;
         this.net.scale.setScalar(1 - Math.min(0.25, (this.t / this.netDur) * 0.25));
+        if (this.zzz) {
+          this.zzz.position.set(this.pos.x + Math.sin(time * 2) * 0.4, this.pos.y + 4.4 + ((time * 0.8) % 1) * 0.8, this.pos.z);
+          (this.zzz.material as THREE.SpriteMaterial).opacity = 1 - ((time * 0.8) % 1);
+        }
         if (this.t >= this.netDur) {
           this.net.visible = false;
           this.net.scale.setScalar(1);
           this.m.group.rotation.z = 0;
           this.c.addEffect(puffEffect(this.root, this.pos.clone().add(V(0, 1.8, 0)), 'rgba(103,232,249,0.9)', 4, 0.4));
-          this.c.say(pulling ? '¡Los gnomos le quitaron la red al rey!' : '¡El Rey Gnomo rompió la red!', 'gnome-free', 2);
+          this.c.say(this.asleep ? '¡El Rey Gnomo despertó!' : pulling ? '¡Los gnomos le quitaron la red al rey!' : '¡El Rey Gnomo rompió la red!', 'gnome-free', 2);
+          this.wake();
           this.state = 'recover';
           this.t = 0;
           this.dismissMinions();
@@ -1868,8 +2537,8 @@ class GnomeBoss extends BossController {
   }
 
   private impact(at: THREE.Vector3, radius: number) {
-    this.c.strike(at, radius, 22, 12, 7);
-    this.c.shockwave(at, 8 + 4 * this.s.diff, 10, 12, 0xfacc15, 0.9);
+    this.c.strike(at, radius, 22, 12, 7, 'quake');
+    this.c.shockwave(at, 8 + 4 * this.s.diff, 10, 12, 0xfacc15, 0.9, 'quake');
     soundManager.playWoodRattle();
     this.c.addEffect(puffEffect(this.root, at.clone().add(V(0, 0.4, 0)), 'rgba(161,98,7,0.8)', 4, 0.5));
   }
@@ -1880,6 +2549,7 @@ class GnomeBoss extends BossController {
     if (local) this.c.deps.send('stun', 0, this.netDur);
     this.state = 'netted';
     this.t = 0;
+    this.wake();
     this.handNet.visible = false;
     this.clearPending();
     this.net.visible = true;
@@ -1889,10 +2559,48 @@ class GnomeBoss extends BossController {
     this.c.say('¡Atrapado! Salen gnomos a protegerlo: pégales a los que le quitan la red', 'gnome-net', 2);
   }
 
+  /** Lila's spell: he falls asleep for a few seconds (nobody comes to wake him). */
+  private sleepKing(dur: number, local: boolean) {
+    if (this.dead || this.state === 'netted') return;
+    if (local) this.c.deps.send('stun', 1, dur);
+    this.state = 'netted';
+    this.t = 0;
+    this.netDur = dur;
+    this.asleep = true;
+    this.handNet.visible = false;
+    this.clearPending();
+    if (this.pos.y > this.s.floorY) this.pos.y = this.s.floorY;
+    if (!this.zzz) {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = 64;
+      const g = c.getContext('2d');
+      if (g) {
+        g.font = 'bold 44px sans-serif';
+        g.fillStyle = '#e0f2fe';
+        g.strokeStyle = '#1e3a8a';
+        g.lineWidth = 6;
+        g.strokeText('Zzz', 10, 48);
+        g.fillText('Zzz', 10, 48);
+      }
+      const tex = new THREE.CanvasTexture(c);
+      this.zzz = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+      this.zzz.scale.set(1.6, 0.8, 1);
+      this.root.add(this.zzz);
+    }
+    this.zzz.visible = true;
+    this.c.say('¡El Rey Gnomo se durmió! Golpéalo', 'gnome-sleep', 1);
+  }
+
+  private wake() {
+    this.asleep = false;
+    if (this.zzz) this.zzz.visible = false;
+  }
+
   /** Warriors defend the king; helpers run to him and pull the net off. */
   private callMinions() {
-    const warriors = 1 + Math.round(2 * this.s.diff);
-    const helpers = 2;
+    const warriors = this.scaled(1 + Math.round(2 * this.s.diff), 1);
+    const helpers = this.scaled(2, 1);
     const total = warriors + helpers;
     for (let k = 0; k < total; k++) {
       const kind: Minion['kind'] = k < warriors ? 'warrior' : 'helper';
@@ -1944,6 +2652,11 @@ class GnomeBoss extends BossController {
           disposeGroup(this.root, g);
           this.minions.splice(k, 1);
         }
+        continue;
+      }
+      if (mi.state !== 'rise' && this.guarding(mi.pos)) {
+        this.poof(mi);
+        this.c.say('¡Jade se comió un gnomo!', 'jade-gnome', 2);
         continue;
       }
       if (mi.state === 'rise') {
@@ -2029,8 +2742,72 @@ class GnomeBoss extends BossController {
     });
   }
 
-  onEvent(kind: string, _i: number, v: number) {
-    if (kind === 'stun') this.netKing(false, v > 0 ? v : undefined);
+  onEvent(kind: string, i: number, v: number) {
+    if (kind === 'stun') {
+      if (i === 1) this.sleepKing(v > 0 ? v : 4.5, false);
+      else this.netKing(false, v > 0 ? v : undefined);
+    }
+  }
+
+  companionAction(c: CompanionStyle): CompanionAction | null {
+    const king = () => this.center;
+    const me = () => this.c.playerPos;
+    switch (c) {
+      case 'nube':
+        return {
+          name: 'Charco',
+          desc: 'Llueve bajo el rey: se resbala, camina lento y no salta por 10 s',
+          target: king,
+          run: () => {
+            this.slowT = 10;
+            this.c.addEffect(puffEffect(this.root, this.pos.clone().add(V(0, 0.3, 0)), 'rgba(125,211,252,0.85)', 4, 0.6));
+          },
+        };
+      case 'estrella':
+        return {
+          name: 'Red estelar',
+          desc: 'Te da una red nueva (4 usos)',
+          target: me,
+          run: () => this.gift('red'),
+        };
+      case 'luciernaga':
+        return {
+          name: 'Luciérnagas',
+          desc: 'Deslumbra a los gnomos guerreros y ayudantes: desaparecen',
+          target: king,
+          run: () => {
+            for (const mi of this.minions) this.poof(mi);
+          },
+        };
+      case 'catarina':
+        return {
+          name: 'Rebote',
+          desc: 'Los golpes del mazo y sus ondas no te hacen daño por 12 s',
+          target: me,
+          run: () => this.c.immunity('quake', 12),
+        };
+      case 'hada':
+        return {
+          name: 'Hechizo de sueño',
+          desc: 'El Rey Gnomo se duerme 4 s: ¡golpéalo!',
+          target: king,
+          run: () => {
+            if (this.state === 'netted') this.c.say('Ya está atrapado: ¡golpéalo!', 'gnome-already', 1);
+            else this.sleepKing(4.5, true);
+          },
+        };
+      case 'serpiente':
+        return {
+          name: 'Guardiana',
+          desc: 'Jade se come a los gnomos que se te acercan por 12 s',
+          target: me,
+          run: () => {
+            this.c.guardT = 12;
+          },
+        };
+      default:
+        return null;
+    }
   }
 
   hint(): string {
@@ -2052,6 +2829,7 @@ class GnomeBoss extends BossController {
     this.clearPending();
     this.net.visible = false;
     this.handNet.visible = false;
+    this.wake();
     this.dismissMinions();
     if (this.playerNet && this.c.grab) this.c.releaseGrab('other');
     if (instant) this.group.visible = false;
@@ -2062,6 +2840,7 @@ class GnomeBoss extends BossController {
     this.minions = [];
     this.freePlayerNet();
     this.root.remove(this.handNet);
+    if (this.zzz) this.root.remove(this.zzz);
     super.dispose();
   }
 }
@@ -2084,6 +2863,8 @@ class DraculaBoss extends BossController {
   /** Seconds spent in the dark (far from lit candelabra) */
   private darkT = 0;
   private hands: ShadowHands[] = [];
+  /** Nubi's moonlight: no darkness while it lasts */
+  private moonT = 0;
   private candles: CandelabraModel[] = [];
   private state: 'intro' | 'dark' | 'weak' | 'rise' = 'intro';
   private t = 3.5;
@@ -2152,7 +2933,8 @@ class DraculaBoss extends BossController {
         if (this.t <= 0) this.enterDark(true);
         break;
       case 'dark': {
-        this.c.darknessTarget = 1 - 0.17 * this.litCount();
+        this.moonT = Math.max(0, this.moonT - dt);
+        this.c.darknessTarget = this.moonT > 0 ? 0.1 : 1 - 0.17 * this.litCount();
         if (this.swoop) {
           this.swoop.t += dt / 0.9;
           const k = Math.min(1, this.swoop.t);
@@ -2160,7 +2942,7 @@ class DraculaBoss extends BossController {
           this.yaw = Math.atan2(this.swoop.to.x - this.swoop.from.x, this.swoop.to.z - this.swoop.from.z);
           if (!this.swoop.hit && this.pos.distanceTo(V(p.x, p.y + 1, p.z)) < 1.5) {
             this.swoop.hit = true;
-            this.c.damagePlayer(15, this.pos, 11, 6);
+            this.c.damagePlayer(15, this.pos, 11, 6, 'swoop');
           }
           if (k >= 1) this.swoop = null;
         } else if (this.swoopWarn >= 0) {
@@ -2231,6 +3013,10 @@ class DraculaBoss extends BossController {
   private updateDarkness(dt: number) {
     const p = this.c.playerPos;
     if (this.c.grab || this.c.isDown || this.hands.some((h) => !h.visual && h.phase !== 'sink')) return;
+    if (this.moonT > 0 || this.c.isImmune('hands')) {
+      this.darkT = 0;
+      return;
+    }
     const nearLight = this.candles.some((cm) => cm.lit && Math.hypot(p.x - cm.group.position.x, p.z - cm.group.position.z) < 7.5);
     if (nearLight) {
       this.darkT = Math.max(0, this.darkT - dt * 2);
@@ -2285,7 +3071,7 @@ class DraculaBoss extends BossController {
         const k2 = Math.min(1, h.t / 0.35);
         for (const a of arms) a.pivot.position.y = -1.9 * (1 - k2);
         if (k2 >= 1) {
-          if (!h.visual && Math.hypot(p.x - h.pos.x, p.z - h.pos.z) < 1.6 && Math.abs(p.y - h.pos.y) < 1.5) {
+          if (!h.visual && !this.c.isImmune('hands') && Math.hypot(p.x - h.pos.x, p.z - h.pos.z) < 1.6 && Math.abs(p.y - h.pos.y) < 1.5) {
             const need = 6 + Math.round(3 * this.s.diff);
             const ok = this.c.grabPlayer(
               {
@@ -2395,6 +3181,97 @@ class DraculaBoss extends BossController {
         this.c.damageBoss(kind === 'bate' ? 20 : kind === 'stomp' ? 15 : 6);
       },
     });
+  }
+
+  companionAction(c: CompanionStyle): CompanionAction | null {
+    const drac = () => this.center;
+    const me = () => this.c.playerPos;
+    switch (c) {
+      case 'nube':
+        return {
+          name: 'Claro de luna',
+          desc: 'La nube se abre y entra la luna: no hay oscuridad ni manos por 10 s',
+          target: drac,
+          run: () => {
+            this.moonT = 10;
+            this.darkT = 0;
+          },
+        };
+      case 'estrella':
+        return {
+          name: 'Estrella guía',
+          desc: 'Prende el candelabro apagado más cercano',
+          target: () => {
+            const i = this.nearestUnlit();
+            return i >= 0 ? this.candles[i].group.position : me();
+          },
+          run: () => {
+            const i = this.nearestUnlit();
+            if (i >= 0 && this.state === 'dark') this.light(i, true);
+            else this.c.say('No hay candelabros que prender ahora', 'act-candle', 1);
+          },
+        };
+      case 'luciernaga':
+        return {
+          name: 'Linterna viva',
+          desc: 'Te da una antorcha nueva (o recarga la tuya)',
+          target: me,
+          run: () => this.gift('antorcha'),
+        };
+      case 'catarina':
+        return {
+          name: 'Ala protectora',
+          desc: 'Las picadas de Drácula no te hacen daño por 12 s',
+          target: me,
+          run: () => this.c.immunity('swoop', 12),
+        };
+      case 'hada':
+        return {
+          name: 'Polvo de hada',
+          desc: 'Drácula estornuda y cae mareado unos segundos: ¡golpéalo!',
+          target: drac,
+          run: () => {
+            if (this.state !== 'dark') {
+              this.c.say('Ahora no tiene efecto', 'act-drac', 1);
+              return;
+            }
+            this.state = 'weak';
+            this.t = 3.5;
+            this.swoop = null;
+            this.swoopWarn = -1;
+            this.c.say('¡Drácula cayó mareado! ¡Golpéalo!', 'drac-weak', 1);
+          },
+        };
+      case 'serpiente':
+        return {
+          name: 'Muralla',
+          desc: 'Jade te rodea: las manos de sombra no te agarran por 15 s',
+          target: me,
+          anytime: true,
+          run: () => {
+            if (this.c.grab && this.hands.some((h) => h.phase === 'hold' && !h.visual)) this.c.releaseGrab('friend');
+            this.c.immunity('hands', 15);
+            this.darkT = 0;
+          },
+        };
+      default:
+        return null;
+    }
+  }
+
+  private nearestUnlit(): number {
+    const p = this.c.playerPos;
+    let best = -1;
+    let bestD = Infinity;
+    this.candles.forEach((cm, i) => {
+      if (cm.lit) return;
+      const d = Math.hypot(p.x - cm.group.position.x, p.z - cm.group.position.z);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return best;
   }
 
   onEvent(kind: string, i: number, _v: number, from: string) {

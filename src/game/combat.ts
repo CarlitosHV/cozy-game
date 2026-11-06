@@ -73,6 +73,8 @@ export interface CombatDeps {
   setRemoteDown: (userId: string, on: boolean) => void;
   openPortal: () => void;
   closePortal: () => void;
+  /** The fight is lost (e.g. every cow taken): game over with this reason */
+  lose: (reason: string) => void;
   /** Gives movement back to the player (unless a menu is open) */
   unlockMovement: () => void;
 }
@@ -97,6 +99,10 @@ export interface CombatStatus {
   urgent: boolean;
   /** The companion is giving a tip (press I): who talks and what it says */
   tip: { from: string; text: string } | null;
+  /** Companion special move for this boss (power button) */
+  action: { name: string; desc: string; cd: number; cdMax: number } | null;
+  /** Fight objective counter (e.g. cows left) */
+  objective: { label: string; have: number; total: number } | null;
 }
 
 interface Shot {
@@ -121,6 +127,8 @@ interface Food {
 }
 
 interface Wave {
+  /** Attack kind (a companion can shield you from it) */
+  tag?: string;
   center: THREE.Vector3;
   r: number;
   speed: number;
@@ -145,6 +153,19 @@ const SHOT_SPEC: Record<ShotKind, { speed: number; g: number; radius: number; ra
 };
 
 const FOOD_HEAL = { burger: 40, fries: 20 };
+/** Seconds between companion actions in a boss fight */
+const ACTION_COOLDOWN = 20;
+
+/** A companion's special move against one boss (one per companion and boss). */
+export interface CompanionAction {
+  name: string;
+  desc: string;
+  /** Where the companion flies (default: you) */
+  target?: () => THREE.Vector3;
+  run: () => void;
+  /** Can be used while caught or fainted */
+  anytime?: boolean;
+}
 const FOOD_RESPAWN = 25;
 /** Seconds a fainted player waits for CPR before waking up at the entrance */
 const DOWN_WAIT = 25;
@@ -187,6 +208,14 @@ export class CombatSystem {
   private stompCooldown = 0;
   /** Companion tip (key I): it flies around the boss like a fairy guide while it talks */
   private tip: { t: number; dur: number } | null = null;
+  /** Companion boss action (power button): it flies to its target and does its thing */
+  private mission: { t: number; target: () => THREE.Vector3; run: () => void; done: boolean; color: string } | null = null;
+  /** Seconds until the companion can act again */
+  private actionCd = 0;
+  /** Attacks a companion is shielding you from: tag → seconds left */
+  private immune: Record<string, number> = {};
+  /** Jade guarding you: helpers of the boss that come close get eaten */
+  public guardT = 0;
   private guide: THREE.Group | null = null;
   private tipIntroShown = false;
   private readonly _home = new THREE.Vector3();
@@ -259,8 +288,14 @@ export class CombatSystem {
   }
 
   /** Hurts the player (ignored while blinking after a hit). Knocks them away from `from`. */
-  damagePlayer(amount: number, from: THREE.Vector3 | null, force = 10, up = 6): boolean {
+  damagePlayer(amount: number, from: THREE.Vector3 | null, force = 10, up = 6, tag?: string): boolean {
     if (this.invuln > 0 || this.defeated || this.isDown) return false;
+    if (tag && this.isImmune(tag)) {
+      // A companion shield takes the hit
+      this.invuln = 0.4;
+      this.addEffect(puffEffect(this.deps.root, this.playerPos.clone().add(this._w.set(0, 1, 0)), 'rgba(253,224,71,0.9)', 1.8, 0.3));
+      return false;
+    }
     const ph = this.physics;
     this.hp = Math.max(0, this.hp - amount);
     this.hurtId++;
@@ -350,19 +385,48 @@ export class CombatSystem {
   }
 
   /** Instant hit in an area (rock impact, laser, slam). */
-  strike(pos: THREE.Vector3, radius: number, dmg: number, force = 10, up = 6) {
+  strike(pos: THREE.Vector3, radius: number, dmg: number, force = 10, up = 6, tag?: string) {
     const p = this.playerPos;
     const dxz = Math.hypot(p.x - pos.x, p.z - pos.z);
-    if (dxz < radius && p.y > pos.y - 1.2 && p.y < pos.y + 2.4) this.damagePlayer(dmg, pos, force, up);
+    if (dxz < radius && p.y > pos.y - 1.2 && p.y < pos.y + 2.4) this.damagePlayer(dmg, pos, force, up, tag);
+  }
+
+  /** The fight is lost: the game shows why and lets you try again. */
+  lose(reason: string) {
+    if (this.defeated) return;
+    if (this.grab) this.releaseGrab('other');
+    this.deps.lose(reason);
+  }
+
+  /** Players in this boss fight (you + friends on this level). Bosses call more helpers for bigger parties. */
+  get partySize(): number {
+    return 1 + this.deps.remotes().length;
+  }
+
+  /** A companion shields you from one kind of attack for a while. */
+  immunity(tag: string, seconds: number) {
+    this.immune[tag] = Math.max(this.immune[tag] ?? 0, seconds);
+  }
+
+  isImmune(tag: string): boolean {
+    return (this.immune[tag] ?? 0) > 0;
+  }
+
+  /** Life back (companion actions). */
+  healPlayer(amount: number) {
+    if (this.isDown) return;
+    this.hp = Math.min(this.maxHp, this.hp + amount);
+    this.addEffect(puffEffect(this.deps.root, this.playerPos.clone().add(this._w.set(0, 1.2, 0)), 'rgba(244,114,182,0.95)', 2.4, 0.5));
+    soundManager.playCollectible();
   }
 
   /** Expanding ring on the floor: jump over it! */
-  shockwave(center: THREE.Vector3, maxR: number, speed: number, dmg: number, color = 0xfacc15, height = 0.8) {
+  shockwave(center: THREE.Vector3, maxR: number, speed: number, dmg: number, color = 0xfacc15, height = 0.8, tag?: string) {
     const mesh = makeWaveRing(color, height);
     mesh.position.copy(center);
     mesh.scale.set(0.1, 1, 0.1);
     this.deps.root.add(mesh);
-    this.waves.push({ center: center.clone(), r: 0.1, speed, maxR, height, dmg, hit: false, mesh });
+    this.waves.push({ center: center.clone(), r: 0.1, speed, maxR, height, dmg, hit: false, mesh, tag });
   }
 
   /** Boss damage dealt by the local player (shared with the party). */
@@ -749,7 +813,7 @@ export class CombatSystem {
         const feet = p.y - w.center.y;
         if (Math.abs(d - w.r) < 0.55 && feet < w.height && feet > -1.2) {
           w.hit = true;
-          this.damagePlayer(w.dmg, w.center, 9, 7);
+          this.damagePlayer(w.dmg, w.center, 9, 7, w.tag);
         }
       }
       if (w.r >= w.maxR) {
@@ -872,39 +936,94 @@ export class CombatSystem {
     soundManager.playTimeBonus();
   }
 
-  /** Moves the companion (or the guide light) around the boss while it gives a tip. */
+  /** What your companion can do in this fight (power button), or null without a companion. */
+  companionAction(): CompanionAction | null {
+    const c = this.deps.playerModel().appearance.companion;
+    if (!c || c === 'ninguno' || this.defeated) return null;
+    return this.boss.companionAction(c);
+  }
+
+  /** Power button in a boss fight: the companion's special move against this boss. */
+  useCompanionAction(): boolean {
+    const act = this.companionAction();
+    if (!act) return false;
+    if ((this.isDown || this.grab) && !act.anytime) {
+      this.say(this.isDown ? 'Estás desmayado…' : '¡Primero suéltate!', 'act-busy', 2);
+      return true;
+    }
+    if (this.actionCd > 0) {
+      this.say(`${this.guideName} está descansando (${Math.ceil(this.actionCd)} s)`, 'act-cd', 2);
+      return true;
+    }
+    this.actionCd = ACTION_COOLDOWN;
+    this.tip = null;
+    const color = COMPANION_POWERS[this.deps.playerModel().appearance.companion]?.color ?? '#fde68a';
+    this.mission = { t: 0, target: act.target ?? (() => this.playerPos), run: act.run, done: false, color };
+    soundManager.playTimeBonus();
+    this.deps.notify(`${this.guideName}: ¡${act.name}!`);
+    return true;
+  }
+
+  /** Moves the companion (or the guide light) to the boss for a tip, or to its target for an action. */
   private updateTip(dt: number, time: number) {
     if (!this.tipIntroShown && this.elapsed > 2.5) {
       this.tipIntroShown = true;
       this.deps.notify(`Pulsa I y ${this.guideName} te dirá cómo vencer a ${this.setup.short}`);
     }
+    this.actionCd = Math.max(0, this.actionCd - dt);
+    for (const k of Object.keys(this.immune)) {
+      this.immune[k] -= dt;
+      if (this.immune[k] <= 0) delete this.immune[k];
+    }
+    this.guardT = Math.max(0, this.guardT - dt);
     const model = this.deps.playerModel();
     const sprite = model.companionSprite;
     const useSprite = model.appearance.companion !== 'ninguno';
-    const tip = this.tip;
-    if (!tip) {
-      if (this.guide) this.guide.visible = false;
-      return;
-    }
-    tip.t += dt;
-    if (tip.t >= tip.dur) {
-      this.tip = null;
-      if (this.guide) this.guide.visible = false;
-      return;
-    }
-    // Out (0.7 s), orbiting, back (0.7 s)
-    const out = Math.min(1, tip.t / 0.7, (tip.dur - tip.t) / 0.7);
-    const k = out * out * (3 - 2 * out);
     model.group.updateMatrixWorld(true);
     model.group.localToWorld(this._home.set(0.42, 1.25, 0.15));
-    const focus = this.focus ?? this.playerPos;
-    const a = time * 2.6;
-    const r = 2.4;
-    this._orbit.set(focus.x + Math.cos(a) * r, focus.y + 0.8 + Math.sin(time * 3.3) * 0.5, focus.z + Math.sin(a) * r);
-    const world = this._home.lerp(this._orbit, k);
+    let world: THREE.Vector3 | null = null;
+    let grow = 0;
+
+    const m = this.mission;
+    if (m) {
+      // Out in 0.6 s, does its thing, back in 0.7 s
+      m.t += dt;
+      const tgt = m.target();
+      const out = Math.min(1, m.t / 0.6, Math.max(0, (1.6 - m.t) / 0.7));
+      const k = out * out * (3 - 2 * out);
+      this._orbit.set(tgt.x + Math.cos(time * 8) * 0.5, tgt.y + 1.4, tgt.z + Math.sin(time * 8) * 0.5);
+      world = this._home.lerp(this._orbit, k);
+      grow = k;
+      if (!m.done && m.t >= 0.6) {
+        m.done = true;
+        this.addEffect(puffEffect(this.deps.root, this._orbit.clone(), m.color, 3.2, 0.5));
+        m.run();
+      }
+      if (m.t >= 1.6) this.mission = null;
+    } else if (this.tip) {
+      const tip = this.tip;
+      tip.t += dt;
+      if (tip.t >= tip.dur) {
+        this.tip = null;
+      } else {
+        // Out (0.7 s), orbiting, back (0.7 s)
+        const out = Math.min(1, tip.t / 0.7, (tip.dur - tip.t) / 0.7);
+        const k = out * out * (3 - 2 * out);
+        const focus = this.focus ?? this.playerPos;
+        const a = time * 2.6;
+        const r = 2.4;
+        this._orbit.set(focus.x + Math.cos(a) * r, focus.y + 0.8 + Math.sin(time * 3.3) * 0.5, focus.z + Math.sin(a) * r);
+        world = this._home.lerp(this._orbit, k);
+        grow = k;
+      }
+    }
+    if (!world) {
+      if (this.guide) this.guide.visible = false;
+      return;
+    }
     if (useSprite) {
       sprite.position.copy(model.group.worldToLocal(world.clone()));
-      sprite.scale.setScalar(1 + k * 0.6);
+      sprite.scale.setScalar(1 + grow * 0.6);
     } else {
       if (!this.guide) {
         const g = new THREE.Group();
@@ -996,6 +1115,7 @@ export class CombatSystem {
   }
 
   getStatus(): CombatStatus {
+    const act = this.companionAction();
     const tipText = this.tip ? (this.defeated ? `¡Lo lograste! Ve al portal del centro` : this.boss.hint()) : null;
     let hint = this.defeated ? `¡Venciste a ${this.setup.short}!` : this.boss.hint();
     let urgent = !!this.grab;
@@ -1024,6 +1144,8 @@ export class CombatSystem {
       down: this.isDown,
       urgent,
       tip: tipText ? { from: this.guideName, text: tipText } : null,
+      action: act ? { name: act.name, desc: act.desc, cd: this.actionCd, cdMax: ACTION_COOLDOWN } : null,
+      objective: this.boss.objective(),
     };
   }
 

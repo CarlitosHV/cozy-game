@@ -805,3 +805,125 @@ export function createShadowHands(): ShadowHandsModel {
   return { group, arms, puddle };
 }
 
+// ===========================================================================
+// Crows (Plumarroca's helpers)
+// ===========================================================================
+export interface CrowModel {
+  group: THREE.Group;
+  wings: THREE.Group[];
+  head: THREE.Mesh;
+}
+
+export function createCrow(): CrowModel {
+  const group = new THREE.Group();
+  const black = std(0x111827, 0.45, { emissive: new THREE.Color(0x0b1020), emissiveIntensity: 0.4 });
+  const body = add(group, new THREE.SphereGeometry(0.22, 12, 10), black, 0, 0, 0);
+  body.scale.set(0.9, 0.85, 1.5);
+  const head = add(group, new THREE.SphereGeometry(0.14, 10, 8), black, 0, 0.1, 0.3);
+  const beak = add(group, new THREE.ConeGeometry(0.05, 0.2, 6), std(0xfacc15, 0.5), 0, 0.08, 0.48);
+  beak.rotation.x = Math.PI / 2;
+  for (const sx of [1, -1]) add(group, new THREE.SphereGeometry(0.028, 6, 6), basic(0xef4444), 0.07 * sx, 0.15, 0.4);
+  const tail = add(group, new THREE.BoxGeometry(0.18, 0.03, 0.26), black, 0, 0.02, -0.38);
+  tail.rotation.x = 0.2;
+  const wings: THREE.Group[] = [];
+  for (const sx of [1, -1]) {
+    const w = new THREE.Group();
+    w.position.set(0.16 * sx, 0.06, 0);
+    const blade = add(w, new THREE.BoxGeometry(0.5, 0.025, 0.28), black, 0.25 * sx, 0, -0.02);
+    blade.rotation.y = 0.15 * sx;
+    group.add(w);
+    wings.push(w);
+  }
+  return { group, wings, head };
+}
+
+// ===========================================================================
+// Aliens (Nave Nodriza's helpers): long-headed, ribbed, with a tail
+// ===========================================================================
+export interface AlienModel {
+  group: THREE.Group;
+  /** Leans forward when it lunges */
+  body: THREE.Group;
+  head: THREE.Group;
+  jaw: THREE.Mesh;
+  legs: THREE.Group[];
+  arms: THREE.Group[];
+  tail: THREE.Group[];
+}
+
+export function createAlien(): AlienModel {
+  const group = new THREE.Group();
+  const skin = std(0x0b0f14, 0.25, { metalness: 0.35, emissive: new THREE.Color(0x0f1a14), emissiveIntensity: 0.3 });
+  const ribs = std(0x1f2937, 0.3, { metalness: 0.4 });
+  const body = new THREE.Group();
+  body.position.y = 0.95;
+  group.add(body);
+  // Ribbed torso, leaning forward
+  const torso = add(body, new THREE.CapsuleGeometry(0.17, 0.5, 4, 10), skin, 0, 0.1, 0);
+  torso.rotation.x = 0.55;
+  for (let k = 0; k < 4; k++) {
+    const rib = add(body, new THREE.TorusGeometry(0.18, 0.03, 6, 14), ribs, 0, 0.3 - k * 0.13, 0.08 - k * 0.07);
+    rib.rotation.x = Math.PI / 2 + 0.55;
+  }
+  // Long curved head
+  const head = new THREE.Group();
+  head.position.set(0, 0.45, 0.32);
+  const dome = add(head, new THREE.CapsuleGeometry(0.13, 0.55, 4, 10), skin, 0, 0.05, -0.22);
+  dome.rotation.x = Math.PI / 2 + 0.35;
+  add(head, new THREE.SphereGeometry(0.12, 10, 8), ribs, 0, -0.04, 0.08);
+  const jaw = add(head, new THREE.BoxGeometry(0.12, 0.05, 0.16), ribs, 0, -0.13, 0.08);
+  for (let k = 0; k < 5; k++) add(head, new THREE.BoxGeometry(0.018, 0.04, 0.018), std(0xe5e7eb, 0.4), -0.04 + k * 0.02, -0.1, 0.16);
+  body.add(head);
+  // Spines on the back
+  for (let k = 0; k < 3; k++) {
+    const sp = add(body, new THREE.CylinderGeometry(0.02, 0.05, 0.35, 6), skin, 0, 0.35 - k * 0.05, -0.2 - k * 0.08);
+    sp.rotation.x = -0.9;
+  }
+  // Thin limbs (pivots at the joints)
+  const arms: THREE.Group[] = [];
+  const legs: THREE.Group[] = [];
+  for (const sx of [1, -1]) {
+    const arm = new THREE.Group();
+    arm.position.set(0.17 * sx, 0.25, 0.12);
+    const a1 = add(arm, new THREE.CylinderGeometry(0.035, 0.03, 0.5, 6), skin, 0, -0.22, 0.08);
+    a1.rotation.x = -0.5;
+    for (let f = 0; f < 3; f++) {
+      const claw = add(arm, new THREE.ConeGeometry(0.015, 0.14, 4), std(0xe5e7eb, 0.4), (f - 1) * 0.03, -0.46, 0.22);
+      claw.rotation.x = Math.PI * 0.7;
+    }
+    body.add(arm);
+    arms.push(arm);
+    const leg = new THREE.Group();
+    leg.position.set(0.12 * sx, 0.95, -0.05);
+    const thigh = add(leg, new THREE.CylinderGeometry(0.05, 0.04, 0.5, 6), skin, 0, -0.22, 0.1);
+    thigh.rotation.x = 0.45;
+    const shin = add(leg, new THREE.CylinderGeometry(0.04, 0.03, 0.55, 6), skin, 0, -0.62, 0.05);
+    shin.rotation.x = -0.35;
+    group.add(leg);
+    legs.push(leg);
+  }
+  // Segmented tail ending in a blade
+  const tail: THREE.Group[] = [];
+  let parent: THREE.Object3D = body;
+  let z = -0.25;
+  let y = -0.15;
+  for (let k = 0; k < 6; k++) {
+    const seg = new THREE.Group();
+    seg.position.set(0, y, z);
+    add(seg, new THREE.SphereGeometry(0.06 - k * 0.007, 8, 6), skin, 0, 0, -0.1);
+    if (k === 5) {
+      const blade = add(seg, new THREE.ConeGeometry(0.05, 0.25, 4), ribs, 0, 0, -0.25);
+      blade.rotation.x = -Math.PI / 2;
+    }
+    parent.add(seg);
+    tail.push(seg);
+    parent = seg;
+    z = -0.2;
+    y = 0;
+  }
+  group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+  });
+  return { group, body, head, jaw, legs, arms, tail };
+}
+

@@ -494,6 +494,23 @@ export class ItemSystem {
     }
   }
 
+  /** A gift (companion actions): tops up a stack, refills a tool you carry, or takes a free slot. */
+  public grant(type: ItemType, amount = 1): boolean {
+    const max = STACK_MAX[type];
+    const full = DURABILITY[type];
+    let slot = this.slots.indexOf(type);
+    if (slot !== -1 && (max !== undefined || full !== undefined)) {
+      this.counts[slot] = full !== undefined ? full : Math.min(max!, this.counts[slot] + amount);
+      return true;
+    }
+    if (slot !== -1) return false;
+    slot = this.slots.indexOf(null);
+    if (slot === -1) return false;
+    this.slots[slot] = type;
+    this.counts[slot] = full ?? (max !== undefined ? Math.min(max, amount) : 1);
+    return true;
+  }
+
   /** One use less of a tool you carry (e.g. the torch lit a candelabra). */
   public wear(type: ItemType): boolean {
     const slot = this.slots.indexOf(type);

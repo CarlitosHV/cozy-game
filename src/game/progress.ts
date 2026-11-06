@@ -112,6 +112,7 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
     desc: 'Un ave gigante lanza piedras desde lo alto de las torres y huye si te acercas.',
     steps: [
       'Plumarroca lanza piedras: mira los círculos rojos en el suelo y esquívalos',
+      'Sus cuervos bajan a picotearte: pégales con el bate o la resortera',
       'Si te acercas a su torre, te siente y se va volando a otra',
       'Toma la resortera y junta piedras: dispárale para espantarla',
       'Cuando esté volando, dale con la resortera: ¡cae al suelo mareada!',
@@ -133,12 +134,13 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
   ufo: {
     name: 'La Nave Nodriza',
     short: 'Nave Nodriza',
-    desc: 'Un ovni gigante dispara láseres y se cura secuestrando vacas.',
+    desc: 'Un ovni gigante dispara láseres, suelta aliens y se lleva las vacas. Si se lleva todas, pierdes.',
     steps: [
       'Junta piedras y dispárale al vidrio del ovni con la resortera',
       'Esquiva los círculos rojos: ahí cae un rayo láser',
-      'Si el ovni secuestra una vaca, se cura: ¡lánzale la red a la vaca!',
-      'Mientras secuestra, el ovni se queda quieto: buen momento para disparar',
+      'Protege a las vacas: si el ovni secuestra una, ¡lánzale la red! Las que se lleva no vuelven',
+      'Si se lleva todas las vacas, pierdes la batalla',
+      'Bajan aliens por un rayo verde: pégales con el bate (o 2 piedras) antes de que salten',
     ],
   },
   skeleton: {

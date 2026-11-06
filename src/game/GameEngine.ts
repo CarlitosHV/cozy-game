@@ -138,6 +138,8 @@ export class GameEngine {
 
   // Game state & modes
   public gameState: GameState = 'title';
+  /** Why the run ended when it wasn't the clock (e.g. a boss fight lost); null = time ran out */
+  public gameOverReason: string | null = null;
   public gameMode: GameMode = 'free';
   public timeRemaining: number = 90;
   public stalker: AetherStalker | null = null;
@@ -579,6 +581,8 @@ export class GameEngine {
   /** Uses the companion's temporary power (key G or the HUD button). */
   public activateCompanionPower() {
     if (this.gameState !== 'playing') return;
+    // Boss fights: each companion has its own special move against each boss
+    if (this.combat && this.combat.useCompanionAction()) return;
     this.companionPowers.activate(this.physics, this.stalker ? this.stalker.position : null);
     multiplayerClient.triggerCompanionPower(this.playerAppearance.companion);
   }
@@ -891,6 +895,7 @@ export class GameEngine {
   }
 
   private beginRun(mode: GameMode | undefined, freshBackpack: boolean) {
+    this.gameOverReason = null;
     this.stopSpectating();
     this.levelStartTime = performance.now();
     this.lastUnlocked = null;
@@ -1025,6 +1030,13 @@ export class GameEngine {
       closePortal: () => {
         this.world.victoryPortal = undefined;
         this.world.summitPosition = new THREE.Vector3(0, -999, 0);
+      },
+      lose: (reason) => {
+        if (this.gameState !== 'playing') return;
+        this.gameOverReason = reason;
+        this.gameState = 'game_over';
+        this.callbacks.onStateChange('game_over');
+        soundManager.playGameOver();
       },
       unlockMovement: () => {
         this.physics.isMovementLocked = this.isUIModalOpen || this.gameState === 'paused' || this.gameState === 'victory';
@@ -1214,6 +1226,7 @@ export class GameEngine {
   }
 
   public restartGame(mode?: GameMode) {
+    this.gameOverReason = null;
     if (mode) {
       this.setGameMode(mode);
     }
