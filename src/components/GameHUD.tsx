@@ -1931,6 +1931,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     >
                       {UI.gameModes}
                     </button>
+                    <button
+                      type="button"
+                      onClick={openCreator}
+                      className={`${BTN.ghost} inline-flex items-center justify-center gap-2`}
+                      data-testid="menu-customize"
+                    >
+                      <UserRound className="w-4 h-4" />
+                      Personalizar personaje
+                    </button>
                   </div>
 
                   <div className="w-full pt-4 mt-1 border-t border-cozy-line flex items-center justify-center gap-4 text-xs text-cozy-muted">
