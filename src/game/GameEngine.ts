@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { soundManager, WeatherType } from '../audio/SoundtrackSynthesizer';
 import { buildCozyParkourWorld, WorldBuildResult } from './levels';
+import type { LevelHazardStatus } from './levels';
 import { createPlayerCharacter, disposePlayerCharacter, PlayerCharacterModel } from './models';
 import { CharacterAppearance, loadAppearance, saveAppearance } from './character';
 import { ParkourPhysics, PlayerInput } from './physics';
@@ -408,6 +409,8 @@ export class GameEngine {
       },
       tool: (type: ItemType) => {
         if (this.combat) return this.combat.tool(type);
+        const r = this.world.hazards?.useItem?.(type) ?? 'none';
+        if (r !== 'none') return r;
         this.itemSystem.notify(`${ITEM_INFO[type].name}: sirve en las luchas contra jefes`);
         return 'none';
       },
@@ -677,7 +680,9 @@ export class GameEngine {
     if (this.gameState !== 'playing') return;
     // Boss fights: each companion has its own special move against each boss
     if (this.combat && this.combat.useCompanionAction()) return;
-    this.companionPowers.activate(this.physics, this.stalker ? this.stalker.position : null);
+    const used = this.companionPowers.activate(this.physics, this.stalker ? this.stalker.position : null);
+    // Hombre Polilla in a boss fight: rewinding you also stops the boss's time for a moment
+    if (used && this.combat && this.playerAppearance.companion === 'polilla') this.combat.freezeBoss(4);
     multiplayerClient.triggerCompanionPower(this.playerAppearance.companion);
   }
 
@@ -1270,6 +1275,7 @@ export class GameEngine {
         ph.isGrounded = false;
         ph.knockbackTimer = 0.35;
       },
+      onCellarFall: () => this.countDeath(),
       onEnterCellar: (blockIndex) => {
         const pos = this.puzzleSystem.resetBlock(blockIndex);
         if (pos && this.partyRoomId) multiplayerClient.sendBlock(this.currentLevel, blockIndex, pos.x, pos.y, pos.z, true);
@@ -1359,6 +1365,22 @@ export class GameEngine {
       return;
     }
     this.itemSystem.use(slot, this.itemCtx);
+  }
+
+  /** HUD info of levels with their own rules (the Backrooms: hearts, key, levers). */
+  public getLevelStatus(): LevelHazardStatus | null {
+    if (this.gameState !== 'playing' || this.isSpectating) return null;
+    return this.world.hazards?.status?.() ?? null;
+  }
+
+  /** Moves the player and the camera together (the endless corridor), so nothing seems to jump. */
+  private shiftView(o: THREE.Vector3) {
+    this.physics.position.add(o);
+    this.physics.playerModel.group.position.copy(this.physics.position);
+    this.camera.position.add(o);
+    this.camPivot.add(o);
+    this.targetCameraPos.add(o);
+    this.targetLookAt.add(o);
   }
 
   /** Dracula's darkness: dims the sun, sky light and fog towards black. */
@@ -2463,6 +2485,18 @@ export class GameEngine {
           soundManager.playGameOver();
         },
         notify: (text) => this.itemSystem.notify(text),
+        hurt: (from) => {
+          const ph = this.physics;
+          const dx = ph.position.x - from.x;
+          const dz = ph.position.z - from.z;
+          const d = Math.hypot(dx, dz) || 1;
+          ph.velocity.set((dx / d) * 6.5, 5.5, (dz / d) * 6.5);
+          ph.knockbackTimer = 0.35;
+          ph.isGrounded = false;
+        },
+        consume: (type) => this.itemSystem.consume(type),
+        has: (type) => this.itemSystem.has(type),
+        shift: (o) => this.shiftView(o),
       });
     }
 

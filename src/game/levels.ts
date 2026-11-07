@@ -32,6 +32,7 @@ import {
 } from './models';
 import { ProceduralTextures } from './textures';
 import { ItemSpot } from './items';
+import type { ItemType, ToolResult } from './items';
 import type { PuzzleData } from './puzzles';
 
 export interface PlatformItem {
@@ -85,6 +86,25 @@ export interface LevelHazardContext {
   /** You were caught: back to the last checkpoint (counts as a death) */
   caught: (text: string) => void;
   notify: (text: string) => void;
+  /** A monster hit you (knockback away from `from`); the level counts the hearts */
+  hurt?: (from: THREE.Vector3) => void;
+  /** Uses up one item from the backpack (true when you had it) */
+  consume?: (type: ItemType) => boolean;
+  has?: (type: ItemType) => boolean;
+  /** Moves you and the camera by an offset in one frame, without a visible jump (endless corridor) */
+  shift?: (offset: THREE.Vector3) => void;
+}
+
+/** Extra HUD info of a level with its own rules (the Backrooms: hearts, the key, the levers) */
+export interface LevelHazardStatus {
+  hearts: number;
+  maxHearts: number;
+  /** Goes up every time you lose a heart (HUD shake) */
+  hurtId: number;
+  key: 'need' | 'have' | 'open' | null;
+  levers: { have: number; total: number } | null;
+  /** 0 → 1: how dark it is (the HUD darkens the edges of the screen) */
+  darkness: number;
 }
 
 export interface LevelHazards {
@@ -94,6 +114,9 @@ export interface LevelHazards {
   darkness: number;
   /** Moving pieces that spectators copy from the friend they watch */
   syncObjects(): { obj: THREE.Object3D; pos?: THREE.Vector3 }[];
+  status?(): LevelHazardStatus | null;
+  /** Items with a special use here (the light orb is a light grenade in the Backrooms) */
+  useItem?(type: ItemType): ToolResult;
 }
 
 export interface WorldBuildResult {

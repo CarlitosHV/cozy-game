@@ -728,6 +728,41 @@ class SoundtrackSynthesizer {
     osc.stop(now + 0.42);
   }
 
+  /** Skinwalker scream: a high, wavering screech with a noisy rasp under it. */
+  public playScream(volume = 1) {
+    if (!this.ctx || !this.sfxGain || this.isMuted) return;
+    const now = this.ctx.currentTime;
+    const v = Math.max(0, Math.min(1, volume));
+    if (v < 0.02) return;
+    for (const [f0, type, g0] of [
+      [920, 'sawtooth', 0.05],
+      [1380, 'square', 0.025],
+      [610, 'sawtooth', 0.04],
+    ] as [number, OscillatorType, number][]) {
+      const osc = this.ctx.createOscillator();
+      const lfo = this.ctx.createOscillator();
+      const lfoGain = this.ctx.createGain();
+      const gain = this.ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(f0 * 0.7, now);
+      osc.frequency.exponentialRampToValueAtTime(f0, now + 0.12);
+      osc.frequency.exponentialRampToValueAtTime(f0 * 0.55, now + 1.1);
+      lfo.frequency.setValueAtTime(23, now);
+      lfoGain.gain.setValueAtTime(f0 * 0.06, now);
+      lfo.connect(lfoGain);
+      lfoGain.connect(osc.frequency);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(g0 * v, now + 0.06);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.15);
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      lfo.start(now);
+      osc.stop(now + 1.2);
+      lfo.stop(now + 1.2);
+    }
+  }
+
   public playGameOver() {
     if (!this.ctx || !this.sfxGain || this.isMuted) return;
     const now = this.ctx.currentTime;

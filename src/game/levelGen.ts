@@ -161,6 +161,9 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   const enemies = new EnemyManager(root, textures);
   const puzzles = emptyPuzzles();
   const dungeon = emptyDungeon();
+  const cellarObstacles: SwingingObstacleModel[] = [];
+  const cellarBalls: RollingWoolBallModel[] = [];
+  const cellarShells: THREE.Object3D[] = [];
   const deepZones: NonNullable<WorldBuildResult['deepZones']> = [];
   const items: ItemSpot[] = [];
   const routes: { name: string; ids: string[] }[] = [];
@@ -967,83 +970,141 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     t.used = true;
     const outside = new THREE.Vector3(at2(4.6, 0).x, t.y + 0.2, at2(4.6, 0).z);
 
-    // ---- Basement, far below the map ----
+    // ---- Basement, far below the map: a tunnel to cross jumping, toward the orb ----
     const BY = -40;
     const B = new THREE.Vector3(t.cx, BY, t.cz);
-    const S = 13;
-    const WH = 5.5;
-    const noVisual: Builder = () => {};
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.95, map: textures.stone });
-    kit.addPlatform(`cellar${dIndex}_floor`, B.x, BY, B.z, S + 1, S + 1, 1, (g, w, d, h) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), floorMat);
+    const LEN = 56; // along f
+    const W = 7; // across
+    const WH = 10;
+    const PIT = 9; // how deep the shell goes under the floor line (dark abyss + lava)
+    // Local frame: u along the tunnel (0 = where you come in), v across
+    const bAt = (u: number, v: number, y = BY) => new THREE.Vector3(B.x + f.x * u + r.x * v, y, B.z + f.z * u + r.z * v);
+    const sizeUV = (lu: number, lv: number) => ({ sx: Math.abs(f.x) * lu + Math.abs(r.x) * lv, sz: Math.abs(f.z) * lu + Math.abs(r.z) * lv });
+    const stoneFloorMat = new THREE.MeshStandardMaterial({ color: 0x6b625a, roughness: 0.95, map: textures.stone });
+    const cellarB: Builder = (g, w, d, h) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), stoneFloorMat);
       m.position.y = -h / 2;
+      m.castShadow = true;
       m.receiveShadow = true;
       g.add(m);
-    });
-    for (const [name, x, z, sx, sz] of [
-      ['n', 0, S / 2 + 0.4, S + 2, 0.8],
-      ['s', 0, -S / 2 - 0.4, S + 2, 0.8],
-      ['e', S / 2 + 0.4, 0, 0.8, S + 2],
-      ['w', -S / 2 - 0.4, 0, 0.8, S + 2],
-    ] as [string, number, number, number, number][]) {
-      kit.addPlatform(`cellar${dIndex}_wall_${name}`, B.x + x, BY + WH, B.z + z, sx, sz, WH + 1, noVisual).solid = true;
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.06, 0.12, d + 0.06), capMat);
+      cap.position.y = -0.05;
+      g.add(cap);
+    };
+    let cn = 0;
+    const block = (u: number, v: number, lu: number, lv: number, top: number, h = 1.2) => {
+      const c = bAt(u, v);
+      const { sx, sz } = sizeUV(lu, lv);
+      return kit.addPlatform(`cellar${dIndex}_p${cn++}`, c.x, BY + top, c.z, sx, sz, h, cellarB);
+    };
+    // Walls and roof (solid, no mesh: the shell below draws them)
+    const noVisual: Builder = () => {};
+    const mid = bAt(LEN / 2, 0);
+    for (const sgn of [-1, 1]) {
+      const c = bAt(LEN / 2, sgn * (W / 2 + 0.4));
+      const { sx, sz } = sizeUV(LEN + 2, 0.8);
+      kit.addPlatform(`cellar${dIndex}_wall${sgn}`, c.x, BY + WH, c.z, sx, sz, WH + PIT, noVisual).solid = true;
     }
-    kit.addPlatform(`cellar${dIndex}_roof`, B.x, BY + WH + 0.6, B.z, S + 2, S + 2, 0.6, noVisual).solid = true;
-    // No extra lights (they'd cost the whole level): the walls glow a little, warm like torchlight
-    const shellMat = new THREE.MeshStandardMaterial({ color: 0x6b6460, roughness: 0.95, map: textures.stone, side: THREE.BackSide, emissive: 0x3a2412, emissiveIntensity: 0.6 });
-    const shell = new THREE.Mesh(new THREE.BoxGeometry(S, WH, S), shellMat);
-    shell.position.set(B.x, BY + WH / 2, B.z);
+    for (const [name, u] of [
+      ['start', -0.4],
+      ['end', LEN + 0.4],
+    ] as [string, number][]) {
+      const c = bAt(u, 0);
+      const { sx, sz } = sizeUV(0.8, W + 2);
+      kit.addPlatform(`cellar${dIndex}_${name}`, c.x, BY + WH, c.z, sx, sz, WH + PIT, noVisual).solid = true;
+    }
+    // Shell seen from inside: stone walls, dark ceiling; its bottom is deep down (no flicker on floors)
+    const shellMat = new THREE.MeshStandardMaterial({ color: 0x5b534c, roughness: 0.95, map: textures.stone, side: THREE.BackSide, emissive: 0x2a1a0e, emissiveIntensity: 0.7 });
+    const { sx: shx, sz: shz } = sizeUV(LEN, W);
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(shx, WH + PIT, shz), shellMat);
+    shell.position.set(mid.x, BY + (WH - PIT) / 2, mid.z);
     shell.receiveShadow = true;
     root.add(shell);
-    deepZones.push({ minX: B.x - S / 2 - 1, maxX: B.x + S / 2 + 1, minY: BY - 4, maxY: BY + WH + 2, minZ: B.z - S / 2 - 1, maxZ: B.z + S / 2 + 1 });
-    // Local frame in the basement: from the spawn (u = -4.6) toward the altar (u = +3.6)
-    const bAt = (u: number, v: number, y = BY) => new THREE.Vector3(B.x + f.x * u + r.x * v, y, B.z + f.z * u + r.z * v);
-    // Torches on the walls
-    for (const [u, v] of [
-      [-S / 2 + 0.15, -3.5],
-      [-S / 2 + 0.15, 3.5],
-      [S / 2 - 0.15, -3.5],
-      [S / 2 - 0.15, 3.5],
-    ]) {
-      const p = bAt(u, v, BY + 3);
-      const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.6, 6), woodMat);
-      stick.position.copy(p);
-      const fire = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffa94d }));
-      fire.position.set(p.x, p.y + 0.4, p.z);
-      root.add(stick, fire);
-      kit.animators.push((_dt, time) => fire.scale.setScalar(1 + Math.sin(time * 9 + u + v) * 0.15));
-    }
-    // Pillars
-    for (const [u, v] of [
-      [-1.5, -4.4],
-      [-1.5, 4.4],
-      [2.5, -4.4],
-      [2.5, 4.4],
-    ]) {
-      const p = bAt(u, v);
-      const pil = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, WH, 10), stoneMat);
-      pil.position.set(p.x, BY + WH / 2, p.z);
-      pil.castShadow = true;
-      root.add(pil);
-      kit.registerCylinder(`cellar${dIndex}_pillar_${u}_${v}`, p.x, BY, p.z, 0.55, WH);
-    }
-    // The stairs you came down (they end in the wall: the way out is the portal)
-    for (let k = 0; k < 4; k++) {
-      const p = bAt(-S / 2 + 0.3 + (3 - k) * 0.6, 0);
-      const step = kit.addPlatform(`cellar${dIndex}_stair${k}`, p.x, BY + 0.5 * (k + 1), p.z, f.x !== 0 ? 0.6 : 2.4, f.x !== 0 ? 2.4 : 0.6, 0.5 * (k + 1), wallBuilder);
-      step.solid = k >= 2;
-    }
-    const exit = bAt(-4.8, 3.6);
-    puzzles.portals.push(makePortal(root, exit.x, BY, exit.z, outside, accent));
-    // Altar with the orb, and the rock to climb on
-    const altar = bAt(3.6, 0);
-    kit.addPlatform(`cellar${dIndex}_altar`, altar.x, BY + 3.2, altar.z, 3, 3, 3.2, wallBuilder).solid = true;
-    const rockAt = bAt(-0.6, 0);
-    const rk = makePushBlock(root, `cellar${dIndex}_rock`, rockAt.x, BY, rockAt.z, stoneMat, accent);
-    kit.platforms.push(rk.plat);
-    puzzles.blocks.push(rk.block);
+    cellarShells.push(shell); // keeps the camera inside the tunnel
+    // Lava far below: falling in sends you back to the last stone you stood on
+    const lava = new THREE.Mesh(new THREE.PlaneGeometry(shx - 0.2, shz - 0.2), new THREE.MeshBasicMaterial({ color: 0xff5a1f }));
+    lava.rotation.x = -Math.PI / 2;
+    lava.position.set(mid.x, BY - PIT + 1, mid.z);
+    root.add(lava);
+    kit.animators.push((_dt, time) => (lava.material as THREE.MeshBasicMaterial).color.setHSL(0.04 + Math.sin(time * 2) * 0.01, 1, 0.52 + Math.sin(time * 3) * 0.04));
+    deepZones.push(
+      (() => {
+        const a = bAt(-1, -W / 2 - 1);
+        const b2 = bAt(LEN + 1, W / 2 + 1);
+        return { minX: Math.min(a.x, b2.x), maxX: Math.max(a.x, b2.x), minY: BY - PIT - 2, maxY: BY + WH + 2, minZ: Math.min(a.z, b2.z), maxZ: Math.max(a.z, b2.z) };
+      })()
+    );
+    // Torches along both walls
+    for (let u = 4; u < LEN; u += 8)
+      for (const sgn of [-1, 1]) {
+        const p = bAt(u, sgn * (W / 2 - 0.15), BY + 3.2);
+        const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.6, 6), woodMat);
+        stick.position.copy(p);
+        const fire = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffa94d }));
+        fire.position.set(p.x, p.y + 0.4, p.z);
+        root.add(stick, fire);
+        kit.animators.push((_dt, time) => fire.scale.setScalar(1 + Math.sin(time * 9 + u + sgn) * 0.15));
+      }
+
+    // ---- The course ----
+    const cps: THREE.Vector3[] = [];
+    // 1. Landing where the stairs bring you
+    block(2, 0, 4, W, 0, 1.2);
+    for (let k = 0; k < 3; k++) block(0.3 + k * 0.01, 0, 0.6, 2.4, 0.5 * (3 - k), 0.5 * (3 - k)).solid = true;
+    const spawnIn = bAt(2.4, 0, BY + 0.2);
+    cps.push(spawnIn.clone());
+    // 2. Stepping stones over the abyss (zig-zag, up and down)
+    const stones: [number, number, number][] = [
+      [5.6, -1.2, 0.2],
+      [7.9, 1.0, 0.7],
+      [10.2, -0.8, 0.3],
+      [12.6, 1.2, 0.9],
+    ];
+    for (const [u, v, top] of stones) block(u, v, 1.5, 1.5, top);
+    collectible(bAt(10.2, -0.8).x, BY + 0.3, bAt(10.2, -0.8).z, true);
+    // 3. Rest stone (checkpoint)
+    block(16, 0, 3.4, W - 1, 0.6);
+    cps.push(bAt(16, 0, BY + 0.8));
+    // 4. Moving platforms (sideways, then up and down)
+    const m1 = block(19.8, 0, 2.2, 2.2, 0.6, 0.5);
+    kit.makeMoving(m1, Math.abs(r.x) > 0 ? 'x' : 'z', 1.8, 1.1 + 0.4 * diff, 0);
+    const m2 = block(23.2, 0, 2.2, 2.2, 1.2, 0.5);
+    kit.makeMoving(m2, 'y', 1.0, 1.0 + 0.3 * diff, 1.5);
+    const m3 = block(26.6, 0, 2.2, 2.2, 0.8, 0.5);
+    kit.makeMoving(m3, Math.abs(r.x) > 0 ? 'x' : 'z', 1.8, 1.2 + 0.4 * diff, 3);
+    collectible(bAt(23.2, 0).x, BY + 1.2, bAt(23.2, 0).z, true);
+    // 5. Hall with a swinging blade (pendulum across the way)
+    block(31, 0, 4.4, W - 1, 0.6);
+    cps.push(bAt(30, 0, BY + 0.8));
+    const chime = createSwingingObstacle(3.6, 0.6, 2.2 + rng() * 0.6, textures);
+    const pv = bAt(31.4, 0, BY + 0.6 + 4.9);
+    chime.group.position.copy(pv);
+    if (Math.abs(f.x) > 0) chime.group.rotation.y = Math.PI / 2; // swing across the tunnel
+    root.add(chime.group);
+    cellarObstacles.push(chime);
+    // 6. Narrow bridge with a rolling boulder coming at you
+    const bridge = block(39, 0, 10, 1.6, 0.6, 0.5);
+    void bridge;
+    const ballStart = bAt(43.4, 0, BY + 0.6);
+    const ballEnd = bAt(34.6, 0, BY + 0.6);
+    const ball = createRollingWoolBall(
+      0.65,
+      ballStart.clone(),
+      { minX: Math.min(ballStart.x, ballEnd.x) - 0.05, maxX: Math.max(ballStart.x, ballEnd.x) + 0.05, minZ: Math.min(ballStart.z, ballEnd.z) - 0.05, maxZ: Math.max(ballStart.z, ballEnd.z) + 0.05 },
+      0x78716c,
+      textures
+    );
+    ball.velocity.set(-f.x * (2.6 + diff), 0, -f.z * (2.6 + diff));
+    root.add(ball.group);
+    cellarBalls.push(ball);
+    // 7. Last jumps up to the altar
+    block(45.6, -1, 1.6, 1.6, 1.2);
+    block(47.8, 1, 1.6, 1.6, 2.0);
+    block(51.5, 0, 6, W - 1, 2.6, 2.6);
+    cps.push(bAt(50, 0, BY + 2.8));
+    const altar = bAt(53, 0);
     const before = puzzles.orbs.length;
-    placeOrb(altar.x, BY + 3.2, altar.z);
+    placeOrb(altar.x, BY + 2.6, altar.z);
     // The orb's light beam rises from the crypt (it's right under it)
     const orb = puzzles.orbs[before];
     if (orb) {
@@ -1053,10 +1114,9 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
       beamHolder.add(orb.beam);
       root.add(beamHolder);
     }
-    collectible(bAt(-4.5, -4.5).x, BY, bAt(-4.5, -4.5).z, true);
-    collectible(bAt(4.6, 4.6).x, BY, bAt(4.6, 4.6).z, true);
-    const spawnIn = bAt(-3.5, 0, BY + 0.2);
-    hint(spawnIn, 2.5, 'El orbe está en lo alto del altar: empuja la roca hasta él y súbete. El portal te regresa arriba');
+    const exit = bAt(50.2, 2);
+    puzzles.portals.push(makePortal(root, exit.x, BY + 2.6, exit.z, outside, accent));
+    hint(spawnIn, 2.5, 'Sótano: cruza saltando hasta el orbe del fondo. Si caes, vuelves a la última piedra grande');
     const trap: Trapdoor = {
       index: dIndex,
       top: new THREE.Vector3(crypt.cx, top, crypt.cz),
@@ -1070,7 +1130,9 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
       hintCooldown: 0,
       cellarSpawn: spawnIn,
       cellarYaw: Math.atan2(f.x, f.z),
-      blockIndex: puzzles.blocks.length - 1,
+      blockIndex: -1,
+      cellarFloorY: BY - 4,
+      cellarCheckpoints: cps,
     };
     dungeon.trapdoors.push(trap);
     routes.push({ name: `sótano ${id}`, ids: [t.plat!.id] });
@@ -1459,13 +1521,14 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   world.levelName = `${theme.name} · Nivel ${level}`;
   world.summitName = theme.summitName;
   world.summitRequiresLanding = true;
-  world.obstacles.push(...climbObstacles);
-  world.rollingBalls.push(...climbBalls);
+  world.obstacles.push(...climbObstacles, ...cellarObstacles);
+  world.rollingBalls.push(...climbBalls, ...cellarBalls);
   world.pinwheels.push(...climbPinwheels);
   world.steamVents.push(...climbVents);
   world.puzzles = puzzles;
   world.dungeon = dungeon;
   world.deepZones = deepZones;
+  if (cellarShells.length) world.cameraColliders = [...(world.cameraColliders ?? []), ...cellarShells];
   world.routes = routes;
   return world;
 }

@@ -352,11 +352,11 @@ export function levelHowTo(level: number, mode?: string): LevelHowTo {
       title: `Nivel ${level} · Los Backrooms`,
       goal: 'Encuentra la salida antes de que algo te encuentre a ti',
       steps: [
-        'Cruza el laberinto de cuartos amarillos hasta la puerta del almacén',
-        'El Maniquí solo se mueve cuando no lo ves: no le quites la vista de encima',
-        'El Gateador te oye de cerca: corre (Shift) y no te metas a callejones sin salida',
-        'En el almacén se van las luces: en lo oscuro sale la Sonrisa. Salta los fosos y sube por las cajas',
-        'En el pasillo rojo, ¡corre sin parar hasta la puerta de SALIDA!',
+        'Tienes 3 corazones: cada mordida te quita uno; sin corazones vuelves al último punto de control',
+        'La salida del laberinto está cerrada: busca la llave en un callejón sin salida (el Maniquí solo se mueve si no lo ves)',
+        'El almacén está a oscuras y no tiene piso: salta de caja en caja; cuando vuelva la luz, avanza rápido. Las Sonrisas vuelan hacia ti en lo oscuro',
+        'En el pasillo rojo te persigue el Corredor: lanza un orbe de luz (granada) para cegarlo',
+        'El pasillo se alarga sin fin… hasta que jalas las 3 palancas escondidas en huecos de las paredes',
       ],
     };
   }

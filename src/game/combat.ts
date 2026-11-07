@@ -229,6 +229,9 @@ export class CombatSystem {
   private immune: Record<string, number> = {};
   /** Jade guarding you: helpers of the boss that come close get eaten */
   public guardT = 0;
+  /** Hombre Polilla: seconds the boss stays frozen in time */
+  public bossFreezeT = 0;
+  private freezeFx = 0;
   private guide: THREE.Group | null = null;
   private tipIntroShown = false;
   private readonly _home = new THREE.Vector3();
@@ -772,7 +775,18 @@ export class CombatSystem {
       this.deps.notify('¡Ojo! Hay fuego amigo: tus golpes también lastiman a tus amigos');
     }
 
-    this.boss.update(dt, time);
+    if (this.bossFreezeT > 0 && !this.defeated) {
+      // Hombre Polilla stopped the boss's time: it stands still (you can still hit it)
+      this.bossFreezeT -= dt;
+      this.freezeFx -= dt;
+      if (this.freezeFx <= 0) {
+        this.freezeFx = 0.35;
+        this.addEffect(puffEffect(this.deps.root, this.boss.focusPoint().clone().add(this._w.set((Math.random() - 0.5) * 1.5, 1 + Math.random(), (Math.random() - 0.5) * 1.5)), 'rgba(214,190,140,0.8)', 1.4, 0.6));
+      }
+      if (this.bossFreezeT <= 0) this.say(`El tiempo de ${this.setup.short} vuelve a correr`, 'freeze-end', 1);
+    } else {
+      this.boss.update(dt, time);
+    }
 
     this.updateDown(dt);
     this.updateCpr(dt);
@@ -1030,6 +1044,15 @@ export class CombatSystem {
     }
     this.tip = { t: 0, dur: 7 };
     soundManager.playTimeBonus();
+  }
+
+  /** Hombre Polilla: rewinding your time also stops the boss's for a few seconds. */
+  freezeBoss(seconds: number) {
+    if (this.defeated) return;
+    this.bossFreezeT = seconds;
+    this.freezeFx = 0;
+    this.boss.onTimeStop();
+    this.say(`¡El Hombre Polilla detuvo el tiempo de ${this.setup.short}! (${seconds} s)`, 'freeze', 1);
   }
 
   /** What your companion can do in this fight (power button), or null without a companion. */

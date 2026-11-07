@@ -933,97 +933,140 @@ export function createAlien(): AlienModel {
 // ---------------------------------------------------------------------------
 export interface SkinwalkerModel {
   group: THREE.Group;
-  /** Upper body pivot (hunch / crouch / rear back) */
+  /** Upper body pivot (hunch / crouch / rear back / crawl) */
   torso: THREE.Group;
+  /** Neck pivot (the head twitches and tilts from here) */
+  neck: THREE.Group;
   head: THREE.Group;
+  /** Lower jaw (opens to scream and bite) */
+  jaw: THREE.Group;
   arms: THREE.Group[];
+  /** Elbows (bend when it crawls) */
+  forearms: THREE.Group[];
   legs: THREE.Group[];
   eyes: THREE.MeshBasicMaterial;
+  /** Glow around the eyes (brighter when it's about to attack) */
+  eyeGlow: THREE.MeshBasicMaterial;
 }
 
+/** Tall, gaunt thing with a deer skull: backward-bent legs, too-long arms, a jaw that opens too wide. */
 export function createSkinwalker(): SkinwalkerModel {
   const group = new THREE.Group();
-  const skin = std(0x8a8077, 0.85, { flatShading: true });
-  const hide = std(0x4a3a2c, 0.95, { flatShading: true });
-  const bone = std(0xe7e0cf, 0.6, { flatShading: true });
-  const claw = std(0x2b2520, 0.4);
-  const eyes = basic(0xf5f5f5);
+  const skin = std(0x9a8f84, 0.9, { flatShading: true });
+  const dark = std(0x5b5048, 0.9, { flatShading: true });
+  const hide = std(0x3b2d22, 0.95, { flatShading: true });
+  const bone = std(0xe9e2d0, 0.55, { flatShading: true });
+  const claw = std(0x1c1714, 0.35);
+  const mouth = basic(0x1a0505);
+  const eyes = basic(0xfafafa);
+  const eyeGlow = new THREE.MeshBasicMaterial({ color: 0xfff1d6, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending });
 
-  // Legs: bent backwards like an animal's
+  // Legs: bent backwards like an animal's, very long
   const legs: THREE.Group[] = [];
   for (const s of [1, -1]) {
     const hip = new THREE.Group();
-    hip.position.set(0.22 * s, 1.25, 0);
-    const thigh = add(hip, new THREE.CapsuleGeometry(0.1, 0.55, 4, 8), skin, 0, -0.3, 0.12);
-    thigh.rotation.x = -0.5;
-    const shin = add(hip, new THREE.CapsuleGeometry(0.075, 0.6, 4, 8), skin, 0, -0.85, 0.05);
-    shin.rotation.x = 0.55;
-    add(hip, new THREE.ConeGeometry(0.08, 0.22, 5), claw, 0, -1.2, 0.18).rotation.x = Math.PI / 2;
+    hip.position.set(0.22 * s, 1.45, 0);
+    const thigh = add(hip, new THREE.CapsuleGeometry(0.1, 0.7, 4, 8), skin, 0, -0.36, 0.16);
+    thigh.rotation.x = -0.55;
+    const shin = add(hip, new THREE.CapsuleGeometry(0.065, 0.75, 4, 8), dark, 0, -1.0, 0.06);
+    shin.rotation.x = 0.6;
+    for (let f = -1; f <= 1; f++) {
+      const c = add(hip, new THREE.ConeGeometry(0.035, 0.26, 4), claw, f * 0.05, -1.4, 0.2);
+      c.rotation.x = Math.PI / 2;
+    }
     group.add(hip);
     legs.push(hip);
   }
 
   const torso = new THREE.Group();
-  torso.position.y = 1.3;
+  torso.position.y = 1.5;
   torso.rotation.x = 0.45;
   group.add(torso);
-  const chest = add(torso, new THREE.CapsuleGeometry(0.24, 0.75, 4, 10), skin, 0, 0.55, 0);
-  chest.scale.set(1, 1, 0.75);
-  // ribs
-  for (let i = 0; i < 4; i++) {
-    const rib = add(torso, new THREE.TorusGeometry(0.2, 0.018, 4, 12, Math.PI), skin, 0, 0.45 + i * 0.12, 0.05);
+  // Starved chest: you can count the ribs
+  const chest = add(torso, new THREE.CapsuleGeometry(0.22, 0.85, 4, 10), skin, 0, 0.6, 0);
+  chest.scale.set(1, 1, 0.7);
+  const belly = add(torso, new THREE.CapsuleGeometry(0.13, 0.3, 4, 8), dark, 0, 0.12, 0.02);
+  belly.scale.set(1, 1, 0.8);
+  for (let i = 0; i < 5; i++) {
+    const rib = add(torso, new THREE.TorusGeometry(0.2 - i * 0.008, 0.02, 4, 12, Math.PI), bone, 0, 0.38 + i * 0.13, 0.05);
     rib.rotation.set(0, 0, Math.PI / 2);
-    rib.scale.set(1, 1.1, 0.9);
+    rib.scale.set(1, 1.15, 0.85);
   }
+  // Spine poking out of the back
+  for (let i = 0; i < 7; i++) add(torso, new THREE.ConeGeometry(0.04, 0.12, 4), bone, 0, 0.15 + i * 0.16, -0.17).rotation.x = -Math.PI / 2 - 0.4;
   // Ragged hide over the shoulders
-  const pelt = add(torso, new THREE.IcosahedronGeometry(0.42, 1), hide, 0, 0.95, -0.12);
-  pelt.scale.set(1.25, 0.55, 1.1);
-  for (let i = 0; i < 6; i++) {
-    const strip = add(torso, new THREE.ConeGeometry(0.07, 0.6, 4), hide, -0.3 + i * 0.12, 0.55, -0.32);
-    strip.rotation.x = Math.PI + 0.2;
+  const pelt = add(torso, new THREE.IcosahedronGeometry(0.4, 1), hide, 0, 1.0, -0.17);
+  pelt.scale.set(1.15, 0.42, 0.85);
+  for (let i = 0; i < 8; i++) {
+    const strip = add(torso, new THREE.ConeGeometry(0.06, 0.55 + (i % 3) * 0.2, 4), hide, -0.36 + i * 0.1, 0.6, -0.3);
+    strip.rotation.x = Math.PI + 0.25;
   }
 
-  // Long arms with claws
+  // Arms far too long, with elbows and hooked claws
   const arms: THREE.Group[] = [];
+  const forearms: THREE.Group[] = [];
   for (const s of [1, -1]) {
     const sh = new THREE.Group();
-    sh.position.set(0.32 * s, 1.0, 0.05);
-    add(sh, new THREE.CapsuleGeometry(0.06, 0.7, 4, 8), skin, 0, -0.4, 0);
-    add(sh, new THREE.CapsuleGeometry(0.05, 0.75, 4, 8), skin, 0, -1.15, 0.08);
-    for (let f = -1; f <= 1; f++) {
-      const c = add(sh, new THREE.ConeGeometry(0.025, 0.22, 4), claw, f * 0.04, -1.62, 0.12);
-      c.rotation.x = Math.PI - 0.4;
+    sh.position.set(0.32 * s, 1.08, 0.05);
+    add(sh, new THREE.CapsuleGeometry(0.055, 0.85, 4, 8), skin, 0, -0.48, 0);
+    const el = new THREE.Group();
+    el.position.set(0, -0.95, 0);
+    sh.add(el);
+    add(el, new THREE.CapsuleGeometry(0.045, 0.9, 4, 8), dark, 0, -0.5, 0);
+    for (let f = -1.5; f <= 1.5; f++) {
+      const c = add(el, new THREE.ConeGeometry(0.022, 0.32, 4), claw, f * 0.035, -1.06, 0.1);
+      c.rotation.x = Math.PI - 0.55;
     }
     torso.add(sh);
     arms.push(sh);
+    forearms.push(el);
   }
 
-  // Deer skull with antlers
+  // Long neck and a deer skull with antlers and a jaw that opens too wide
+  const neck = new THREE.Group();
+  neck.position.set(0, 1.2, 0.08);
+  torso.add(neck);
+  const neckBone = add(neck, new THREE.CapsuleGeometry(0.07, 0.32, 4, 8), dark, 0, 0.16, 0.04);
+  neckBone.rotation.x = 0.35;
   const head = new THREE.Group();
-  head.position.set(0, 1.35, 0.18);
-  torso.add(head);
-  const skull = add(head, new THREE.SphereGeometry(0.17, 12, 10), bone, 0, 0.05, 0);
+  head.position.set(0, 0.42, 0.14);
+  head.scale.setScalar(1.3);
+  neck.add(head);
+  const skull = add(head, new THREE.SphereGeometry(0.18, 12, 10), bone, 0, 0.05, 0);
   skull.scale.set(0.9, 0.85, 1.05);
-  const snout = add(head, new THREE.BoxGeometry(0.13, 0.11, 0.36), bone, 0, -0.03, 0.24);
-  snout.rotation.x = 0.25;
+  const snout = add(head, new THREE.BoxGeometry(0.14, 0.09, 0.4), bone, 0, 0.0, 0.26);
+  snout.rotation.x = 0.22;
+  // Upper teeth
+  for (let i = 0; i < 6; i++) {
+    const t = add(head, new THREE.ConeGeometry(0.014, 0.07, 4), bone, (i % 2 ? 1 : -1) * 0.05, -0.08 + i * 0.012, 0.12 + i * 0.05);
+    t.rotation.x = Math.PI;
+  }
+  const jaw = new THREE.Group();
+  jaw.position.set(0, -0.06, 0.05);
+  head.add(jaw);
+  const jawBone = add(jaw, new THREE.BoxGeometry(0.12, 0.05, 0.38), bone, 0, -0.03, 0.2);
+  jawBone.rotation.x = 0.12;
+  add(jaw, new THREE.BoxGeometry(0.1, 0.04, 0.3), mouth, 0, 0.0, 0.18);
+  for (let i = 0; i < 6; i++) add(jaw, new THREE.ConeGeometry(0.013, 0.06, 4), bone, (i % 2 ? 1 : -1) * 0.045, 0.03, 0.08 + i * 0.05);
   const socket = basic(0x050505);
   for (const s of [1, -1]) {
-    add(head, new THREE.SphereGeometry(0.05, 8, 6), socket, 0.08 * s, 0.07, 0.12);
-    add(head, new THREE.SphereGeometry(0.014, 6, 6), eyes, 0.08 * s, 0.07, 0.165);
-    // antler: main beam with tines
+    add(head, new THREE.SphereGeometry(0.055, 8, 6), socket, 0.08 * s, 0.08, 0.12);
+    add(head, new THREE.SphereGeometry(0.02, 6, 6), eyes, 0.08 * s, 0.08, 0.17);
+    add(head, new THREE.SphereGeometry(0.06, 8, 6), eyeGlow, 0.08 * s, 0.08, 0.17);
     const beam = new THREE.Group();
-    beam.position.set(0.08 * s, 0.18, -0.02);
-    beam.rotation.z = -0.5 * s;
+    beam.position.set(0.08 * s, 0.19, -0.02);
+    beam.rotation.z = -0.55 * s;
     beam.rotation.x = -0.3;
-    add(beam, new THREE.CylinderGeometry(0.018, 0.028, 0.55, 5), bone, 0, 0.27, 0);
-    for (let t = 0; t < 3; t++) {
-      const tine = add(beam, new THREE.CylinderGeometry(0.01, 0.018, 0.22, 4), bone, 0.06 * s, 0.18 + t * 0.14, 0.03);
+    add(beam, new THREE.CylinderGeometry(0.016, 0.028, 0.7, 5), bone, 0, 0.35, 0);
+    for (let t = 0; t < 4; t++) {
+      const tine = add(beam, new THREE.CylinderGeometry(0.008, 0.017, 0.24, 4), bone, 0.06 * s, 0.2 + t * 0.14, 0.03);
       tine.rotation.z = -0.9 * s;
     }
     head.add(beam);
   }
   group.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true;
+    if ((o as THREE.Mesh).isMesh && (o as THREE.Mesh).material !== eyeGlow) (o as THREE.Mesh).castShadow = true;
   });
-  return { group, torso, head, arms, legs, eyes };
+  group.scale.setScalar(1.25);
+  return { group, torso, neck, head, jaw, arms, forearms, legs, eyes, eyeGlow };
 }

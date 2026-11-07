@@ -86,7 +86,7 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
   luz: {
     type: 'luz',
     name: 'Orbe de luz',
-    desc: 'Lánzalo al monstruo glitch para dañarlo.',
+    desc: 'Lánzalo al monstruo glitch para dañarlo. En los Backrooms es una granada de luz: ciega a los monstruos unos segundos.',
     color: '#fde68a',
   },
   antorcha: {

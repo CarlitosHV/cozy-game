@@ -64,6 +64,8 @@ import {
   Lock,
   Settings,
   RefreshCw,
+  KeyRound,
+  ToggleRight,
 } from 'lucide-react';
 import { GameEngine, GameState, GameMode } from '../game/GameEngine';
 import {
@@ -104,6 +106,7 @@ import {
 } from '../services/multiplayerClient';
 import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus, STACK_MAX, DURABILITY } from '../game/items';
 import type { CombatStatus } from '../game/combat';
+import type { LevelHazardStatus } from '../game/levels';
 import type { ItemType } from '../game/items';
 import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
 import { ItemThumb } from './ItemThumb';
@@ -964,6 +967,44 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     };
     read();
     const id = window.setInterval(read, 100);
+    return () => window.clearInterval(id);
+  }, [engine, gameState]);
+
+  // Levels with their own rules (the Backrooms): hearts, the key, the levers
+  const [levelStatus, setLevelStatus] = useState<LevelHazardStatus | null>(null);
+  const [levelHurt, setLevelHurt] = useState(false);
+  const lastLevelHurtRef = useRef(0);
+  useEffect(() => {
+    if (!engine || gameState !== 'playing') {
+      setLevelStatus(null);
+      return;
+    }
+    const read = () => {
+      const st = engine.getLevelStatus();
+      setLevelStatus((prev) => {
+        if (!st) return null;
+        if (
+          prev &&
+          prev.hearts === st.hearts &&
+          prev.key === st.key &&
+          prev.levers?.have === st.levers?.have &&
+          prev.hurtId === st.hurtId &&
+          Math.abs(prev.darkness - st.darkness) < 0.04
+        )
+          return prev;
+        return st;
+      });
+      if (st && st.hurtId !== lastLevelHurtRef.current) {
+        const hurt = st.hurtId > lastLevelHurtRef.current;
+        lastLevelHurtRef.current = st.hurtId;
+        if (hurt) {
+          setLevelHurt(true);
+          window.setTimeout(() => setLevelHurt(false), 320);
+        }
+      }
+    };
+    read();
+    const id = window.setInterval(read, 150);
     return () => window.clearInterval(id);
   }, [engine, gameState]);
 
@@ -2439,7 +2480,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           }}
         />
       )}
-      {gameState === 'playing' && hurtFlash && (
+      {gameState === 'playing' && !combat && levelStatus && levelStatus.darkness > 0.02 && (
+        <div
+          className="absolute inset-0 pointer-events-none transition-opacity duration-300"
+          style={{
+            opacity: Math.min(1, levelStatus.darkness * 1.1),
+            background: inventory?.slots.includes('luz')
+              ? 'radial-gradient(circle at 50% 58%, rgba(6,5,2,0.05) 0%, rgba(6,5,2,0.45) 26%, rgba(4,3,1,0.85) 58%, rgba(2,1,0,0.95) 85%)'
+              : 'radial-gradient(circle at 50% 58%, rgba(6,5,2,0.2) 0%, rgba(6,5,2,0.62) 24%, rgba(4,3,1,0.92) 55%, rgba(2,1,0,0.97) 80%)',
+          }}
+        />
+      )}
+      {gameState === 'playing' && (hurtFlash || levelHurt) && (
         <div
           className="absolute inset-0 pointer-events-none"
           style={{ background: 'radial-gradient(circle at 50% 50%, rgba(220,38,38,0) 45%, rgba(220,38,38,0.45) 100%)' }}
@@ -2515,6 +2567,47 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <span className={`block font-semibold leading-snug ${isMobileUi ? 'text-[10px]' : 'text-xs'}`}>{combat.tip.text}</span>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Backrooms: hearts, the key and the levers, in the bottom-left corner */}
+      {gameState === 'playing' && !combat && levelStatus && (
+        <div
+          className={`absolute pointer-events-none z-20 pl-safe pb-safe ${
+            touchControlsEnabled && !isAnyModalOpen
+              ? compactControls
+                ? 'left-3 bottom-[7.2rem]'
+                : 'left-5 bottom-[9.6rem] sm:left-6 sm:bottom-[10.8rem]'
+              : 'left-4 bottom-4'
+          }`}
+        >
+          <div className="flex flex-col items-start gap-1.5">
+            <div className="flex items-center gap-1.5">
+              {levelStatus.key && (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold shadow-md backdrop-blur-sm ${
+                    levelStatus.key === 'have' ? 'bg-amber-400 text-amber-950' : levelStatus.key === 'open' ? 'bg-emerald-500/80 text-white' : 'bg-stone-950/55 text-amber-100'
+                  }`}
+                  title={levelStatus.key === 'need' ? 'La salida del laberinto está cerrada: busca la llave' : levelStatus.key === 'have' ? 'Llévala a la puerta cerrada' : 'Puerta abierta'}
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  {levelStatus.key === 'need' ? 'Busca la llave' : levelStatus.key === 'have' ? '¡Tienes la llave!' : 'Puerta abierta'}
+                </span>
+              )}
+              {levelStatus.levers && levelStatus.key === 'open' && (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold shadow-md backdrop-blur-sm ${
+                    levelStatus.levers.have >= levelStatus.levers.total ? 'bg-emerald-500/80 text-white' : 'bg-stone-950/55 text-rose-100'
+                  }`}
+                  title="Palancas del pasillo rojo: con las 3, el pasillo deja de alargarse"
+                >
+                  <ToggleRight className="w-3.5 h-3.5" />
+                  Palancas {levelStatus.levers.have}/{levelStatus.levers.total}
+                </span>
+              )}
+            </div>
+            <HeartRow hp={levelStatus.hearts * 20} maxHp={levelStatus.maxHearts * 20} hurt={levelHurt} compact={isMobileUi} />
+          </div>
         </div>
       )}
 

@@ -40,6 +40,8 @@ export interface DungeonContext {
   knock: (vx: number, vy: number, vz: number) => void;
   /** Entering the basement (puts its push rock back home) */
   onEnterCellar?: (blockIndex: number) => void;
+  /** Fell into the basement's lava (counts as a death) */
+  onCellarFall?: () => void;
 }
 
 type MiniState = 'sleep' | 'idle' | 'windup' | 'charge' | 'dizzy' | 'hurt' | 'slam' | 'dead';
@@ -487,8 +489,11 @@ export interface Trapdoor {
   /** Where you appear in the basement, and facing */
   cellarSpawn: THREE.Vector3;
   cellarYaw: number;
-  /** The basement's push rock (puzzles.blocks index) */
+  /** The basement's push rock (puzzles.blocks index, -1 = none) */
   blockIndex: number;
+  /** Basement tunnel: falling under this height sends you back to the last checkpoint stone */
+  cellarFloorY?: number;
+  cellarCheckpoints?: THREE.Vector3[];
 }
 
 export interface DungeonData {
@@ -503,6 +508,8 @@ export function emptyDungeon(): DungeonData {
 export class DungeonSystem {
   private data: DungeonData = emptyDungeon();
   private downCooldown = 0;
+  /** Last checkpoint stone reached in each basement */
+  private cellarCp = new Map<number, number>();
 
   load(data: DungeonData | undefined) {
     this.data = data ?? emptyDungeon();
@@ -521,6 +528,7 @@ export class DungeonSystem {
       t.pivot.rotation.set(0, 0, 0);
     }
     this.downCooldown = 0;
+    this.cellarCp.clear();
   }
 
   /** Shared with the party (also replayed for late joiners). */
@@ -543,6 +551,19 @@ export class DungeonSystem {
     this.downCooldown = Math.max(0, this.downCooldown - dt);
     const P = ctx.position;
     for (const t of this.data.trapdoors) {
+      // Basement tunnel: remember the last checkpoint stone; lava sends you back there
+      const cps = t.cellarCheckpoints;
+      if (cps?.length && t.cellarFloorY !== undefined && Math.abs(P.y - (cps[0].y)) < 14 && Math.hypot(P.x - cps[0].x, P.z - cps[0].z) < 70) {
+        let k = this.cellarCp.get(t.index) ?? 0;
+        for (let i = k + 1; i < cps.length; i++) if (Math.hypot(P.x - cps[i].x, P.z - cps[i].z) < 2.2 && Math.abs(P.y - cps[i].y) < 1.2) k = i;
+        this.cellarCp.set(t.index, k);
+        if (P.y < t.cellarFloorY) {
+          ctx.teleport(cps[k], t.cellarYaw);
+          ctx.onCellarFall?.();
+          ctx.items.notify('¡Te caíste a la lava! Vuelves a la última piedra grande');
+          soundManager.playRespawnPuff();
+        }
+      }
       if (t.open) {
         if (t.openT < 1) {
           t.openT = Math.min(1, t.openT + dt * 1.6);
@@ -554,9 +575,10 @@ export class DungeonSystem {
         if (this.downCooldown <= 0 && Math.abs(P.x - s.x) < s.hx && Math.abs(P.z - s.z) < s.hz && P.y < s.y + 0.6 && P.y > s.y - 1) {
           this.downCooldown = 1.5;
           soundManager.playRespawnPuff();
-          ctx.onEnterCellar?.(t.blockIndex);
+          if (t.blockIndex >= 0) ctx.onEnterCellar?.(t.blockIndex);
+          this.cellarCp.set(t.index, 0);
           ctx.teleport(t.cellarSpawn, t.cellarYaw);
-          ctx.items.notify('Bajaste al sótano… ¡Busca el orbe! (si atascas la roca, sal y vuelve a bajar)');
+          ctx.items.notify('Bajaste al sótano… ¡Cruza saltando hasta el orbe del fondo!');
         }
         continue;
       }

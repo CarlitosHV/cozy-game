@@ -120,6 +120,9 @@ export abstract class BossController {
     return null;
   }
 
+  /** Hombre Polilla stopped time for this boss (it stays frozen while combat skips its update). */
+  onTimeStop() {}
+
   /** Boss-specific tools (the Skinwalker's obsidian skull and dagger) */
   useItem(type: ItemType): ToolResult {
     this.c.say(type === 'craneo' || type === 'daga' ? 'Esto solo sirve contra el Skinwalker' : 'Aquí no sirve', 'use-' + type, 2);
@@ -3334,10 +3337,16 @@ class DraculaBoss extends BossController {
 // ===========================================================================
 type SkinState = 'intro' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'scared' | 'hurt' | 'mimic';
 
-/** A copy of a player that the Skinwalker sheds: it twists and stretches into a long animal */
+/** A copy of a player that the Skinwalker sheds: it twists and stretches into a giant, long-legged dog */
 interface SkinCopy {
   m: PlayerCharacterModel;
   holder: THREE.Group;
+  /** Tips the body forward until it's horizontal */
+  pitch: THREE.Group;
+  /** Four long legs that grow out of it, a tail and a mouth full of teeth */
+  dogLegs: THREE.Group[];
+  tail: THREE.Mesh;
+  maw: THREE.Group;
   pos: THREE.Vector3;
   center: THREE.Vector3;
   yaw: number;
@@ -3372,6 +3381,14 @@ class SkinwalkerBoss extends BossController {
   private fogT = 0;
   private copies: SkinCopy[] = [];
   private spawnT = 9;
+  /** Head twitch: a sudden sideways snap of the head */
+  private twitchT = 0;
+  private twitchCd = 2;
+  private twitchAng = 0;
+  /** Scream: jaw wide open, head shaking */
+  private screamT = 0;
+  /** Running on all fours (when you're far) */
+  private crawlK = 0;
 
   constructor(c: CombatSystem) {
     super(c, 100 + 40 * c.setup.diff);
@@ -3486,7 +3503,14 @@ class SkinwalkerBoss extends BossController {
   private startWindup(dur = 0.6 - 0.15 * this.s.diff) {
     this.state = 'windup';
     this.t = dur;
+    this.scream(0.55);
+  }
+
+  /** Jaw wide open, head shaking, a screech you hear louder the closer it is. */
+  private scream(dur = 1) {
+    this.screamT = Math.max(this.screamT, dur);
     soundManager.playStalkerWarning();
+    soundManager.playScream(1 - Math.min(1, this.dist() / 40) * 0.8);
   }
 
   update(dt: number, time: number) {
@@ -3510,7 +3534,8 @@ class SkinwalkerBoss extends BossController {
       this.c.darknessTarget = 0;
       this.updateCopies(dt, time);
       m.torso.rotation.x = Math.min(1.4, 0.45 + this.deadT);
-      this.m.group.scale.setScalar(Math.max(0.01, 1 - this.deadT / 2.4));
+      m.jaw.rotation.x = Math.min(0.9, this.deadT);
+      this.m.group.scale.setScalar(1.25 * Math.max(0.01, 1 - this.deadT / 2.4));
       this.group.position.copy(this.pos);
       if (this.deadT > 2.4 && this.group.visible) {
         this.group.visible = false;
@@ -3534,15 +3559,44 @@ class SkinwalkerBoss extends BossController {
       }
     }
 
-    // Animation
+    // Animation: twitchy, sometimes on all fours, screaming with the jaw wide open
     const moving = this.state === 'hunt' || this.state === 'scared' || this.state === 'mimic';
-    const sp = this.state === 'scared' ? 16 : 9;
-    m.legs.forEach((l, i) => (l.rotation.x = moving ? Math.sin(time * sp + i * Math.PI) * 0.6 : 0));
-    m.arms.forEach((a, i) => (a.rotation.x = moving ? -Math.sin(time * sp + i * Math.PI) * 0.5 : this.state === 'windup' ? -1.2 : -0.2));
-    m.head.rotation.z = Math.sin(time * 1.7) * 0.15 + (this.state === 'hunt' && Math.sin(time * 0.9) > 0.8 ? Math.sin(time * 30) * 0.3 : 0);
-    const hunch = this.state === 'windup' ? 0.95 : this.state === 'scared' ? 0.15 : this.state === 'hurt' ? -0.25 : 0.45;
+    const crawl = (this.state === 'hunt' && d > 7 && this.fogT <= 0) || this.state === 'scared';
+    this.crawlK = THREE.MathUtils.damp(this.crawlK, crawl ? 1 : 0, 5, dt);
+    const ck = this.crawlK;
+    const sp = this.state === 'scared' ? 17 : 10 + 4 * ck;
+    const gait = (i: number) => Math.sin(time * sp + i * Math.PI);
+    m.legs.forEach((l, i) => (l.rotation.x = moving ? gait(i) * (0.6 + 0.3 * ck) : 0));
+    m.arms.forEach((a, i) => {
+      // Upright: arms swing and hang; crawling: they reach forward like front legs
+      const upright = moving ? -gait(i) * 0.5 : this.state === 'windup' ? -1.4 : this.state === 'lunge' ? -1.9 : -0.2;
+      a.rotation.x = THREE.MathUtils.lerp(upright, -1.25 + gait(i + 0.5) * 0.55, ck);
+      a.rotation.z = (i ? -1 : 1) * (this.state === 'windup' ? 0.5 : 0.08);
+    });
+    m.forearms.forEach((f, i) => (f.rotation.x = THREE.MathUtils.lerp(this.state === 'windup' ? -0.9 : -0.25, -0.5 + gait(i) * 0.3, ck)));
+    const hunch = this.state === 'windup' ? 0.95 : this.state === 'scared' ? 1.25 : this.state === 'hurt' ? -0.35 : THREE.MathUtils.lerp(0.5, 1.3, ck);
     m.torso.rotation.x = THREE.MathUtils.damp(m.torso.rotation.x, hunch, 8, dt);
-    m.eyes.color.setHex(this.state === 'windup' || this.state === 'lunge' ? 0xff2020 : 0xf5f5f5);
+    m.torso.position.y = THREE.MathUtils.lerp(1.5, 1.05, ck);
+    // Head twitches: a sudden snap sideways, held for a moment
+    this.twitchCd -= dt;
+    if (this.twitchCd <= 0 && this.state !== 'mimic') {
+      this.twitchCd = 1.2 + Math.random() * 2.8;
+      this.twitchT = 0.25 + Math.random() * 0.5;
+      this.twitchAng = (Math.random() < 0.5 ? -1 : 1) * (0.6 + Math.random() * 0.9);
+    }
+    this.twitchT = Math.max(0, this.twitchT - dt);
+    this.screamT = Math.max(0, this.screamT - dt);
+    const shake = this.screamT > 0 ? Math.sin(time * 70) * 0.25 : 0;
+    m.neck.rotation.z = (this.twitchT > 0 ? this.twitchAng : Math.sin(time * 1.7) * 0.12) + shake;
+    m.neck.rotation.x = -m.torso.rotation.x * 0.75 + (this.screamT > 0 ? -0.35 : 0);
+    m.head.rotation.y = this.twitchT > 0 ? Math.sin(time * 40) * 0.08 : 0;
+    const jawOpen = this.screamT > 0 ? 1.05 : this.state === 'lunge' ? 0.9 : this.state === 'windup' ? 0.6 : 0.08 + Math.max(0, Math.sin(time * 2.3)) * 0.06;
+    m.jaw.rotation.x = THREE.MathUtils.damp(m.jaw.rotation.x, jawOpen, 18, dt);
+    const angry = this.state === 'windup' || this.state === 'lunge' || this.screamT > 0;
+    m.eyes.color.setHex(angry ? 0xff2020 : 0xf5f5f5);
+    m.eyeGlow.color.setHex(angry ? 0xff3030 : 0xfff1d6);
+    m.eyeGlow.opacity = angry ? 0.75 : 0.35 + Math.sin(time * 3) * 0.1;
+    this.m.group.position.y = ck * -0.05;
 
     switch (this.state) {
       case 'intro':
@@ -3558,12 +3612,13 @@ class SkinwalkerBoss extends BossController {
           this.walk(this.s.home, this.speed * 0.5, dt);
           break;
         }
-        this.walk(p, this.speed, dt);
-        if (d < 4.2 && Math.abs(p.y - this.pos.y) < 2.5 && !this.c.isDown && this.sameArea(this.pos)) this.startWindup();
+        this.walk(p, this.speed * (1 + 0.25 * this.crawlK), dt);
+        if (d < 4.4 && Math.abs(p.y - this.pos.y) < 2.5 && !this.c.isDown && this.sameArea(this.pos)) this.startWindup();
         // Voices: it calls you with a friend's voice
         this.voiceCd -= dt;
         if (this.voiceCd <= 0 && d > 10) {
           this.voiceCd = 16 + Math.random() * 10;
+          if (Math.random() < 0.5) this.scream(1.2);
           const r = this.c.deps.remotes();
           const who = r.length ? r[Math.floor(Math.random() * r.length)].username : 'tu compañero';
           this.c.say(`Escuchas a ${who}: "¿Hola? ¡Ven, ayúdame!"… no es ${r.length ? 'él' : 'real'}`, 'skin-voice', 6);
@@ -3594,7 +3649,7 @@ class SkinwalkerBoss extends BossController {
       case 'lunge':
         this.pos.addScaledVector(this.lungeDir, 15 * dt);
         this.collide();
-        if (!this.lungeHit && d < 1.4 && Math.abs(p.y - this.pos.y) < 2) {
+        if (!this.lungeHit && d < 1.6 && Math.abs(p.y - this.pos.y) < 2.2) {
           this.lungeHit = true;
           if (this.guarding(this.pos)) {
             this.c.say('¡Jade lo mordió! Retrocede', 'skin-jade', 2);
@@ -3627,7 +3682,7 @@ class SkinwalkerBoss extends BossController {
 
     this.group.position.copy(this.pos);
     this.group.rotation.y = this.yaw;
-    this.center.copy(this.pos).add(V(0, 1.5, 0));
+    this.center.copy(this.pos).add(V(0, 1.9 - 0.6 * this.crawlK, 0));
   }
 
   /** It screams and runs to the far side of the hall for a while. */
@@ -3640,7 +3695,7 @@ class SkinwalkerBoss extends BossController {
     this.state = 'scared';
     this.t = fromSkull ? 9 - 2 * this.s.diff : 4;
     if (this.copy) this.endMimic(false), (this.state = 'scared');
-    soundManager.playStalkerWarning();
+    this.scream(0.9);
     this.ensureDagger();
   }
 
@@ -3668,9 +3723,57 @@ class SkinwalkerBoss extends BossController {
     m.companionSprite.visible = false;
     m.shadow.visible = false;
     const holder = new THREE.Group();
-    holder.add(m.group);
+    const pitch = new THREE.Group();
+    pitch.add(m.group);
+    holder.add(pitch);
     holder.position.copy(at);
     this.root.add(holder);
+    // The dog parts (hidden while it pretends): long jointed legs, a thin tail, a mouth with teeth
+    const fleshMat = new THREE.MeshStandardMaterial({ color: 0x4a3f37, roughness: 0.9, flatShading: true });
+    const clawMat = new THREE.MeshStandardMaterial({ color: 0x1c1714, roughness: 0.4 });
+    const dogLegs: THREE.Group[] = [];
+    for (const [lx, lz] of [
+      [0.24, 0.42],
+      [-0.24, 0.42],
+      [0.24, -0.48],
+      [-0.24, -0.48],
+    ]) {
+      const leg = new THREE.Group();
+      leg.position.set(lx, 0, lz);
+      const up = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.45, 3, 6), fleshMat);
+      up.position.set(0, -0.27, lz > 0 ? 0.06 : -0.08);
+      up.rotation.x = lz > 0 ? 0.25 : -0.35;
+      const low = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.45, 3, 6), fleshMat);
+      low.position.set(0, -0.78, lz > 0 ? 0.04 : -0.02);
+      low.rotation.x = lz > 0 ? -0.15 : 0.3;
+      const cl = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 4), clawMat);
+      cl.position.set(0, -1.04, 0.07);
+      cl.rotation.x = Math.PI / 2;
+      leg.add(up, low, cl);
+      leg.visible = false;
+      holder.add(leg);
+      dogLegs.push(leg);
+    }
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.9, 5), fleshMat);
+    tail.geometry.translate(0, 0.45, 0);
+    tail.position.set(0, 0.05, -0.75);
+    tail.visible = false;
+    holder.add(tail);
+    const maw = new THREE.Group();
+    const gum = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.09, 0.12), new THREE.MeshBasicMaterial({ color: 0x1a0505 }));
+    maw.add(gum);
+    const toothMat = new THREE.MeshStandardMaterial({ color: 0xf2eee3, roughness: 0.5 });
+    for (let k2 = 0; k2 < 7; k2++) {
+      for (const sy of [1, -1]) {
+        const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.06, 4), toothMat);
+        tooth.position.set(-0.12 + k2 * 0.04, 0.035 * sy, 0.05);
+        tooth.rotation.x = sy > 0 ? Math.PI : 0;
+        maw.add(tooth);
+      }
+    }
+    maw.position.set(0, -0.1, 0.2);
+    maw.visible = false;
+    m.head.add(maw);
     const mats: SkinCopy['mats'] = [];
     m.group.traverse((o) => {
       const mesh = o as THREE.Mesh;
@@ -3691,7 +3794,7 @@ class SkinwalkerBoss extends BossController {
     // Same name tag as a real friend: you can't tell it apart… until it changes
     const tag = createNameTagSprite(pick.name === 'ti' ? this.c.deps.playerModel().appearance.name || 'Tú' : pick.name);
     m.group.add(tag);
-    this.copies.push({ m, holder, pos: at, center: at.clone(), yaw: Math.atan2(p.x - at.x, p.z - at.z), phase: 'copy', t: 0, hp: 2, mats, eyes, hitCd: 0, name: pick.name, tag });
+    this.copies.push({ m, holder, pitch, dogLegs, tail, maw, pos: at, center: at.clone(), yaw: Math.atan2(p.x - at.x, p.z - at.z), phase: 'copy', t: 0, hp: 2, mats, eyes, hitCd: 0, name: pick.name, tag });
   }
 
   /** The copy stops pretending: it twists and stretches. */
@@ -3701,7 +3804,7 @@ class SkinwalkerBoss extends BossController {
     c.t = 0;
     c.m.group.remove(c.tag);
     soundManager.playStalkerWarning();
-    this.c.say(c.name === 'ti' ? '¡Era una copia tuya! ¡Se está estirando!' : `¡No era ${c.name}! Era una copia del Skinwalker`, 'skin-reveal', 1.5);
+    this.c.say(c.name === 'ti' ? '¡Era una copia tuya! ¡Se estira como un perro gigante!' : `¡No era ${c.name}! Se estira como un perro gigante…`, 'skin-reveal', 1.5);
   }
 
   private killCopy(c: SkinCopy) {
@@ -3755,9 +3858,11 @@ class SkinwalkerBoss extends BossController {
         }
       } else {
         k = 1;
-        const wp = this.s.navStep ? this.s.navStep(c.pos, p) : p;
+        // Lost in Nubi's fog: they sniff around instead of chasing you
+        const goal = this.fogT > 0 ? this.s.home : p;
+        const wp = this.s.navStep ? this.s.navStep(c.pos, goal) : goal;
         c.yaw = turnTo(c.yaw, Math.atan2(wp.x - c.pos.x, wp.z - c.pos.z), 6, dt);
-        const sp = 5.2 + 1.3 * this.s.diff;
+        const sp = (5.4 + 1.3 * this.s.diff) * (this.fogT > 0 ? 0.4 : 1);
         c.pos.x += Math.sin(c.yaw) * sp * dt;
         c.pos.z += Math.cos(c.yaw) * sp * dt;
         // around the pillars
@@ -3776,27 +3881,41 @@ class SkinwalkerBoss extends BossController {
           this.killCopy(c);
           continue;
         }
-        if (d < 1.2 && Math.abs(p.y - c.pos.y) < 1.6 && !this.c.isDown) {
+        if (d < 2.0 && Math.abs(p.y - c.pos.y) < 2.4 && !this.c.isDown && this.fogT <= 0) {
           this.c.damagePlayer(10 + 4 * this.s.diff, c.pos, 9, 4, 'copy');
           this.killCopy(c);
           continue;
         }
       }
-      // Stretch: tip forward and grow long, thin, with long reaching arms
-      c.holder.position.set(c.pos.x, c.pos.y + 0.45 * k, c.pos.z);
-      c.holder.rotation.set(1.3 * k, c.yaw, k > 0.9 ? Math.sin(time * 12 + i) * 0.18 : 0, 'YXZ');
-      c.holder.scale.set(1 - 0.3 * k, 1 + 1.6 * k, 1 + 0.15 * k);
-      const crawl = c.phase === 'hunt' ? Math.sin(time * 14 + i) * 0.6 : 0;
-      m.leftArm.rotation.x = -1.5 * k + crawl;
-      m.rightArm.rotation.x = -1.5 * k - crawl;
-      m.leftArm.scale.y = m.rightArm.scale.y = 1 + 1.3 * k;
-      m.head.rotation.x = -1.1 * k;
+      // Stretch into a giant dog: the body tips forward and grows long, four long legs grow out of it
+      const S = 1 + 1.1 * k;
+      const legLen = 1.05 * k;
+      const gallop = c.phase === 'hunt' ? time * 13 + i : 0;
+      c.holder.position.set(c.pos.x, c.pos.y + legLen * S, c.pos.z);
+      c.holder.rotation.set(0, c.yaw, k > 0.9 ? Math.sin(time * 12 + i) * 0.05 : 0, 'YXZ');
+      c.holder.scale.setScalar(S);
+      c.pitch.rotation.x = 1.5 * k + (c.phase === 'hunt' ? Math.sin(gallop * 2) * 0.05 : 0);
+      c.pitch.scale.set(1 - 0.2 * k, 1 + 0.75 * k, 1 - 0.1 * k);
+      m.group.position.y = -0.6 * k;
+      c.dogLegs.forEach((l, li) => {
+        l.visible = k > 0.02;
+        l.scale.set(1, Math.max(0.01, k), 1);
+        l.rotation.x = c.phase === 'hunt' ? Math.sin(gallop + (li < 2 ? 0 : Math.PI) + (li % 2) * 0.6) * 0.55 : 0;
+      });
+      c.tail.visible = k > 0.3;
+      c.tail.scale.setScalar(k);
+      c.tail.rotation.set(-2.0 + Math.sin(time * 9 + i) * 0.25, 0, Math.sin(time * 6 + i) * 0.3);
+      c.maw.visible = k > 0.3;
+      c.maw.scale.set(1, 1 + (c.phase === 'hunt' ? Math.max(0, Math.sin(time * 6 + i)) * 1.6 : 0.6), 1);
+      m.leftArm.rotation.x = m.rightArm.rotation.x = -1.4 * k;
+      m.leftArm.scale.y = m.rightArm.scale.y = 1 + 0.6 * k;
+      m.head.rotation.x = -1.35 * k;
       for (const e of c.eyes) e.visible = k > 0.3;
       for (const { mat, base } of c.mats) {
-        mat.color.copy(base).lerp(new THREE.Color(0x3a322c), 0.75 * k);
+        mat.color.copy(base).lerp(new THREE.Color(0x3a322c), 0.8 * k);
         mat.emissive.setHex(0x000000);
       }
-      c.center.set(c.pos.x, c.pos.y + 0.8, c.pos.z);
+      c.center.set(c.pos.x, c.pos.y + 0.8 + legLen * S * 0.9, c.pos.z);
     }
   }
 
@@ -3819,7 +3938,7 @@ class SkinwalkerBoss extends BossController {
       return 'wear';
     }
     if (type === 'daga') {
-      if (d > 2.9 || this.state === 'intro') {
+      if (d > 3.3 || this.state === 'intro') {
         this.c.say('Acércate más… cuando se lance contra ti, ¡apuñálalo!', 'skin-dagger-far', 2);
         return 'none';
       }
@@ -3839,9 +3958,9 @@ class SkinwalkerBoss extends BossController {
     if (this.dead) return;
     out.push({
       pos: this.center,
-      radius: 1.2,
+      radius: 1.35,
       accepts: ['bate', 'piedra', 'stomp'],
-      top: this.pos.y + 2.4,
+      top: this.pos.y + 3.0 - 0.9 * this.crawlK,
       hit: () => {
         if (this.hitCd > 0) return;
         this.hitCd = 0.5;
@@ -3853,9 +3972,9 @@ class SkinwalkerBoss extends BossController {
       if (c.phase === 'die') continue;
       out.push({
         pos: c.center,
-        radius: 0.9,
+        radius: c.phase === 'copy' ? 0.9 : 1.3,
         accepts: ['bate', 'piedra', 'stomp', 'red', 'bomba'],
-        top: c.pos.y + 1.2,
+        top: c.center.y + (c.phase === 'copy' ? 0.4 : 0.6),
         priority: 0.2,
         hit: (kind) => {
           if (c.hitCd > 0) return;
@@ -3876,7 +3995,7 @@ class SkinwalkerBoss extends BossController {
       case 'nube':
         return {
           name: 'Niebla',
-          desc: 'Nubi te esconde en la niebla: pierde tu rastro por 8 s',
+          desc: 'Nubi te esconde en la niebla: él y sus perros pierden tu rastro por 8 s',
           target: me,
           run: () => {
             this.fogT = 8;
@@ -3886,36 +4005,53 @@ class SkinwalkerBoss extends BossController {
       case 'estrella':
         return {
           name: 'Destello',
-          desc: 'Un destello como el del cráneo: lo espanta un rato',
+          desc: 'Un destello como el del cráneo: lo espanta y deshace a los perros cercanos',
           target: him,
           run: () => {
-            if (this.state === 'scared' || this.state === 'intro') this.c.say('Ahora no hace falta', 'act-skin', 1);
+            let n = 0;
+            for (const cp of this.copies)
+              if (cp.phase !== 'die' && cp.pos.distanceTo(this.c.playerPos) < 16) {
+                this.killCopy(cp);
+                n++;
+              }
+            if (this.state === 'scared' || this.state === 'intro') this.c.say(n ? '¡El destello deshizo a las copias!' : 'Ahora no hace falta', 'act-skin', 1);
             else this.scare(true);
           },
         };
       case 'luciernaga':
         return {
           name: 'Rastro de luz',
-          desc: 'Chispa vuela hasta donde está la daga (y hace aparecer una si no hay)',
+          desc: 'Chispa vuela hasta la daga (o hace aparecer una) y su luz desenmascara a las copias',
           target: () => {
             this.ensureDagger();
             return this.daggerAt ?? me();
           },
-          run: () => this.ensureDagger(),
+          run: () => {
+            this.ensureDagger();
+            const fakes = this.copies.filter((cp) => cp.phase === 'copy');
+            fakes.forEach((cp) => this.reveal(cp));
+            if (fakes.length) this.c.say(`¡La luz de Chispa desenmascaró ${fakes.length === 1 ? 'una copia' : fakes.length + ' copias'}!`, 'act-unmask', 1);
+          },
         };
       case 'catarina':
         return {
           name: 'Caparazón',
-          desc: 'Sus garras no te hacen daño por 10 s',
+          desc: 'Ni sus garras ni las mordidas de los perros te hacen daño por 10 s',
           target: me,
-          run: () => this.c.immunity('claw', 10),
+          run: () => {
+            this.c.immunity('claw', 10);
+            this.c.immunity('copy', 10);
+          },
         };
       case 'hada':
         return {
           name: 'Polvo de hada',
-          desc: 'Te da un cráneo de obsidiana nuevo',
+          desc: 'Te da un cráneo de obsidiana nuevo (y una daga si aún no la encuentras)',
           target: me,
-          run: () => this.gift('craneo'),
+          run: () => {
+            this.gift('craneo');
+            if (!this.has('daga') && !this.c.deps.items.isLyingAround('daga')) this.gift('daga');
+          },
         };
       case 'serpiente':
         return {
@@ -3931,13 +4067,20 @@ class SkinwalkerBoss extends BossController {
     }
   }
 
+  onTimeStop() {
+    // Frozen in time, the copies can't hold their disguise
+    for (const cp of this.copies) if (cp.phase === 'copy') this.reveal(cp);
+    if (this.copy) this.endMimic(false);
+    if (this.state === 'windup' || this.state === 'lunge') this.state = 'recover';
+  }
+
   hint(): string {
     if (this.state === 'intro') return 'Algo se mueve entre los cuartos amarillos…';
     if (this.state === 'mimic') return '¿Eres tú? No te acerques: ¡espántalo o prepárate!';
     if (this.state === 'scared') return this.has('daga') ? 'Tienes la daga: espera a que vuelva' : 'Huyó: busca la daga de obsidiana (brillo morado)';
     if (this.state === 'hurt') return '¡Le diste! Ahora huirá un momento';
     if (this.has('daga')) return 'Déjalo acercarse y usa la daga cuando lo tengas enfrente';
-    if (this.copies.some((c) => c.phase === 'hunt')) return '¡Una copia estirada te persigue! Pégale con el bate o piedras';
+    if (this.copies.some((c) => c.phase === 'hunt')) return '¡Un perro gigante te persigue! Pégale con el bate o piedras';
     if (this.has('craneo')) return 'Cuando se acerque, usa el cráneo de obsidiana para espantarlo';
     return 'Toma un cráneo de obsidiana (brillo violeta) y escapa de él';
   }

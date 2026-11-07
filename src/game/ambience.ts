@@ -2,9 +2,14 @@
  * Extra eye candy that scales with the graphics quality (Ajustes → Rendimiento y Gráficos):
  *
  *  - Baja: nothing extra (fastest).
- *  - Media: some floating particles, a flock of birds, a few far islands and flowers on the ground.
+ *  - Media: some floating particles, a flock of birds, a few far islands and ground decor.
  *  - Alta: lots of particles, several flocks, a full ring of far islands with waterfalls and
- *    drifting cloud puffs, and many flowers and grass tufts on every floor.
+ *    drifting cloud puffs, and lots of ground decor on every floor.
+ *
+ * The ground decor depends on the world: flowers and grass in the meadow, cloud tufts and
+ * crystals in the sky, glowing crystals and mushrooms in space, reeds and moss in the swamp,
+ * tulips and topiaries in the garden, tombstones, candles and dead grass at the castle, and
+ * papers, stains and fallen ceiling tiles in the Backrooms.
  *
  * Purely decorative: nothing here collides or takes part in the game.
  */
@@ -36,6 +41,82 @@ const LOOK: Record<ThemeId, ThemeLook> = {
   garden: { particle: 0xfbcfe8, particle2: 0xffffff, motion: 'fall', island: 0x7cc46b, rock: 0x9ca3af, flowers: [0xf472b6, 0xfb7185, 0xfacc15, 0xffffff], grass: 0x65a30d, bird: 0x57534e },
   castle: { particle: 0xfb923c, particle2: 0xfde68a, motion: 'rise', island: 0x3f3a4a, rock: 0x4b4458, flowers: [0xdc2626, 0x7c3aed, 0x1f2937], grass: 0x3f4f2f, bird: 0x0c0a09 },
   backrooms: { particle: 0xfff3c4, particle2: 0xd6c58a, motion: 'float', island: 0, rock: 0, flowers: [], grass: 0, bird: 0, indoor: true },
+};
+
+/** One kind of ground decor: parts that share the same placement (e.g. stem + flower head). */
+interface DecorPart {
+  geo: () => THREE.BufferGeometry;
+  colors: number[];
+  emissive?: number;
+  opacity?: number;
+}
+interface DecorKind {
+  share: number;
+  parts: DecorPart[];
+  scale: [number, number];
+  /** Random lean (radians) */
+  tilt: number;
+  /** Extra random height stretch */
+  stretch?: [number, number];
+}
+
+const G = {
+  tuft: () => new THREE.ConeGeometry(0.06, 0.38, 3).translate(0, 0.19, 0),
+  stem: (h: number) => () => new THREE.CylinderGeometry(0.012, 0.012, h, 3).translate(0, h / 2, 0),
+  head: (r: number, y: number) => () => new THREE.IcosahedronGeometry(r, 0).translate(0, y, 0),
+  ball: (r: number, y: number) => () => new THREE.SphereGeometry(r, 8, 6).translate(0, y, 0),
+  crystal: (r: number, h: number) => () => new THREE.OctahedronGeometry(r, 0).scale(1, h / (2 * r), 1).translate(0, h / 2 - 0.02, 0),
+  cap: (r: number, y: number) => () => new THREE.SphereGeometry(r, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.7, 1).translate(0, y, 0),
+  post: (r: number, h: number, y = 0) => () => new THREE.CylinderGeometry(r * 0.85, r, h, 6).translate(0, y + h / 2, 0),
+  cone: (r: number, h: number, y: number) => () => new THREE.ConeGeometry(r, h, 6).translate(0, y + h / 2, 0),
+  box: (w: number, h: number, d: number, y = h / 2) => () => new THREE.BoxGeometry(w, h, d).translate(0, y, 0),
+  slab: (r: number) => () => new THREE.CylinderGeometry(r, r, 0.006, 14).translate(0, 0.006, 0),
+  puff: () => new THREE.IcosahedronGeometry(0.26, 1).scale(1.3, 0.55, 1).translate(0, 0.08, 0),
+  tombTop: () => new THREE.CylinderGeometry(0.25, 0.25, 0.12, 10, 1, false, -Math.PI / 2, Math.PI).rotateX(Math.PI / 2).translate(0, 0.55, 0),
+};
+
+const DECOR: Record<ThemeId, DecorKind[]> = {
+  cozy: [
+    { share: 0.6, parts: [{ geo: G.tuft, colors: [0x6fbf4a, 0x5aa83a] }], scale: [0.7, 1.5], tilt: 0.3, stretch: [0.8, 1.4] },
+    { share: 0.32, parts: [{ geo: G.stem(0.3), colors: [0x3f6212] }, { geo: G.head(0.09, 0.3), colors: [0xf9a8d4, 0xfde68a, 0xffffff, 0xc4b5fd] }], scale: [0.8, 1.4], tilt: 0.1 },
+    { share: 0.08, parts: [{ geo: G.post(0.035, 0.16), colors: [0xfef3c7] }, { geo: G.cap(0.12, 0.15), colors: [0xef4444, 0xf97316] }], scale: [0.8, 1.5], tilt: 0.15 },
+  ],
+  aero: [
+    { share: 0.35, parts: [{ geo: G.puff, colors: [0xffffff, 0xe0f2fe] }], scale: [0.6, 1.6], tilt: 0 },
+    { share: 0.3, parts: [{ geo: G.stem(0.38), colors: [0x86efac] }, { geo: G.ball(0.075, 0.4), colors: [0xffffff], emissive: 0.15 }], scale: [0.8, 1.4], tilt: 0.25 },
+    { share: 0.2, parts: [{ geo: G.crystal(0.09, 0.4), colors: [0x7dd3fc, 0xa5f3fc, 0xbae6fd], emissive: 0.25 }], scale: [0.7, 1.8], tilt: 0.35 },
+    { share: 0.15, parts: [{ geo: G.tuft, colors: [0x8fd4a8] }], scale: [0.6, 1.2], tilt: 0.5 },
+  ],
+  cosmic: [
+    { share: 0.38, parts: [{ geo: G.crystal(0.1, 0.5), colors: [0xc084fc, 0x67e8f9, 0xf0abfc], emissive: 0.75 }], scale: [0.6, 2.0], tilt: 0.4 },
+    { share: 0.27, parts: [{ geo: G.post(0.03, 0.22), colors: [0xe9d5ff] }, { geo: G.cap(0.13, 0.21), colors: [0x22d3ee, 0xa855f7, 0xf472b6], emissive: 0.8 }], scale: [0.7, 1.6], tilt: 0.15 },
+    { share: 0.35, parts: [{ geo: G.head(0.05, 0.05), colors: [0xfef08a, 0x67e8f9], emissive: 1 }], scale: [0.6, 1.4], tilt: 0 },
+  ],
+  swamp: [
+    { share: 0.35, parts: [{ geo: () => new THREE.CylinderGeometry(0.014, 0.02, 0.95, 3).translate(0, 0.475, 0), colors: [0x4d7c0f, 0x65a30d] }, { geo: G.post(0.045, 0.2, 0.68), colors: [0x78350f] }], scale: [0.8, 1.5], tilt: 0.18 },
+    { share: 0.35, parts: [{ geo: G.puff, colors: [0x3f6212, 0x4d6b3c] }], scale: [0.5, 1.2], tilt: 0.1 },
+    { share: 0.2, parts: [{ geo: G.post(0.04, 0.12), colors: [0xd9f99d] }, { geo: G.cap(0.14, 0.11), colors: [0xbef264, 0xfde047], emissive: 0.7 }], scale: [0.6, 1.4], tilt: 0.2 },
+    { share: 0.1, parts: [{ geo: G.slab(0.32), colors: [0x14532d], opacity: 0.85 }], scale: [0.7, 1.6], tilt: 0 },
+  ],
+  garden: [
+    { share: 0.3, parts: [{ geo: G.tuft, colors: [0x65a30d, 0x84cc16] }], scale: [0.7, 1.3], tilt: 0.3 },
+    { share: 0.3, parts: [{ geo: G.stem(0.32), colors: [0x3f6212] }, { geo: () => new THREE.CylinderGeometry(0.075, 0.045, 0.15, 6).translate(0, 0.38, 0), colors: [0xf472b6, 0xfb7185, 0xfacc15, 0xffffff, 0xa855f7] }], scale: [0.8, 1.3], tilt: 0.1 },
+    { share: 0.28, parts: [{ geo: G.stem(0.3), colors: [0x3f6212] }, { geo: G.head(0.09, 0.3), colors: [0xf472b6, 0xfacc15, 0xffffff] }], scale: [0.8, 1.4], tilt: 0.12 },
+    { share: 0.12, parts: [{ geo: G.post(0.05, 0.12), colors: [0x78350f] }, { geo: G.ball(0.3, 0.38), colors: [0x4d7c0f, 0x65a30d] }], scale: [0.8, 1.4], tilt: 0 },
+  ],
+  castle: [
+    { share: 0.58, parts: [{ geo: G.tuft, colors: [0x78716c, 0x8a7653, 0x57534e] }], scale: [0.7, 1.5], tilt: 0.55, stretch: [0.7, 1.5] },
+    { share: 0.08, parts: [{ geo: () => new THREE.ConeGeometry(0.018, 0.6, 3).translate(0, 0.3, 0), colors: [0x44403c] }], scale: [0.5, 1.0], tilt: 0.9 },
+    { share: 0.14, parts: [{ geo: G.post(0.04, 0.24), colors: [0xfef3c7, 0xe7e5e4] }, { geo: G.cone(0.03, 0.08, 0.25), colors: [0xfb923c], emissive: 1 }], scale: [0.7, 1.4], tilt: 0.05, stretch: [0.6, 1.8] },
+    { share: 0.1, parts: [{ geo: G.box(0.5, 0.55, 0.12), colors: [0x6b7280, 0x57534e] }, { geo: G.tombTop, colors: [0x6b7280, 0x57534e] }], scale: [0.7, 1.1], tilt: 0.2 },
+    { share: 0.1, parts: [{ geo: G.ball(0.09, 0.08), colors: [0xe7e5e4] }], scale: [0.8, 1.3], tilt: 0.3 },
+  ],
+  backrooms: [
+    { share: 0.4, parts: [{ geo: G.box(0.3, 0.004, 0.42, 0.004), colors: [0xfafaf9, 0xfef9c3] }], scale: [0.8, 1.2], tilt: 0.03 },
+    { share: 0.25, parts: [{ geo: G.slab(0.5), colors: [0x8a7a3a, 0x6b5f2e], opacity: 0.55 }], scale: [0.6, 2.2], tilt: 0 },
+    { share: 0.2, parts: [{ geo: G.box(0.6, 0.03, 0.6, 0.02), colors: [0xe7e0bf, 0xd6cc9c] }], scale: [0.9, 1.1], tilt: 0.12 },
+    { share: 0.15, parts: [{ geo: G.post(0.05, 0.22), colors: [0xbae6fd], opacity: 0.8 }, { geo: G.post(0.022, 0.05, 0.22), colors: [0x1d4ed8] }], scale: [0.9, 1.1], tilt: 0 },
+  ],
 };
 
 const DENSITY: Record<Quality, { particles: number; flocks: number; islands: number; flowers: number; puffs: number }> = {
@@ -149,8 +230,11 @@ export class AmbientDecor {
     this.center.copy(center);
 
     this.buildParticles(d.particles, look, rng);
-    if (look.indoor) return;
-    this.buildFlowers(world, d.flowers, look, rng);
+    if (look.indoor) {
+      this.buildGroundDecor(world, Math.round(d.flowers * 0.12), rng);
+      return;
+    }
+    this.buildGroundDecor(world, d.flowers, rng);
     this.buildIslands(center, maxR, d.islands, look, rng);
     for (let i = 0; i < d.flocks; i++) this.buildFlock(center, maxR, look, rng, i);
     this.buildPuffs(center, maxR, d.puffs, rng);
@@ -191,39 +275,21 @@ export class AmbientDecor {
     this.group.add(this.particles);
   }
 
-  /** Flowers and grass tufts on the floors (one instanced mesh per kind). */
-  private buildFlowers(world: WorldBuildResult, count: number, look: ThemeLook, rng: () => number) {
+  /** Ground decor on the floors, picked for this world (one instanced mesh per part and color). */
+  private buildGroundDecor(world: WorldBuildResult, count: number, rng: () => number) {
     if (!count) return;
+    const indoor = !!LOOK[this.theme].indoor;
     const floors = world.platforms.filter(
       (p) =>
         p.type === 'static' &&
         p.size.x >= 4 &&
         p.size.z >= 4 &&
         p.position.y > -20 &&
-        p.position.y < 60 &&
-        !/shield|hatch|cellar|summit_shield|fort_wall|core|rim_|altar|pillar|cover|wall/.test(p.id)
+        p.position.y < (indoor ? 2 : 60) &&
+        !/shield|hatch|cellar|summit_shield|fort_wall|core|rim_|altar|pillar|cover|wall|ceil|roof|mez|shelf/.test(p.id)
     );
     if (!floors.length) return;
     const area = floors.reduce((a, p) => a + p.size.x * p.size.z, 0);
-    const grassGeo = new THREE.ConeGeometry(0.06, 0.38, 3);
-    grassGeo.translate(0, 0.19, 0);
-    const petalGeo = new THREE.IcosahedronGeometry(0.09, 0);
-    petalGeo.translate(0, 0.3, 0);
-    const stemGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.3, 3);
-    stemGeo.translate(0, 0.15, 0);
-    const grassMat = new THREE.MeshLambertMaterial({ color: look.grass });
-    const stemMat = new THREE.MeshLambertMaterial({ color: 0x3f6212 });
-    const flowerMats = look.flowers.map((c) => new THREE.MeshLambertMaterial({ color: c, emissive: c, emissiveIntensity: this.theme === 'cosmic' || this.theme === 'swamp' ? 0.6 : 0.08 }));
-    const nGrass = Math.round(count * 0.65);
-    const nFlower = count - nGrass;
-    const grass = new THREE.InstancedMesh(grassGeo, grassMat, nGrass);
-    const stems = new THREE.InstancedMesh(stemGeo, stemMat, nFlower);
-    const heads = flowerMats.map((m) => new THREE.InstancedMesh(petalGeo, m, Math.ceil(nFlower / flowerMats.length)));
-    const headN = heads.map(() => 0);
-    const m4 = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const s = new THREE.Vector3();
-    const p = new THREE.Vector3();
     const pickFloor = () => {
       let x = rng() * area;
       for (const f of floors) {
@@ -232,34 +298,53 @@ export class AmbientDecor {
       }
       return floors[floors.length - 1];
     };
-    const spot = () => {
-      const f = pickFloor();
-      p.set(f.position.x + (rng() - 0.5) * (f.size.x - 0.6), f.position.y + 0.01, f.position.z + (rng() - 0.5) * (f.size.z - 0.6));
-      return p;
-    };
-    for (let i = 0; i < nGrass; i++) {
-      spot();
-      q.setFromEuler(new THREE.Euler((rng() - 0.5) * 0.3, rng() * Math.PI, (rng() - 0.5) * 0.3));
-      const k = 0.7 + rng() * 0.8;
-      s.set(k, k * (0.8 + rng() * 0.6), k);
-      grass.setMatrixAt(i, m4.compose(p, q, s));
-    }
-    for (let i = 0; i < nFlower; i++) {
-      spot();
-      q.identity();
-      const k = 0.8 + rng() * 0.6;
-      s.set(k, k, k);
-      m4.compose(p, q, s);
-      stems.setMatrixAt(i, m4);
-      const h = i % heads.length;
-      if (headN[h] < heads[h].count) heads[h].setMatrixAt(headN[h]++, m4);
-    }
-    heads.forEach((h, i) => (h.count = headN[i]));
-    for (const im of [grass, stems, ...heads]) {
-      im.instanceMatrix.needsUpdate = true;
-      im.frustumCulled = false;
-      im.receiveShadow = true;
-      this.group.add(im);
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const e = new THREE.Euler();
+    const sc = new THREE.Vector3();
+    const p = new THREE.Vector3();
+    for (const kind of DECOR[this.theme]) {
+      const n = Math.round(count * kind.share);
+      if (!n) continue;
+      // Per part: one instanced mesh per color, filled round-robin
+      const meshes = kind.parts.map((part) => {
+        const geo = part.geo();
+        return part.colors.map((c) => {
+          const mat = new THREE.MeshLambertMaterial({
+            color: c,
+            emissive: part.emissive ? c : 0x000000,
+            emissiveIntensity: part.emissive ?? 0,
+            transparent: part.opacity !== undefined,
+            opacity: part.opacity ?? 1,
+            depthWrite: part.opacity === undefined,
+          });
+          const im = new THREE.InstancedMesh(geo, mat, Math.ceil(n / part.colors.length));
+          im.count = 0;
+          return im;
+        });
+      });
+      for (let i = 0; i < n; i++) {
+        const f = pickFloor();
+        p.set(f.position.x + (rng() - 0.5) * (f.size.x - 0.6), f.position.y + 0.01 + (indoor ? i * 0.00002 : 0), f.position.z + (rng() - 0.5) * (f.size.z - 0.6));
+        q.setFromEuler(e.set((rng() - 0.5) * kind.tilt, rng() * Math.PI * 2, (rng() - 0.5) * kind.tilt));
+        const k = kind.scale[0] + rng() * (kind.scale[1] - kind.scale[0]);
+        const st = kind.stretch ? kind.stretch[0] + rng() * (kind.stretch[1] - kind.stretch[0]) : 1;
+        sc.set(k, k * st, k);
+        m4.compose(p, q, sc);
+        const ci = Math.floor(rng() * 1000);
+        meshes.forEach((variants, pi) => {
+          // Parts of one decor keep matching colors when they have the same palette size (tombstone body + top)
+          const im = variants[(kind.parts[pi].colors.length === kind.parts[0].colors.length ? ci : ci + pi) % variants.length];
+          if (im.count < im.instanceMatrix.count) im.setMatrixAt(im.count++, m4);
+        });
+      }
+      for (const variants of meshes)
+        for (const im of variants) {
+          im.instanceMatrix.needsUpdate = true;
+          im.frustumCulled = false;
+          im.receiveShadow = true;
+          this.group.add(im);
+        }
     }
   }
 
@@ -268,7 +353,9 @@ export class AmbientDecor {
     if (!count) return;
     const topMat = new THREE.MeshLambertMaterial({ color: look.island, flatShading: true });
     const rockMat = new THREE.MeshLambertMaterial({ color: look.rock, flatShading: true });
-    const waterMat = new THREE.MeshBasicMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.55, depthWrite: false });
+    const waterMat = new THREE.MeshBasicMaterial({ color: this.theme === 'swamp' ? 0x9bd36b : 0xbfe8ff, transparent: true, opacity: 0.55, depthWrite: false });
+    const crystalMat = new THREE.MeshLambertMaterial({ color: 0xc084fc, emissive: 0x7c3aed, emissiveIntensity: 0.8, flatShading: true });
+    const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2 + rng() * 0.4;
       const r = maxR + 45 + rng() * 55;
@@ -279,13 +366,28 @@ export class AmbientDecor {
       under.rotation.x = Math.PI;
       under.position.y = -size * 0.97;
       g.add(top, under);
-      // A couple of round trees on top
+      // A few things on top, matching the world (round trees, crystals, spires, clouds)
       for (let k = 0; k < 2 + Math.floor(rng() * 3); k++) {
-        const tr = new THREE.Mesh(new THREE.IcosahedronGeometry(size * (0.15 + rng() * 0.12), 0), topMat);
-        tr.position.set((rng() - 0.5) * size, size * 0.35, (rng() - 0.5) * size);
+        const r0 = size * (0.15 + rng() * 0.12);
+        let tr: THREE.Mesh;
+        if (this.theme === 'cosmic') {
+          tr = new THREE.Mesh(new THREE.OctahedronGeometry(r0 * 0.6, 0).scale(1, 2.6, 1), crystalMat);
+          tr.position.y = size * 0.17 + r0 * 1.4;
+        } else if (this.theme === 'castle') {
+          tr = new THREE.Mesh(new THREE.ConeGeometry(r0 * 0.45, r0 * 4, 5), rockMat);
+          tr.position.y = size * 0.17 + r0 * 2;
+        } else if (this.theme === 'aero') {
+          tr = new THREE.Mesh(new THREE.IcosahedronGeometry(r0, 1).scale(1.4, 0.6, 1), cloudMat);
+          tr.position.y = size * 0.3;
+        } else {
+          tr = new THREE.Mesh(new THREE.IcosahedronGeometry(r0, 0), topMat);
+          tr.position.y = size * 0.35;
+        }
+        tr.position.x = (rng() - 0.5) * size;
+        tr.position.z = (rng() - 0.5) * size;
         g.add(tr);
       }
-      if (this.quality === 'high' && rng() < 0.45) {
+      if (this.quality === 'high' && this.theme !== 'castle' && this.theme !== 'cosmic' && rng() < 0.45) {
         const fall = new THREE.Mesh(new THREE.PlaneGeometry(size * 0.25, size * 3.5), waterMat);
         fall.position.set(0, -size * 1.6, size * 0.86);
         g.add(fall);
@@ -302,7 +404,18 @@ export class AmbientDecor {
   private buildFlock(center: THREE.Vector3, maxR: number, look: ThemeLook, rng: () => number, idx: number) {
     const mat = new THREE.MeshBasicMaterial({ color: look.bird, side: THREE.DoubleSide });
     const wingGeo = new THREE.BufferGeometry();
-    wingGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0.12, 0, 0, -0.12, 0.55, 0, 0]), 3));
+    const bat = this.theme === 'castle';
+    wingGeo.setAttribute(
+      'position',
+      new THREE.BufferAttribute(
+        new Float32Array(
+          bat
+            ? [0, 0, 0.14, 0, 0, -0.1, 0.3, 0, -0.04, 0, 0, 0.14, 0.3, 0, -0.04, 0.6, 0, 0.1, 0.3, 0, -0.04, 0.6, 0, 0.1, 0.62, 0, -0.12]
+            : [0, 0, 0.12, 0, 0, -0.12, 0.55, 0, 0]
+        ),
+        3
+      )
+    );
     const birds: Bird[] = [];
     for (let i = 0; i < 6; i++) {
       const g = new THREE.Group();
@@ -383,7 +496,7 @@ export class AmbientDecor {
       g.position.set(f.center.x + Math.cos(f.angle) * f.radius, f.center.y + Math.sin(time * 0.3 + f.radius) * 2, f.center.z + Math.sin(f.angle) * f.radius);
       g.rotation.y = -f.angle + (f.speed > 0 ? Math.PI : 0);
       for (const b of f.birds) {
-        const flap = Math.sin(time * 9 + b.phase) * 0.7;
+        const flap = Math.sin(time * (this.theme === 'castle' ? 16 : 9) + b.phase) * 0.7;
         b.wings[0].rotation.z = flap;
         b.wings[1].rotation.z = -flap;
       }
