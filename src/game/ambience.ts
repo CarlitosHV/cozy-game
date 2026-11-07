@@ -4,7 +4,9 @@
  *  - Baja: nothing extra (fastest).
  *  - Media: some floating particles, a flock of birds, a few far islands and ground decor.
  *  - Alta: lots of particles, several flocks, a full ring of far islands with waterfalls and
- *    drifting cloud puffs, and lots of ground decor on every floor.
+ *    drifting cloud puffs, lots of ground decor on every floor, and far scenery painted around
+ *    the horizon of each world (planets and a black hole in space, glass towers over a meadow in
+ *    Aero… see backdrops.ts).
  *
  * The ground decor depends on the world: flowers and grass in the meadow, cloud tufts and
  * crystals in the sky, glowing crystals and mushrooms in space, reeds and moss in the swamp,
@@ -16,6 +18,7 @@
 import * as THREE from 'three';
 import type { WorldBuildResult } from './levels';
 import { ThemeId } from './progress';
+import { buildBackdrop, Backdrop } from './backdrops';
 
 export type Quality = 'high' | 'medium' | 'low';
 
@@ -177,6 +180,7 @@ export class AmbientDecor {
   private puffs: { obj: THREE.Object3D; speed: number; radius: number; angle: number; y: number }[] = [];
   private waterfalls: THREE.Mesh[] = [];
   private dot: THREE.CanvasTexture | null = null;
+  private backdrop: Backdrop | null = null;
   private center = new THREE.Vector3();
 
   constructor(scene: THREE.Scene) {
@@ -230,6 +234,10 @@ export class AmbientDecor {
     this.center.copy(center);
 
     this.buildParticles(d.particles, look, rng);
+    if (this.quality === 'high') {
+      this.backdrop = buildBackdrop(theme, mulberry(level * 7919 + 3));
+      if (this.backdrop) this.group.add(this.backdrop.group);
+    }
     if (look.indoor) {
       this.buildGroundDecor(world, Math.round(d.flowers * 0.12), rng);
       return;
@@ -463,6 +471,11 @@ export class AmbientDecor {
 
   update(dt: number, time: number, focus: THREE.Vector3) {
     if (this.quality === 'low') return;
+    // The far scenery travels with you, like the sky
+    if (this.backdrop) {
+      this.backdrop.group.position.copy(focus);
+      this.backdrop.update(dt, time);
+    }
     // Particles live in a box around you (wrapping around as you move)
     if (this.particles && this.particleBase) {
       const attr = this.particles.geometry.getAttribute('position') as THREE.BufferAttribute;
@@ -519,8 +532,11 @@ export class AmbientDecor {
       const m = o as THREE.Mesh;
       if (m.geometry) m.geometry.dispose();
       const mat = m.material as THREE.Material | THREE.Material[] | undefined;
-      if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-      else mat?.dispose();
+      for (const x of Array.isArray(mat) ? mat : mat ? [mat] : []) {
+        const map = (x as THREE.MeshBasicMaterial).map;
+        if (map && map !== this.dot) map.dispose();
+        x.dispose();
+      }
     });
     this.group.clear();
     this.particles = null;
@@ -529,6 +545,7 @@ export class AmbientDecor {
     this.islands = [];
     this.puffs = [];
     this.waterfalls = [];
+    this.backdrop = null;
   }
 
   dispose() {
