@@ -497,6 +497,21 @@ export class PuzzleSystem {
     s.shield.position.y = -100;
   }
 
+  /** Puts one push rock back where it started (e.g. walking back into the basement). */
+  resetBlock(index: number): THREE.Vector3 | null {
+    const b = this.data.blocks[index];
+    if (!b) return null;
+    b.plat.position.copy(b.start);
+    b.plat.mesh.position.copy(b.start);
+    b.plat.mesh.visible = true;
+    b.vy = 0;
+    b.respawnTimer = 0;
+    b.remoteTarget = null;
+    (b.lastSent ??= new THREE.Vector3()).copy(b.start);
+    b.moving = false;
+    return b.start.clone();
+  }
+
   /** New run: blocks back home, doors closed, carriers holding their keys, hints re-armed. */
   reset() {
     for (const b of this.data.blocks) {

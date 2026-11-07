@@ -3,6 +3,8 @@
  *  - Player life bar (100). Boss attacks, minions and shockwaves take life away; at 0 you
  *    faint and go back to the entrance with full life. Hamburguesas (+40) and papitas (+20)
  *    lying around the arena heal you (only when you are hurt) and come back after a while.
+ *  - Friendly fire: in a party your bat, stones, bombs, nets and stomps also hit your friends
+ *    (enemies in reach are always preferred). A friend's net traps you until you jump free.
  *  - Parties: a player who faints stays down where they fell; a friend who stands next to
  *    them for a few seconds gives them CPR and they get up with half their life. If nobody
  *    comes in time (or everybody is down) they wake up at the entrance as usual.
@@ -25,7 +27,7 @@ import type { ProceduralTextures } from './textures';
 import { Effect, makeReticle, makeWaveRing, puffEffect } from './combatFx';
 import { COMPANION_POWERS } from './companionPowers';
 import { makeGlowTexture } from './levelKit';
-import { makeBat, makeBomb, makeBurger, makeFlame, makeFries, makeLightOrb, makeNetProjectile, makeStone } from './toolModels';
+import { makeBat, makeBomb, makeBurger, makeFlame, makeFries, makeLightOrb, makeNetProjectile, makeNetWrap, makeStone } from './toolModels';
 import { BossController, createBossController } from './bosses';
 
 export type ShotKind = 'piedra' | 'red' | 'bomba' | 'luz';
@@ -42,6 +44,8 @@ export interface AimTarget {
   noAim?: boolean;
   /** Preferred by the reticle */
   priority?: number;
+  /** A friend (friendly fire): enemies in reach are always preferred */
+  friend?: boolean;
   hit: (kind: HitKind, at: THREE.Vector3) => void;
 }
 
@@ -77,6 +81,8 @@ export interface CombatDeps {
   lose: (reason: string) => void;
   /** Gives movement back to the player (unless a menu is open) */
   unlockMovement: () => void;
+  /** The player fainted (counts as a death for the level rating) */
+  onDeath?: () => void;
 }
 
 export interface CombatStatus {
@@ -153,6 +159,11 @@ const SHOT_SPEC: Record<ShotKind, { speed: number; g: number; radius: number; ra
 };
 
 const FOOD_HEAL = { burger: 40, fries: 20 };
+/** Friendly fire: what each hit does to a friend */
+const FF_CODES = ['bate', 'piedra', 'bomba', 'red', 'stomp'] as const;
+const FF_DAMAGE = { bate: 15, piedra: 8, bomba: 25, red: 0, stomp: 10 } as const;
+const FF_PUSH: Record<(typeof FF_CODES)[number], [number, number]> = { bate: [9, 6], piedra: [5, 3], bomba: [12, 8], red: [0, 0], stomp: [6, 4] };
+
 /** Seconds between companion actions in a boss fight */
 const ACTION_COOLDOWN = 20;
 
@@ -265,6 +276,11 @@ export class CombatSystem {
     return this.deps.physics().position;
   }
   /** Where the boss is (the camera tilts up when it is high above the player) */
+  /** Boss pieces that move on their own on each computer (spectator mode copies them) */
+  syncObjects(): THREE.Object3D[] {
+    return this.boss.syncObjects();
+  }
+
   get focus(): THREE.Vector3 | null {
     return this.defeated ? null : this.boss.focusPoint();
   }
@@ -324,6 +340,7 @@ export class CombatSystem {
 
   private faint() {
     if (this.grab) this.releaseGrab('other');
+    this.deps.onDeath?.();
     if (this.rescuerAvailable()) {
       // Stay down where you fell until a friend gives you CPR
       this.downT = DOWN_WAIT;
@@ -389,6 +406,59 @@ export class CombatSystem {
     const p = this.playerPos;
     const dxz = Math.hypot(p.x - pos.x, p.z - pos.z);
     if (dxz < radius && p.y > pos.y - 1.2 && p.y < pos.y + 2.4) this.damagePlayer(dmg, pos, force, up, tag);
+  }
+
+  private ffWarned = false;
+  private ffCooldown: Record<string, number> = {};
+  /** The net a friend threw at you */
+  private friendNet: THREE.Mesh | null = null;
+  private friendNetPos = new THREE.Vector3();
+
+  /** You hit a friend (friendly fire): they lose life on their screen. */
+  private hitFriend(r: RemoteInfo, kind: HitKind) {
+    const now = this.elapsed;
+    if ((this.ffCooldown[r.userId] ?? -1) > now) return;
+    this.ffCooldown[r.userId] = now + 0.4;
+    const code = FF_CODES.indexOf(kind as (typeof FF_CODES)[number]);
+    if (code < 0) return;
+    this.deps.send('ff', code, FF_DAMAGE[kind as keyof typeof FF_DAMAGE] ?? 0, r.userId);
+    this.addEffect(puffEffect(this.deps.root, r.pos.clone().add(this._w.set(0, 1.1, 0)), 'rgba(251,113,133,0.95)', 1.8, 0.3));
+    this.say(kind === 'red' ? `¡Atrapaste a ${r.username} con la red! (fuego amigo)` : `¡Le diste a ${r.username}! (fuego amigo)`, `ff-${r.userId}`, 1.5);
+  }
+
+  /** A friend hit you (friendly fire). */
+  private hitByFriend(code: number, dmg: number, from: string) {
+    const kind = FF_CODES[code];
+    if (!kind || this.isDown || this.defeated) return;
+    const who = this.deps.remotes().find((x) => x.userId === from);
+    const name = who?.username || 'Un amigo';
+    if (kind === 'red') {
+      if (this.grab || this.invuln > 0) return;
+      const p = this.physics.position;
+      this.friendNetPos.set(p.x, p.y - 0.9, p.z);
+      const ok = this.grabPlayer(
+        {
+          pos: this.friendNetPos,
+          onRelease: () => {
+            if (this.friendNet) {
+              this.deps.root.remove(this.friendNet);
+              this.friendNet.geometry.dispose();
+              this.friendNet = null;
+            }
+          },
+        },
+        5
+      );
+      if (!ok) return;
+      this.friendNet = makeNetWrap(0.75, 1.9);
+      this.friendNet.position.set(p.x, p.y, p.z);
+      this.deps.root.add(this.friendNet);
+      this.deps.notify(`¡${name} te atrapó con la red! Pulsa saltar para soltarte`);
+      return;
+    }
+    const k = FF_PUSH[kind];
+    const ok = this.damagePlayer(Math.max(0, Math.min(40, dmg)), who ? who.pos : null, k[0], k[1], 'friend');
+    if (ok) this.say(`¡${name} te golpeó! (fuego amigo)`, 'ff-hit', 1.5);
   }
 
   /** The fight is lost: the game shows why and lets you try again. */
@@ -600,8 +670,9 @@ export class CombatSystem {
       const dy = t.pos.y - (p.y + 1);
       const reach = Math.hypot(dx, dz) - t.radius;
       if (reach > 2.1 || dy < -1.8 || dy > 2.6) continue;
-      if (reach < bestD) {
-        bestD = reach;
+      const rank = reach + (t.friend ? 3 : 0);
+      if (rank < bestD) {
+        bestD = rank;
         best = t;
       }
     }
@@ -634,6 +705,10 @@ export class CombatSystem {
     }
     if (kind === 'down') {
       if (target && target !== this.deps.myId()) this.deps.setRemoteDown(target, v === 1);
+      return;
+    }
+    if (kind === 'ff') {
+      if (target && target === this.deps.myId()) this.hitByFriend(i, v, from);
       return;
     }
     if (kind === 'revive') {
@@ -674,6 +749,24 @@ export class CombatSystem {
           this.deps.notify(`¡Rescataste a ${r.username}!`);
         },
       });
+    }
+
+    // Friendly fire: friends who are up can be hit too
+    for (const r of this.deps.remotes()) {
+      if (r.grabbed || r.down) continue;
+      this.targets.push({
+        pos: r.pos.clone().add(this._w.set(0, 0.9, 0)),
+        radius: 0.6,
+        accepts: ['bate', 'piedra', 'bomba', 'red', 'stomp'],
+        top: r.pos.y + 1.7,
+        priority: -0.6,
+        friend: true,
+        hit: (kind) => this.hitFriend(r, kind),
+      });
+    }
+    if (!this.ffWarned && this.elapsed > 5 && this.deps.remotes().length > 0) {
+      this.ffWarned = true;
+      this.deps.notify('¡Ojo! Hay fuego amigo: tus golpes también lastiman a tus amigos');
     }
 
     this.boss.update(dt, time);
@@ -1119,6 +1212,7 @@ export class CombatSystem {
     const tipText = this.tip ? (this.defeated ? `¡Lo lograste! Ve al portal del centro` : this.boss.hint()) : null;
     let hint = this.defeated ? `¡Venciste a ${this.setup.short}!` : this.boss.hint();
     let urgent = !!this.grab;
+    if (this.grab && this.friendNet) hint = `¡Te atraparon con la red! Pulsa saltar muchas veces (${this.grab.count}/${this.grab.need})`;
     if (this.isDown) {
       hint = `¡Te desmayaste! Espera a que un amigo te haga RCP (${Math.ceil(this.downT)} s)`;
       urgent = true;
@@ -1150,6 +1244,10 @@ export class CombatSystem {
   }
 
   dispose() {
+    if (this.friendNet) {
+      this.deps.root.remove(this.friendNet);
+      this.friendNet = null;
+    }
     if (this.guide) {
       this.deps.root.remove(this.guide);
       this.guide = null;

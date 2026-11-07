@@ -20,12 +20,24 @@
 import * as THREE from 'three';
 import { EnemyManager } from './enemies';
 import { ProceduralTextures } from './textures';
+import {
+  createRotatingPinwheel,
+  createRollingWoolBall,
+  createSporeSteamVent,
+  createSwingingObstacle,
+  RollingWoolBallModel,
+  RotatingPinwheelModel,
+  SporeSteamVentModel,
+  SwingingObstacleModel,
+} from './models';
 import { PlatformItem, WorldBuildResult } from './levels';
 import { createLevelKit } from './levelKit';
 import { Builder, createThemePack } from './levelThemes';
 import { ItemSpot } from './items';
 import { RELICS, THEME_INFO, themeForLevel, ThemeId } from './progress';
 import { ExtraKind, spawnExtraEnemy } from './enemiesExtra';
+import { emptyDungeon, MiniBoss, Trapdoor } from './dungeon';
+import type { SolidObstacleCollider } from './levels';
 import { CoverBox, DOOR_H, emptyPuzzles, makeBeam, makeCarrier, makeDoor, makeOrb, makePortal, makePushBlock, makeSentinel } from './puzzles';
 
 /** 0 at level 5 → 1 at level 40+ */
@@ -60,7 +72,7 @@ const RELICS_IN_ZONE = RELICS.zone - 1;
 const STONE: Record<ThemeId, number> = { cozy: 0xa08a7a, cosmic: 0x6d6a8f, swamp: 0x55604a, aero: 0x6fb7dc, garden: 0x9ca3af, castle: 0x4b4458 };
 const ORB_COLORS = [0xf472b6, 0x38bdf8, 0xfacc15, 0x4ade80, 0xc084fc];
 
-type Puzzle = 'rock' | 'vault' | 'thief' | 'stealth';
+type Puzzle = 'rock' | 'vault' | 'thief' | 'stealth' | 'dungeon';
 type Explore = 'tower' | 'sky' | 'excursion';
 type Feature = Puzzle | Explore;
 const PUZZLE_ORDER: Puzzle[] = ['rock', 'vault', 'thief', 'stealth'];
@@ -148,6 +160,8 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
 
   const enemies = new EnemyManager(root, textures);
   const puzzles = emptyPuzzles();
+  const dungeon = emptyDungeon();
+  const deepZones: NonNullable<WorldBuildResult['deepZones']> = [];
   const items: ItemSpot[] = [];
   const routes: { name: string; ids: string[] }[] = [];
   let enemyN = 0;
@@ -745,6 +759,8 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   const nPuzzle = Math.min(nOrbs, puzzleCountForLevel(level));
   const plan: Feature[] = [];
   for (let i = 0; i < nPuzzle; i++) plan.push(PUZZLE_ORDER[(level + i) % PUZZLE_ORDER.length]);
+  // From level 6 every zone has a dungeon (guardian arena → crowbar → trapdoor → basement)
+  if (level >= 6 && plan.length) plan[0] = 'dungeon';
   for (let i = nPuzzle; i < nOrbs; i++) plan.push(EXPLORE_ORDER[(level + i) % EXPLORE_ORDER.length]);
   const isSpawnTile = (t: Tile) => t.j === 1 && (t.i === 2 || t.i === 3);
   const freeTiles = () => shuffle(nonFort().filter((t) => !t.used && !isSpawnTile(t)));
@@ -752,7 +768,317 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     const f = freeTiles();
     return [...f.filter((t) => t.kind === 'outer'), ...f.filter((t) => t.kind !== 'outer')];
   };
+  /**
+   * Zelda-style dungeon: a guardian arena (mini version of the world's boss) drops a crowbar
+   * that opens the trapdoor of a stone crypt; its stairs go down to a basement where the orb
+   * sits on an altar (push the rock next to it to climb up).
+   */
+  function guardianDungeon(): boolean {
+    const AR = 4.7;
+    const arenaTile = freeTiles().find(
+      (t) =>
+        !t.rects.some((q) => rectHit(q, rectAt(t.cx, t.cz, AR + 0.4, AR + 0.4))) &&
+        fits([{ x: t.cx, z: t.cz, top: t.y + 3.4, sx: AR * 2 + 0.8, sy: 3.4, sz: AR * 2 + 0.8 }], [t.plat!])
+    );
+    if (!arenaTile) return false;
+    // ---- The crypt with the trapdoor (on another tile) ----
+    let crypt: { t: Tile; f: { x: number; z: number }; cx: number; cz: number } | null = null;
+    for (const t of freeTiles()) {
+      if (t === arenaTile) continue;
+      for (const f of shuffle([...AX])) {
+        for (const off of shuffle([0, 1, -1])) {
+          const r = { x: f.z, z: -f.x };
+          const cx = t.cx - f.x * 0.9 + r.x * off;
+          const cz = t.cz - f.z * 0.9 + r.z * off;
+          const foot = rectAt(cx + f.x * 0.7, cz + f.z * 0.7, f.x !== 0 ? 3.6 : 2.9, f.x !== 0 ? 2.9 : 3.6);
+          if (t.rects.some((q) => rectHit(q, foot))) continue;
+          if (!insideTile(t, cx + f.x * 4.3, cz + f.z * 4.3, 0.3)) continue;
+          if (!fits([{ x: cx, z: cz, top: t.y + 3.2, sx: 5.4, sy: 3.2, sz: 5.4 }], [t.plat!])) continue;
+          crypt = { t, f, cx, cz };
+          t.rects.push(foot);
+          break;
+        }
+        if (crypt) break;
+      }
+      if (crypt) break;
+    }
+    if (!crypt) return false;
+    const id = `f${featureN++}`;
+    const dIndex = dungeon.trapdoors.length;
+
+    // ---- Arena: a ring of posts with a gate that shuts while you fight ----
+    const at = arenaTile;
+    const C = new THREE.Vector3(at.cx, at.y, at.cz);
+    const gateAngle = Math.atan2(-at.cz, -at.cx) || 0; // the gate looks toward the fortress
+    const gateHalf = 1.4 / AR;
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x7c5a3a, roughness: 0.8, map: textures.wood });
+    const nPosts = Math.round((Math.PI * 2 * AR) / 0.8);
+    const postGeo = new THREE.CylinderGeometry(0.12, 0.15, 2.7, 7);
+    postGeo.translate(0, 1.35, 0);
+    for (let k = 0; k < nPosts; k++) {
+      const a = (k / nPosts) * Math.PI * 2;
+      let da = a - gateAngle;
+      da = Math.atan2(Math.sin(da), Math.cos(da));
+      if (Math.abs(da) < gateHalf) continue;
+      const x = C.x + Math.cos(a) * AR;
+      const z = C.z + Math.sin(a) * AR;
+      const post = new THREE.Mesh(postGeo, postMat);
+      post.position.set(x, C.y, z);
+      post.castShadow = true;
+      root.add(post);
+      kit.registerCylinder(`${id}_post${k}`, x, C.y, z, 0.3, 2.7);
+    }
+    for (const h of [0.9, 2.2]) {
+      const holder = new THREE.Group();
+      holder.position.set(C.x, C.y + h, C.z);
+      holder.rotation.y = -(gateAngle + gateHalf);
+      const rail = new THREE.Mesh(new THREE.TorusGeometry(AR, 0.07, 6, 72, Math.PI * 2 - gateHalf * 2), postMat);
+      rail.rotation.x = Math.PI / 2;
+      holder.add(rail);
+      root.add(holder);
+    }
+    const sand = new THREE.Mesh(
+      new THREE.CircleGeometry(AR - 0.15, 40),
+      new THREE.MeshStandardMaterial({ color: 0xd6c08f, roughness: 1, transparent: true, opacity: 0.85 })
+    );
+    sand.rotation.x = -Math.PI / 2;
+    sand.position.set(C.x, C.y + 0.03, C.z);
+    sand.receiveShadow = true;
+    root.add(sand);
+    // Gate: two big posts with flames, and bars that come up out of the ground
+    const ironMat = new THREE.MeshStandardMaterial({ color: 0x3f3f46, metalness: 0.7, roughness: 0.4 });
+    for (const sgn of [-1, 1]) {
+      const a = gateAngle + sgn * (gateHalf + 0.05);
+      const x = C.x + Math.cos(a) * AR;
+      const z = C.z + Math.sin(a) * AR;
+      const big = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 3.4, 8), stoneMat);
+      big.position.set(x, C.y + 1.7, z);
+      big.castShadow = true;
+      const flame = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), new THREE.MeshBasicMaterial({ color: accent }));
+      flame.position.set(x, C.y + 3.55, z);
+      root.add(big, flame);
+      kit.registerCylinder(`${id}_gatepost${sgn}`, x, C.y, z, 0.35, 3.4);
+    }
+    const bars = new THREE.Group();
+    bars.position.set(0, C.y - 3.1, 0);
+    const colliders: SolidObstacleCollider[] = [];
+    for (let k = 0; k < 5; k++) {
+      const a = gateAngle + (k / 4 - 0.5) * gateHalf * 1.9;
+      const x = C.x + Math.cos(a) * AR;
+      const z = C.z + Math.sin(a) * AR;
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 2.9, 6), ironMat);
+      bar.position.set(x, 1.45, z);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.3, 6), ironMat);
+      tip.position.set(x, 3.0, z);
+      bars.add(bar, tip);
+      if (k % 2 === 0) {
+        const c: SolidObstacleCollider = { name: `${id}_bar${k}`, type: 'cylinder', position: new THREE.Vector3(x, C.y, z), radius: 0.5, height: 3.2, bottomY: -1000, topY: -999 };
+        kit.solidObstacles.push(c);
+        colliders.push(c);
+      }
+    }
+    root.add(bars);
+    const gateOut = new THREE.Vector3(C.x + Math.cos(gateAngle) * (AR + 1.6), C.y, C.z + Math.sin(gateAngle) * (AR + 1.6));
+    const boss = new MiniBoss(root, dungeon.miniBosses.length, themeId, C, AR, { bars, colliders, locked: false, y: C.y });
+    dungeon.miniBosses.push(boss);
+    hint(gateOut, 3.2, `Arena del guardián: entra y derrota a ${boss.name}. Suelta la palanca que abre la trampilla del sótano`);
+    at.rects.push(rectAt(C.x, C.z, AR + 0.6, AR + 0.6));
+    at.used = true;
+    routes.push({ name: `arena ${id}`, ids: [at.plat!.id] });
+
+    // ---- Crypt: a stone rim around a pit, a hatch on top, stairs down inside ----
+    const { t, f } = crypt;
+    const r = { x: f.z, z: -f.x };
+    const RIM = 1.2;
+    const top = t.y + RIM;
+    const at2 = (u: number, v: number) => ({ x: crypt!.cx + f.x * u + r.x * v, z: crypt!.cz + f.z * u + r.z * v });
+    const box = (name: string, u: number, v: number, l: number, a: number, topY: number, h: number, solid: boolean, builder = wallBuilder) => {
+      const p = at2(u, v);
+      const sx = Math.abs(f.x) * l + Math.abs(r.x) * a;
+      const sz = Math.abs(f.z) * l + Math.abs(r.z) * a;
+      const plat = kit.addPlatform(`${id}_${name}`, p.x, topY, p.z, sx, sz, h, builder);
+      plat.solid = solid;
+      return plat;
+    };
+    box('rim_back', -2.0, 0, 1.2, 5.2, top, RIM + 0.3, true);
+    box('rim_front', 2.0, 0, 1.2, 5.2, top, RIM + 0.3, true);
+    box('rim_l', 0, -2.0, 2.8, 1.2, top, RIM + 0.3, true);
+    box('rim_r', 0, 2.0, 2.8, 1.2, top, RIM + 0.3, true);
+    // Steps up to the rim, and down into the pit (under the hatch)
+    box('step_out1', 3.5, 0, 0.6, 2.4, t.y + 0.4, 0.7, false);
+    box('step_out2', 2.9, 0, 0.6, 2.4, t.y + 0.8, 1.1, false);
+    box('step_in1', 1.1, 0, 0.6, 2.8, t.y + 0.8, 1.1, false);
+    box('step_in2', 0.5, 0, 0.6, 2.8, t.y + 0.4, 0.7, false);
+    // The dark stairwell going down at the back of the pit
+    const holeTex = (() => {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 128;
+      const g = c.getContext('2d')!;
+      for (let k = 0; k < 8; k++) {
+        const shade = Math.max(0, 70 - k * 10);
+        g.fillStyle = `rgb(${shade},${shade - 5 > 0 ? shade - 5 : 0},${shade + 6})`;
+        g.fillRect(0, k * 16, 64, 16);
+        g.fillStyle = 'rgba(255,255,255,0.08)';
+        g.fillRect(0, k * 16, 64, 2);
+      }
+      const tx = new THREE.CanvasTexture(c);
+      tx.colorSpace = THREE.SRGBColorSpace;
+      return tx;
+    })();
+    const holeLen = 1.5;
+    const hole = new THREE.Mesh(new THREE.PlaneGeometry(2.8, holeLen), new THREE.MeshBasicMaterial({ map: holeTex }));
+    const hc = at2(-1.4 + holeLen / 2, 0);
+    hole.position.set(hc.x, t.y + 0.02, hc.z);
+    hole.rotation.x = -Math.PI / 2;
+    hole.rotation.z = Math.atan2(f.x, f.z) + Math.PI;
+    root.add(hole);
+    // Hatch (walkable while closed) with a hinge at the back edge
+    const hatch = box('hatch', 0, 0, 2.8, 2.8, top, 0.25, false, () => {});
+    const pivot = new THREE.Group();
+    const hinge = at2(-1.4, 0);
+    pivot.position.set(hinge.x, top, hinge.z);
+    const lid = new THREE.Group();
+    const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.8, map: textures.wood });
+    const plank = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.2, 2.8), woodMat);
+    plank.castShadow = true;
+    plank.receiveShadow = true;
+    lid.add(plank);
+    for (const b of [-0.8, 0.8]) {
+      const band = new THREE.Mesh(new THREE.BoxGeometry(2.86, 0.06, 0.18), ironMat);
+      band.position.set(0, 0.12, b);
+      lid.add(band);
+    }
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.05, 8, 16), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.8, roughness: 0.3 }));
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(0, 0.13, 0.9);
+    lid.add(ring);
+    // lid local: z = along f (hinge at z = -1.4), x = across
+    lid.position.set(0, -0.1, 1.4);
+    pivot.rotation.order = 'YXZ';
+    const holder = new THREE.Group();
+    holder.position.copy(pivot.position);
+    holder.rotation.y = Math.atan2(f.x, f.z);
+    pivot.position.set(0, 0, 0);
+    pivot.add(lid);
+    holder.add(pivot);
+    root.add(holder);
+    hint(new THREE.Vector3(at2(4.2, 0).x, t.y, at2(4.2, 0).z), 3.5, 'Una trampilla con candado: necesitas una palanca. ¡El guardián de la arena tiene una!');
+    t.used = true;
+    const outside = new THREE.Vector3(at2(4.6, 0).x, t.y + 0.2, at2(4.6, 0).z);
+
+    // ---- Basement, far below the map ----
+    const BY = -40;
+    const B = new THREE.Vector3(t.cx, BY, t.cz);
+    const S = 13;
+    const WH = 5.5;
+    const noVisual: Builder = () => {};
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.95, map: textures.stone });
+    kit.addPlatform(`cellar${dIndex}_floor`, B.x, BY, B.z, S + 1, S + 1, 1, (g, w, d, h) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), floorMat);
+      m.position.y = -h / 2;
+      m.receiveShadow = true;
+      g.add(m);
+    });
+    for (const [name, x, z, sx, sz] of [
+      ['n', 0, S / 2 + 0.4, S + 2, 0.8],
+      ['s', 0, -S / 2 - 0.4, S + 2, 0.8],
+      ['e', S / 2 + 0.4, 0, 0.8, S + 2],
+      ['w', -S / 2 - 0.4, 0, 0.8, S + 2],
+    ] as [string, number, number, number, number][]) {
+      kit.addPlatform(`cellar${dIndex}_wall_${name}`, B.x + x, BY + WH, B.z + z, sx, sz, WH + 1, noVisual).solid = true;
+    }
+    kit.addPlatform(`cellar${dIndex}_roof`, B.x, BY + WH + 0.6, B.z, S + 2, S + 2, 0.6, noVisual).solid = true;
+    // No extra lights (they'd cost the whole level): the walls glow a little, warm like torchlight
+    const shellMat = new THREE.MeshStandardMaterial({ color: 0x6b6460, roughness: 0.95, map: textures.stone, side: THREE.BackSide, emissive: 0x3a2412, emissiveIntensity: 0.6 });
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(S, WH, S), shellMat);
+    shell.position.set(B.x, BY + WH / 2, B.z);
+    shell.receiveShadow = true;
+    root.add(shell);
+    deepZones.push({ minX: B.x - S / 2 - 1, maxX: B.x + S / 2 + 1, minY: BY - 4, maxY: BY + WH + 2, minZ: B.z - S / 2 - 1, maxZ: B.z + S / 2 + 1 });
+    // Local frame in the basement: from the spawn (u = -4.6) toward the altar (u = +3.6)
+    const bAt = (u: number, v: number, y = BY) => new THREE.Vector3(B.x + f.x * u + r.x * v, y, B.z + f.z * u + r.z * v);
+    // Torches on the walls
+    for (const [u, v] of [
+      [-S / 2 + 0.15, -3.5],
+      [-S / 2 + 0.15, 3.5],
+      [S / 2 - 0.15, -3.5],
+      [S / 2 - 0.15, 3.5],
+    ]) {
+      const p = bAt(u, v, BY + 3);
+      const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.6, 6), woodMat);
+      stick.position.copy(p);
+      const fire = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffa94d }));
+      fire.position.set(p.x, p.y + 0.4, p.z);
+      root.add(stick, fire);
+      kit.animators.push((_dt, time) => fire.scale.setScalar(1 + Math.sin(time * 9 + u + v) * 0.15));
+    }
+    // Pillars
+    for (const [u, v] of [
+      [-1.5, -4.4],
+      [-1.5, 4.4],
+      [2.5, -4.4],
+      [2.5, 4.4],
+    ]) {
+      const p = bAt(u, v);
+      const pil = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, WH, 10), stoneMat);
+      pil.position.set(p.x, BY + WH / 2, p.z);
+      pil.castShadow = true;
+      root.add(pil);
+      kit.registerCylinder(`cellar${dIndex}_pillar_${u}_${v}`, p.x, BY, p.z, 0.55, WH);
+    }
+    // The stairs you came down (they end in the wall: the way out is the portal)
+    for (let k = 0; k < 4; k++) {
+      const p = bAt(-S / 2 + 0.3 + (3 - k) * 0.6, 0);
+      const step = kit.addPlatform(`cellar${dIndex}_stair${k}`, p.x, BY + 0.5 * (k + 1), p.z, f.x !== 0 ? 0.6 : 2.4, f.x !== 0 ? 2.4 : 0.6, 0.5 * (k + 1), wallBuilder);
+      step.solid = k >= 2;
+    }
+    const exit = bAt(-4.8, 3.6);
+    puzzles.portals.push(makePortal(root, exit.x, BY, exit.z, outside, accent));
+    // Altar with the orb, and the rock to climb on
+    const altar = bAt(3.6, 0);
+    kit.addPlatform(`cellar${dIndex}_altar`, altar.x, BY + 3.2, altar.z, 3, 3, 3.2, wallBuilder).solid = true;
+    const rockAt = bAt(-0.6, 0);
+    const rk = makePushBlock(root, `cellar${dIndex}_rock`, rockAt.x, BY, rockAt.z, stoneMat, accent);
+    kit.platforms.push(rk.plat);
+    puzzles.blocks.push(rk.block);
+    const before = puzzles.orbs.length;
+    placeOrb(altar.x, BY + 3.2, altar.z);
+    // The orb's light beam rises from the crypt (it's right under it)
+    const orb = puzzles.orbs[before];
+    if (orb) {
+      orb.beam.parent?.remove(orb.beam);
+      const beamHolder = new THREE.Group();
+      beamHolder.position.set(crypt.cx, top, crypt.cz);
+      beamHolder.add(orb.beam);
+      root.add(beamHolder);
+    }
+    collectible(bAt(-4.5, -4.5).x, BY, bAt(-4.5, -4.5).z, true);
+    collectible(bAt(4.6, 4.6).x, BY, bAt(4.6, 4.6).z, true);
+    const spawnIn = bAt(-3.5, 0, BY + 0.2);
+    hint(spawnIn, 2.5, 'El orbe está en lo alto del altar: empuja la roca hasta él y súbete. El portal te regresa arriba');
+    const trap: Trapdoor = {
+      index: dIndex,
+      top: new THREE.Vector3(crypt.cx, top, crypt.cz),
+      stairs: { ...(() => { const c = at2(-0.7, 0); return { x: c.x, z: c.z }; })(), hx: f.x !== 0 ? 0.75 : 1.3, hz: f.x !== 0 ? 1.3 : 0.75, y: t.y },
+      hatch,
+      pivot,
+      hingeAxis: 'x',
+      hingeSign: -1,
+      open: false,
+      openT: 0,
+      hintCooldown: 0,
+      cellarSpawn: spawnIn,
+      cellarYaw: Math.atan2(f.x, f.z),
+      blockIndex: puzzles.blocks.length - 1,
+    };
+    dungeon.trapdoors.push(trap);
+    routes.push({ name: `sótano ${id}`, ids: [t.plat!.id] });
+    return true;
+  }
+
   const tryFeature = (kind: Feature): boolean => {
+    if (kind === 'dungeon') return guardianDungeon();
     for (const t of outerFirst()) {
       if (kind === 'tower' && tower(t)) return true;
       if (kind === 'sky' && sky(t, diff > 0.3 || rng() < 0.4, 'orb')) return true;
@@ -829,14 +1155,51 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     [-R, R],
     [-R, -R],
   ];
-  type Pattern = 'hops' | 'crumble' | 'movers' | 'narrow' | 'elevator';
+  // Like the handmade levels: swinging chimes, rolling yarn balls, pinwheels and steam vents
+  type Pattern = 'hops' | 'crumble' | 'movers' | 'narrow' | 'elevator' | 'pendulum' | 'ball' | 'pinwheel' | 'vent';
   const patterns: [Pattern, number][] = [
-    ['hops', 2],
-    ['crumble', 0.5 + diff * 1.5],
-    ['movers', 0.8 + diff],
-    ['narrow', 0.4 + diff * 1.2],
-    ['elevator', 0.4 + diff],
+    ['hops', 1.2],
+    ['crumble', 0.4 + diff * 1.2],
+    ['movers', 0.6 + diff * 0.8],
+    ['narrow', 0.3 + diff],
+    ['elevator', 0.3 + diff * 0.8],
+    ['pendulum', 0.9 + diff * 0.6],
+    ['ball', 0.7 + diff * 0.6],
+    ['pinwheel', 0.9 + diff * 0.6],
+    ['vent', 0.6 + diff * 0.4],
   ];
+  const climbObstacles: SwingingObstacleModel[] = [];
+  const climbBalls: RollingWoolBallModel[] = [];
+  const climbPinwheels: RotatingPinwheelModel[] = [];
+  const climbVents: SporeSteamVentModel[] = [];
+  const woodMat = new THREE.MeshStandardMaterial({ map: textures.wood, roughness: 0.75 });
+  /** A wooden frame over a deck with a chime that swings across it. */
+  function pendulumOver(x: number, top: number, z: number, along: 'x' | 'z', dir: number) {
+    const H2 = 3.7;
+    const radial: 'x' | 'z' = along === 'x' ? 'z' : 'x';
+    const at = (a: number, r: number) => (along === 'x' ? new THREE.Vector3(x + a, top, z + r) : new THREE.Vector3(x + r, top, z + a));
+    const postGeo = new THREE.CylinderGeometry(0.11, 0.13, H2, 8);
+    postGeo.translate(0, H2 / 2, 0);
+    for (const r of [-1.45, 1.45]) {
+      const p = at(-dir * 1.0, r);
+      const post = new THREE.Mesh(postGeo, woodMat);
+      post.position.copy(p);
+      post.castShadow = true;
+      root.add(post);
+      kit.registerCylinder(`climb_post_${climbObstacles.length}_${r}`, p.x, top, p.z, 0.18, H2);
+    }
+    const beamA = new THREE.Mesh(new THREE.BoxGeometry(radial === 'x' ? 3.2 : 0.22, 0.22, radial === 'z' ? 3.2 : 0.22), woodMat);
+    beamA.position.copy(at(-dir * 1.0, 0)).setY(top + H2);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(along === 'x' ? 1.1 : 0.2, 0.2, along === 'z' ? 1.1 : 0.2), woodMat);
+    arm.position.copy(at(-dir * 0.5, 0)).setY(top + H2);
+    root.add(beamA, arm);
+    const chime = createSwingingObstacle(2.75, 0.55, 2.4 + rng() * 1.0, textures);
+    chime.group.position.copy(at(0, 0)).setY(top + H2);
+    // The chime swings along its local x: turn it so it sweeps across the deck
+    if (radial === 'z') chime.group.rotation.y = Math.PI / 2;
+    root.add(chime.group);
+    climbObstacles.push(chime);
+  }
   const pickPattern = (avoid: Pattern | null): Pattern => {
     const tot = patterns.reduce((a, [, w]) => a + w, 0);
     for (let tries = 0; tries < 6; tries++) {
@@ -868,14 +1231,61 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     const L = dist - from.half - to.half;
     const pattern: Pattern = k === 0 ? 'hops' : pickPattern(lastPattern);
     lastPattern = pattern;
+    const startAlong = (axis === 'x' ? from.x : from.z) + dir * from.half;
+    // Hazards on a deck (handmade style) need a long leg
+    if (L >= 6 && (pattern === 'pendulum' || pattern === 'ball' || pattern === 'vent')) {
+      const gapEnds = 1.0;
+      const Ld = L - gapEnds * 2;
+      const mid = startAlong + dir * (L / 2);
+      const x = axis === 'x' ? mid : from.x;
+      const z = axis === 'x' ? from.z : mid;
+      const top = from.top + legRise / 2;
+      const deck = kit.addPlatform(`climb_${k}_deck`, x, top, z, axis === 'x' ? Ld : 2.6, axis === 'x' ? 2.6 : Ld, 0.6, theme.bridge);
+      climbIds.push(deck.id);
+      if (pattern === 'pendulum') {
+        pendulumOver(x, top, z, axis, dir);
+      } else if (pattern === 'ball') {
+        const half = Ld / 2 - 0.6;
+        const bounds =
+          axis === 'x'
+            ? { minX: x - half, maxX: x + half, minZ: z - 0.15, maxZ: z + 0.15 }
+            : { minX: x - 0.15, maxX: x + 0.15, minZ: z - half, maxZ: z + half };
+        const colors = [0xf4a261, 0xe76f51, 0x8ecae6, 0xcdb4db, 0x90be6d];
+        const ball = createRollingWoolBall(0.6, new THREE.Vector3(x, top, z), bounds, pick(colors), textures);
+        ball.velocity.set(axis === 'x' ? 2.4 + diff * 1.2 : 0, 0, axis === 'z' ? 2.4 + diff * 1.2 : 0);
+        root.add(ball.group);
+        climbBalls.push(ball);
+      } else {
+        for (const a of Ld > 8 ? [-0.22, 0.22] : [0]) {
+          const vx = axis === 'x' ? x + a * Ld : x;
+          const vz = axis === 'x' ? z : z + a * Ld;
+          const vent = createSporeSteamVent(0.85, 2.8 + rng(), new THREE.Vector3(vx, top, vz), textures);
+          root.add(vent.group);
+          climbVents.push(vent);
+          kit.registerCylinder(`climb_vent_${climbVents.length}`, vx, top, vz, 0.6, 0.9);
+        }
+      }
+      if (rng() < 0.2 + 0.3 * diff) {
+        const pos = new THREE.Vector3(x, top + 1.3, z);
+        theme.flyer(enemies, `f${enemyN++}`, pos, radial, 1.0);
+      }
+      const corner = kit.addPlatform(`climb_${k}_corner`, to.x, to.top, to.z, to.half * 2, to.half * 2, 0.8, pick(padBuilders));
+      climbIds.push(corner.id);
+      if (big && !isLast) {
+        kit.addCheckpoint(cpId, cpNames[cpId % cpNames.length] ?? 'Santuario', new THREE.Vector3(to.x - 1.2, to.top, to.z - 1.2), new THREE.Vector3(to.x + 0.7, to.top + 0.2, to.z + 0.7));
+        cpId++;
+      }
+      from = to;
+      continue;
+    }
     let m: number;
     let s: number;
     if (L < 6) [m, s] = [1, 2.0];
+    else if (pattern === 'pinwheel') [m, s] = [3, 3.2];
     else if (pattern === 'movers') [m, s] = [2, 3.0];
     else if (pattern === 'narrow') [m, s] = [4, 1.4];
     else [m, s] = [3, 2.6];
     const gap = (L - m * s) / (m + 1);
-    const startAlong = (axis === 'x' ? from.x : from.z) + dir * from.half;
     for (let i = 0; i < m; i++) {
       const along = startAlong + dir * (gap * (i + 1) + s * i + s / 2);
       const x = axis === 'x' ? along : from.x;
@@ -883,6 +1293,14 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
       const top = from.top + (legRise * (i + 1)) / (m + 1);
       const p = kit.addPlatform(`climb_${k}_${i}`, x, top, z, s, s, 0.6, pick(padBuilders));
       climbIds.push(p.id);
+      if (pattern === 'pinwheel' && i === 1 && L >= 6) {
+        // A pinwheel on the middle pad: wait for the gap between its blades
+        const pin = createRotatingPinwheel(2.2, 1.0 + 0.4 * diff, axis, textures);
+        pin.group.position.set(x, top, z);
+        root.add(pin.group);
+        climbPinwheels.push(pin);
+        kit.registerCylinder(`climb_pin_${climbPinwheels.length}`, x, top, z, 0.35, 3.4);
+      }
       if (pattern === 'crumble') kit.makeCrumbling(p);
       else if (pattern === 'movers') kit.makeMoving(p, radial, 0.9, 0.6 + 0.4 * diff, rng() * 6);
       else if (pattern === 'elevator' && i === 1) kit.makeMoving(p, 'y', 0.9, 0.8, rng() * 6);
@@ -1032,7 +1450,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   // ---------------- Sky backdrop around the whole world ----------------
   let playR = 0;
   for (const p of kit.platforms) {
-    if (p === shieldPlat) continue;
+    if (p === shieldPlat || p.id.startsWith('cellar')) continue;
     playR = Math.max(playR, Math.hypot(p.position.x, p.position.z) + Math.max(p.size.x, p.size.z) / 2);
   }
   addOpenBackdrop(root, textures, themeId, playR + 18, kit.animators);
@@ -1041,7 +1459,13 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   world.levelName = `${theme.name} · Nivel ${level}`;
   world.summitName = theme.summitName;
   world.summitRequiresLanding = true;
+  world.obstacles.push(...climbObstacles);
+  world.rollingBalls.push(...climbBalls);
+  world.pinwheels.push(...climbPinwheels);
+  world.steamVents.push(...climbVents);
   world.puzzles = puzzles;
+  world.dungeon = dungeon;
+  world.deepZones = deepZones;
   world.routes = routes;
   return world;
 }

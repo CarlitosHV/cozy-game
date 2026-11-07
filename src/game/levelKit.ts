@@ -209,6 +209,7 @@ export function createLevelKit(root: THREE.Object3D, textures: ProceduralTexture
     textures,
     platforms,
     animators,
+    solidObstacles,
     registerCylinder,
     addCheckpoint,
     addPlatform,

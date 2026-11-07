@@ -8,6 +8,7 @@ import { UI, BTN } from '../ui/labels';
 import { isTypingTarget } from '../ui/shortcuts';
 import { levelInfo, maxPlayableLevel, BOSS_INFO } from '../game/progress';
 import { EmptyState, HelpTip, TIPS } from './HelpTip';
+import { RatingStars } from './RatingStars';
 
 export type LeaderboardTabMode = 'contrareloj' | 'persecucion' | 'normal';
 
@@ -364,7 +365,13 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                     </span>
                     <div>
                       <div className="text-xs font-bold text-cozy-ink">{entry.username}</div>
-                      <div className="flex items-center gap-2 text-[10px] text-cozy-muted">
+                      <div className="flex items-center gap-2 text-[10px] text-cozy-muted flex-wrap">
+                        <RatingStars stars={entry.stars ?? 0} size="w-3 h-3" />
+                        {typeof entry.deaths === 'number' && entry.deaths > 0 && (
+                          <span>
+                            {entry.deaths} {entry.deaths === 1 ? 'muerte' : 'muertes'}
+                          </span>
+                        )}
                         {relics > 0 && (
                           <span>
                             {relics} / {levelInfo(levelId).totalCollectibles} reliquias
@@ -379,9 +386,15 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 text-cozy-accent-deep font-bold text-sm bg-white/80 px-3 py-1.5 rounded-xl border border-cozy-line">
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>{formatSeconds(entry.timeSeconds)}</span>
+                  <div className="flex flex-col items-end gap-1">
+                    <div className="flex items-center gap-1 text-cozy-accent-deep font-black text-sm bg-white/80 px-3 py-1 rounded-xl border border-cozy-line tabular-nums" title="Calificación (tiempo, muertes y reliquias)">
+                      <span>{entry.score ?? 0}</span>
+                      <span className="text-[10px] font-semibold text-cozy-muted">pts</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-[10px] text-cozy-muted font-semibold">
+                      <Clock className="w-3 h-3" />
+                      <span>{formatSeconds(entry.timeSeconds)}</span>
+                    </div>
                   </div>
                 </div>
               );

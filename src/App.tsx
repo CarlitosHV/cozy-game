@@ -131,6 +131,8 @@ export default function App() {
   const [spectateTime, setSpectateTime] = useState<number>(0);
   const [roomSummary, setRoomSummary] = useState<any | null>(null);
   const [roomFinishNotice, setRoomFinishNotice] = useState<any | null>(null);
+  const [deaths, setDeaths] = useState<number>(0);
+  const [partyTimer, setPartyTimer] = useState<number | null>(null);
 
   const weatherTimerRef = useRef<number | null>(null);
   const timeBonusTimerRef = useRef<number | null>(null);
@@ -199,6 +201,8 @@ export default function App() {
         setIsSpectating(false);
         setRoomSummary(null);
       },
+      onDeathsChange: (n) => setDeaths(n),
+      onPartyTimer: (left) => setPartyTimer(left),
     });
 
     engineRef.current = engine;
@@ -250,6 +254,8 @@ export default function App() {
         roomSummary={roomSummary}
         roomFinishNotice={roomFinishNotice}
         onDismissRoomSummary={() => setRoomSummary(null)}
+        deaths={deaths}
+        partyTimer={partyTimer}
       />
     </div>
   );

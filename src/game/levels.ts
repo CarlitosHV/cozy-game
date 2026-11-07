@@ -4,6 +4,7 @@
  * Features solid physical colliders for trees, checkpoint shrines, bells, and obstacles,
  * and perfectly tuned reachable jump trajectories.
  */
+import type { DungeonData } from './dungeon';
 import type { BossSetup } from './bossArena';
 import * as THREE from 'three';
 import { EnemyManager } from './enemies';
@@ -106,6 +107,10 @@ export interface WorldBuildResult {
   easterEgg?: { position: THREE.Vector3; radius: number };
   /** "Lucha contra jefes" levels: the arena's boss (see bossArena.ts / combat.ts) */
   boss?: BossSetup;
+  /** Generated levels: guardian arenas and basement trapdoors (see dungeon.ts) */
+  dungeon?: DungeonData;
+  /** Rooms far below the map (basements): falling checks are off inside them */
+  deepZones?: { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }[];
 }
 
 export function buildCozyParkourWorld(

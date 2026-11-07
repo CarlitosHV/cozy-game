@@ -248,8 +248,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="grid grid-cols-3 gap-2">
             {(
               [
-                { id: 'high' as const, label: isEs ? 'Alta' : 'High', sub: isEs ? 'Sombras suaves' : 'Soft shadows' },
-                { id: 'medium' as const, label: isEs ? 'Media' : 'Medium', sub: isEs ? 'Equilibrado' : 'Balanced' },
+                { id: 'high' as const, label: isEs ? 'Alta' : 'High', sub: isEs ? 'Más decoración y vida' : 'Full decor & life' },
+                { id: 'medium' as const, label: isEs ? 'Media' : 'Medium', sub: isEs ? 'Algo de decoración' : 'Some decor' },
                 { id: 'low' as const, label: isEs ? 'Baja' : 'Low', sub: isEs ? 'Máxima fluidez' : 'Fast FPS' },
               ] as const
             ).map((g) => (

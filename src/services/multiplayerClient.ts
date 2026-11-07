@@ -225,6 +225,12 @@ export interface RoomPlayerFinishedPayload {
   name?: string;
   playerName?: string;
   timeSeconds?: number;
+  /** Level rating (0-1000), stars (0-3) and deaths of that run */
+  score?: number;
+  stars?: number;
+  deaths?: number;
+  /** Did not reach the goal before the party timer ran out (passes with rating 0) */
+  forfeited?: boolean;
   rank?: number;
   isSpectating?: boolean;
   allFinished?: boolean;
@@ -242,6 +248,17 @@ export interface RoomSummaryEntry {
   name?: string;
   playerName?: string;
   timeSeconds: number;
+  score?: number;
+  stars?: number;
+  deaths?: number;
+  forfeited?: boolean;
+}
+
+/** What a player still in the level sees (6 numbers per enemy), for friends spectating them */
+export interface SpectateSnapPayload {
+  userId: string;
+  levelId: number;
+  d: number[];
 }
 
 export interface RoomAllFinishedPayload {
@@ -290,6 +307,7 @@ class MultiplayerClient {
   private worldOrbListeners: Set<(data: WorldOrbPayload) => void> = new Set();
   private worldBlockListeners: Set<(data: WorldBlockPayload) => void> = new Set();
   private worldEventListeners: Set<(data: WorldEventPayload) => void> = new Set();
+  private spectateSnapListeners: Set<(data: SpectateSnapPayload) => void> = new Set();
 
   // Spectator and synchronized level progression listeners
   private spectateStartedListeners: Set<(data: SpectateStartedPayload) => void> = new Set();
@@ -404,6 +422,17 @@ class MultiplayerClient {
   public addWorldBlockListener(cb: (data: WorldBlockPayload) => void): () => void {
     this.worldBlockListeners.add(cb);
     return () => this.worldBlockListeners.delete(cb);
+  }
+
+  public addSpectateSnapListener(cb: (data: SpectateSnapPayload) => void): () => void {
+    this.spectateSnapListeners.add(cb);
+    return () => this.spectateSnapListeners.delete(cb);
+  }
+
+  /** Streams the enemies this player sees to the friends spectating (volatile: may be dropped) */
+  public sendSpectateSnap(levelId: number, d: number[]): void {
+    if (!this.socket?.connected || !this.isInPartyRoom()) return;
+    this.socket.volatile.emit('spectate:snap', { levelId, d });
   }
 
   public addWorldEventListener(cb: (data: WorldEventPayload) => void): () => void {
@@ -765,6 +794,17 @@ class MultiplayerClient {
         }
       }
       this.onWorldState?.(data);
+    });
+
+    this.socket.on('spectate:snap', (data: SpectateSnapPayload) => {
+      if (!data || typeof data.userId !== 'string' || !Array.isArray(data.d)) return;
+      for (const listener of this.spectateSnapListeners) {
+        try {
+          listener(data);
+        } catch (e) {
+          console.error('[MultiplayerClient] spectateSnap listener error:', e);
+        }
+      }
     });
 
     this.socket.on('world:event', (data: WorldEventPayload) => {
@@ -1139,12 +1179,20 @@ class MultiplayerClient {
   // --- Spectator & Room Sync Emitters (Spec 3 & 4) ---
 
   /** Client notifies server that player finished the level */
-  public emitPlayerFinish(levelId: number, timeSeconds: number, relicsFound: number = 0): void {
+  public emitPlayerFinish(
+    levelId: number,
+    timeSeconds: number,
+    relicsFound: number = 0,
+    rating?: { score: number; stars: number; deaths: number; forfeited?: boolean }
+  ): void {
     if (!this.socket || !this.socket.connected) return;
     this.socket.emit('room:player_finish', {
       levelId,
       timeSeconds: Number(timeSeconds.toFixed(2)),
       relicsFound,
+      ...(rating
+        ? { score: rating.score, stars: rating.stars, deaths: rating.deaths, forfeited: Boolean(rating.forfeited) }
+        : {}),
     });
   }
 

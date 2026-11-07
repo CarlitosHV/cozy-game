@@ -142,6 +142,11 @@ export abstract class BossController {
     return this.c.guardT > 0 && pos.distanceTo(this.c.playerPos) < 2.6;
   }
 
+  /** What spectators copy from the player they watch (the boss body; minions stay local) */
+  syncObjects(): THREE.Object3D[] {
+    return [this.group];
+  }
+
   /** Point the camera keeps in view */
   focusPoint(): THREE.Vector3 {
     return this.group.position;

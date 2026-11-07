@@ -107,6 +107,8 @@ import type { CombatStatus } from '../game/combat';
 import type { ItemType } from '../game/items';
 import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
 import { ItemThumb } from './ItemThumb';
+import { RatingStars } from './RatingStars';
+import { bestRating } from '../game/rating';
 import { COMPANION_POWERS, CompanionPowerStatus } from '../game/companionPowers';
 import {
   BodyType,
@@ -177,6 +179,10 @@ interface GameHUDProps {
   roomSummary?: RoomAllFinishedPayload | null;
   roomFinishNotice?: RoomPlayerFinishedPayload | null;
   onDismissRoomSummary?: () => void;
+  /** Deaths in this run (they lower the rating) */
+  deaths?: number;
+  /** Party: seconds left to reach the goal after a friend finished */
+  partyTimer?: number | null;
 }
 
 // --- 360° Analog Virtual Joystick for Mobile Devices with Auto-Sprint ---
@@ -503,6 +509,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   roomSummary = null,
   roomFinishNotice = null,
   onDismissRoomSummary,
+  deaths = 0,
+  partyTimer = null,
 }) => {
   const [isMuted, setIsMuted] = useState(() => soundManager.getMuted());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -1100,6 +1108,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           levelId: targetLevel,
           timeSeconds: Number(preciseTime.toFixed(2)),
           relicsFound: collectedCount,
+          score: engine.lastRating?.score ?? 0,
+          stars: engine.lastRating?.stars ?? 0,
+          deaths: engine.lastRating?.deaths ?? deaths,
           mode: targetMode,
         });
         if (res?.progress?.maxUnlockedLevel) {
@@ -2660,6 +2671,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider hidden sm:inline font-ui">Tiempo:</span>
                 <span>{formatTime(elapsedTime)}</span>
               </div>
+              <div className="w-[1px] h-3 bg-stone-700/60" />
+              <div className="flex items-center gap-1" title="Muertes: bajan tu calificación del nivel" data-testid="death-counter">
+                <Skull className={`w-3.5 h-3.5 ${deaths > 0 ? 'text-rose-400' : 'text-stone-400'}`} />
+                <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider hidden sm:inline">Muertes:</span>
+                <span className={`tabular-nums font-semibold ${deaths > 0 ? 'text-rose-300' : 'text-stone-300'}`}>{deaths}</span>
+              </div>
             </div>
 
             {/* Multiplayer Party Room badge */}
@@ -3883,6 +3900,28 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </p>
             </div>
 
+            {engine?.lastRating && (
+              <div className="w-full rounded-2xl bg-white/70 border border-cozy-line px-4 py-3 flex flex-col items-center gap-1.5" data-testid="victory-rating">
+                <RatingStars stars={engine.lastRating.stars} size="w-7 h-7" />
+                <div className="text-3xl font-display font-black text-cozy-ink tabular-nums">
+                  {engine.lastRating.score}
+                  <span className="text-sm font-semibold text-cozy-muted"> / 1000</span>
+                </div>
+                <p className="text-[11px] text-cozy-muted inline-flex items-center gap-1">
+                  <Skull className="w-3 h-3" />
+                  {engine.lastRating.deaths === 0
+                    ? '¡Sin morir! Bono completo'
+                    : `${engine.lastRating.deaths} ${engine.lastRating.deaths === 1 ? 'muerte' : 'muertes'} (bajan la calificación)`}
+                </p>
+                {(() => {
+                  const best = bestRating(engine.currentLevel);
+                  return best && best.score > engine.lastRating.score ? (
+                    <p className="text-[10px] text-cozy-soft">Tu mejor calificación aquí: {best.score}</p>
+                  ) : null;
+                })()}
+              </div>
+            )}
+
             {engine?.lastUnlocked && COMPANION_POWERS[engine.lastUnlocked] && (
               <p className="text-xs font-semibold text-[#2f6a4c]">
                 Nuevo compañero: {COMPANION_POWERS[engine.lastUnlocked]!.companionName}
@@ -4401,8 +4440,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <span className="font-bold text-amber-300">Modo Espectador</span>
               <span className="text-white/40">·</span>
               <span className="text-emerald-300 font-semibold">
-                Meta alcanzada (#{spectateRank} en {spectateTime > 0 ? `${spectateTime.toFixed(1)}s` : `${elapsedTime.toFixed(1)}s`})
+                {engine?.lastRating?.forfeited
+                  ? 'Se acabó el tiempo: pasas con calificación 0'
+                  : `Meta alcanzada (#${spectateRank} en ${spectateTime > 0 ? `${spectateTime.toFixed(1)}s` : `${elapsedTime.toFixed(1)}s`})`}
               </span>
+              {engine?.lastRating && !engine.lastRating.forfeited && (
+                <span className="inline-flex items-center gap-1.5">
+                  <RatingStars stars={engine.lastRating.stars} size="w-3.5 h-3.5" />
+                  <span className="font-bold text-amber-200 tabular-nums">{engine.lastRating.score}</span>
+                </span>
+              )}
             </div>
 
             <div className="hidden sm:block h-4 w-px bg-white/20" />
@@ -4437,6 +4484,21 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
           <div className="text-[11px] text-white/80 drop-shadow-md bg-black/40 px-3 py-1 rounded-full backdrop-blur-xs">
             Usa las teclas <span className="font-bold text-amber-300">E</span> o <span className="font-bold text-amber-300">Q</span> para cambiar de compañero
+          </div>
+        </div>
+      )}
+
+      {partyTimer !== null && !isSpectating && gameState === 'playing' && (
+        <div className="fixed top-28 sm:top-32 left-1/2 -translate-x-1/2 z-40 pointer-events-none" data-testid="party-timer">
+          <div
+            className={`px-4 py-2 rounded-2xl font-bold text-xs shadow-xl border flex items-center gap-2 ${
+              partyTimer <= 15 ? 'bg-rose-600/95 text-white border-rose-300 animate-pulse' : 'bg-stone-900/90 text-amber-200 border-amber-400/60'
+            }`}
+          >
+            <Timer className="w-4 h-4" />
+            <span>¡Un compañero ya llegó!</span>
+            <span className="font-mono text-sm tabular-nums">{formatTime(partyTimer)}</span>
+            <span className="font-medium opacity-80 hidden sm:inline">o pasas con calificación 0</span>
           </div>
         </div>
       )}
@@ -4486,8 +4548,19 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                           {entry.displayName || entry.username || entry.name || 'Explorador'}
                         </span>
                       </div>
-                      <div className="text-xs font-mono font-bold text-emerald-700">
-                        {typeof entry.timeSeconds === 'number' ? `${entry.timeSeconds.toFixed(2)}s` : '--'}
+                      <div className="flex flex-col items-end gap-0.5">
+                        {entry.forfeited ? (
+                          <span className="text-[10px] font-bold text-rose-600">Sin terminar · 0 pts</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5">
+                            <RatingStars stars={entry.stars ?? 0} size="w-3 h-3" />
+                            <span className="text-xs font-black tabular-nums text-cozy-ink">{entry.score ?? 0}</span>
+                          </span>
+                        )}
+                        <span className="text-[10px] font-mono font-bold text-emerald-700">
+                          {typeof entry.timeSeconds === 'number' ? `${entry.timeSeconds.toFixed(2)}s` : '--'}
+                          {typeof entry.deaths === 'number' && entry.deaths > 0 ? ` · ${entry.deaths}💀` : ''}
+                        </span>
                       </div>
                     </div>
                   );

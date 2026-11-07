@@ -57,7 +57,16 @@ export interface LeaderboardEntry {
   timeSeconds: number;
   collectiblesFound: number;
   relicsFound?: number;
+  /** Level rating 0-1000, 0-3 stars and deaths of that run */
+  score?: number;
+  stars?: number;
+  deaths?: number;
   createdAt?: string;
+}
+
+/** Ranking order: higher score first, then the faster time */
+export function compareEntries(a: LeaderboardEntry, b: LeaderboardEntry): number {
+  return (b.score ?? 0) - (a.score ?? 0) || a.timeSeconds - b.timeSeconds;
 }
 
 export interface RoomPlayerSummary {
@@ -145,6 +154,9 @@ export interface LevelCompletionResult {
     mode: string;
     timeSeconds: number;
     collectiblesFound: number;
+    score?: number;
+    stars?: number;
+    deaths?: number;
     createdAt: string;
   };
   rank: number;
@@ -585,15 +597,19 @@ class ApiClient {
       const list = all[key] || [];
       const existing = list.find((item) => item.username === entry.username);
       if (existing) {
-        if (entry.timeSeconds <= existing.timeSeconds) {
+        if (compareEntries(entry, existing) <= 0) {
           existing.timeSeconds = entry.timeSeconds;
-          existing.collectiblesFound = Math.max(existing.collectiblesFound, entry.collectiblesFound);
+          existing.collectiblesFound = entry.collectiblesFound;
+          existing.relicsFound = entry.relicsFound;
+          existing.score = entry.score;
+          existing.stars = entry.stars;
+          existing.deaths = entry.deaths;
           existing.createdAt = entry.createdAt;
         }
       } else {
         list.push(entry);
       }
-      list.sort((a, b) => a.timeSeconds - b.timeSeconds);
+      list.sort(compareEntries);
       all[key] = list.slice(0, 50);
       localStorage.setItem('cozyleap_local_records', JSON.stringify(all));
     } catch (e) {
@@ -608,6 +624,9 @@ class ApiClient {
     levelId: number;
     timeSeconds: number;
     relicsFound?: number;
+    score?: number;
+    stars?: number;
+    deaths?: number;
     mode?: 'normal' | 'contrareloj' | 'persecucion' | 'free' | 'time_trial' | 'chase';
   }): Promise<LevelCompletionResult> {
     const modeMap: Record<string, string> = {
@@ -640,6 +659,9 @@ class ApiClient {
       timeSeconds,
       collectiblesFound: params.relicsFound ?? 0,
       relicsFound: params.relicsFound ?? 0,
+      score: params.score ?? 0,
+      stars: params.stars ?? 0,
+      deaths: params.deaths ?? 0,
       createdAt: new Date().toISOString(),
     };
     this.saveLocalRecord(params.levelId, mode, localEntry);
@@ -653,6 +675,9 @@ class ApiClient {
             levelId: params.levelId,
             timeSeconds,
             relicsFound: params.relicsFound ?? 0,
+            score: Math.round(params.score ?? 0),
+            stars: Math.round(params.stars ?? 0),
+            deaths: Math.round(params.deaths ?? 0),
             mode,
           }),
         },
@@ -668,6 +693,9 @@ class ApiClient {
           timeSeconds: data.record.timeSeconds || timeSeconds,
           collectiblesFound: data.record.collectiblesFound ?? (params.relicsFound ?? 0),
           relicsFound: data.record.collectiblesFound ?? (params.relicsFound ?? 0),
+          score: data.record.score ?? localEntry.score,
+          stars: data.record.stars ?? localEntry.stars,
+          deaths: data.record.deaths ?? localEntry.deaths,
           createdAt: data.record.createdAt || localEntry.createdAt,
         });
       }
@@ -738,6 +766,9 @@ class ApiClient {
       timeSeconds: e.timeSeconds ?? 0,
       collectiblesFound: e.collectiblesFound ?? e.relicsFound ?? 0,
       relicsFound: e.relicsFound ?? e.collectiblesFound ?? 0,
+      score: typeof e.score === 'number' ? e.score : 0,
+      stars: typeof e.stars === 'number' ? e.stars : 0,
+      deaths: typeof e.deaths === 'number' ? e.deaths : 0,
       createdAt: e.createdAt,
     });
 
@@ -757,7 +788,7 @@ class ApiClient {
           combined.push(loc);
         }
       }
-      combined.sort((a, b) => a.timeSeconds - b.timeSeconds);
+      combined.sort(compareEntries);
       combined.forEach((entry, idx) => {
         entry.rank = idx + 1;
       });

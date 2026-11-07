@@ -45,6 +45,8 @@ export class ParkourPhysics {
   /** Catarina: catches the player on a fall and carries them back to solid ground */
   public rescueGuard: boolean = false;
   public onRescue: (() => void) | null = null;
+  /** Called when the player falls into the void and goes back to a checkpoint (counts as a death) */
+  public onFallDeath: (() => void) | null = null;
   /** Last solid ground the player stood on (a little inward from the edge) */
   public lastSafePos: THREE.Vector3 = new THREE.Vector3(0, 0.2, 0);
   private carryTimer: number = 0;
@@ -534,8 +536,19 @@ export class ParkourPhysics {
       }
     }
 
-    // 14. Gentle Respawn on falling off into clouds
-    if (
+    // 14. Gentle Respawn on falling off into clouds (not inside the basements far below the map)
+    const deep = this.world.deepZones?.some(
+      (z) =>
+        this.position.x > z.minX &&
+        this.position.x < z.maxX &&
+        this.position.z > z.minZ &&
+        this.position.z < z.maxZ &&
+        this.position.y > z.minY &&
+        this.position.y < z.maxY
+    );
+    if (deep) {
+      // Safe: walls and floor all around
+    } else if (
       this.rescueGuard &&
       !this.isGrounded &&
       this.velocity.y < 0 &&
@@ -553,6 +566,7 @@ export class ParkourPhysics {
       cb?.();
     } else if (this.position.y < -9.0) {
       this.respawnAtCheckpoint();
+      this.onFallDeath?.();
     }
 
     // 15. Update Player Visual Model
@@ -776,6 +790,11 @@ export class ParkourPhysics {
 
     for (const ball of this.world.rollingBalls) {
       ball.update(dt);
+      // Never faster than a brisk roll (bumps keep adding speed)
+      const bs = Math.hypot(ball.velocity.x, ball.velocity.z);
+      if (bs > 5) ball.velocity.multiplyScalar(5 / bs);
+      // Balls on other floors (the climbs go round and round) don't touch you
+      if (Math.abs(this.position.y - ball.position.y) > 2.2) continue;
 
       // Check collision between player and rolling ball
       const dx = this.position.x - ball.position.x;

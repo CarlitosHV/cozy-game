@@ -201,9 +201,26 @@ export function createToolModel(type: ItemType): THREE.Group {
       return makeLightOrb();
     case 'antorcha':
       return makeTorch();
+    case 'palanca':
+      return makeCrowbar();
     default:
       return new THREE.Group();
   }
+}
+
+/** Iron crowbar (opens the basement trapdoor in generated levels) */
+function makeCrowbar(): THREE.Group {
+  const g = new THREE.Group();
+  const iron = std(0x64748b, 0.35, { metalness: 0.8 });
+  add(g, new THREE.CylinderGeometry(0.045, 0.045, 0.9, 8), iron, 0, 0, 0);
+  const hook = add(g, new THREE.TorusGeometry(0.12, 0.045, 8, 14, Math.PI), iron, 0.12, 0.45, 0);
+  hook.rotation.z = Math.PI / 2;
+  const tip = add(g, new THREE.BoxGeometry(0.16, 0.05, 0.09), iron, 0.06, -0.46, 0);
+  tip.rotation.z = -0.4;
+  const grip = add(g, new THREE.CylinderGeometry(0.06, 0.06, 0.3, 8), std(0xb91c1c, 0.6), 0, -0.15, 0);
+  grip.castShadow = true;
+  g.rotation.z = 0.35;
+  return g;
 }
 
 // ---------- Food that heals ----------

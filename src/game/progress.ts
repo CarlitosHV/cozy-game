@@ -334,9 +334,12 @@ export function levelHowTo(level: number, mode?: string): LevelHowTo {
     steps: [
       'Explora el mundo abierto con calma',
       'Encuentra los orbes siguiendo sus rayos de luz',
-      'Algunos orbes están en bóvedas: busca una llave',
+      ...(level >= 6
+        ? ['Vence al guardián de la arena: suelta la palanca que abre la trampilla del sótano']
+        : ['Algunos orbes están en bóvedas: busca una llave']),
       'Con todos los orbes se abre la fortaleza del centro',
-      'Entra y sube la espiral hasta la cima para ganar',
+      'Entra y sube la espiral hasta la cima (cuidado con péndulos y molinillos)',
+      'Morir baja tu calificación: ¡llega rápido, sin caer y con muchas reliquias!',
     ],
   };
 }

@@ -12,7 +12,18 @@ import * as THREE from 'three';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
 import { createToolModel } from './toolModels';
 
-export type ItemType = 'baya' | 'nuez' | 'llave' | 'resortera' | 'piedra' | 'bate' | 'red' | 'bomba' | 'luz' | 'antorcha';
+export type ItemType =
+  | 'baya'
+  | 'nuez'
+  | 'llave'
+  | 'resortera'
+  | 'piedra'
+  | 'bate'
+  | 'red'
+  | 'bomba'
+  | 'luz'
+  | 'antorcha'
+  | 'palanca';
 
 export interface ItemInfo {
   type: ItemType;
@@ -82,18 +93,37 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
     desc: 'Alumbra en la oscuridad y prende 2 candelabros al acercarte; luego se consume.',
     color: '#fb923c',
   },
+  palanca: {
+    type: 'palanca',
+    name: 'Palanca',
+    desc: 'La suelta el guardián de la arena. Abre la trampilla del sótano: se usa sola al pararte sobre ella.',
+    color: '#94a3b8',
+  },
 };
 
-export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave', 'resortera', 'piedra', 'bate', 'red', 'bomba', 'luz', 'antorcha'];
+export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave', 'resortera', 'piedra', 'bate', 'red', 'bomba', 'luz', 'antorcha', 'palanca'];
 
 /** Items that pile up in one slot (max per slot) */
 export const STACK_MAX: Partial<Record<ItemType, number>> = { piedra: 12, bomba: 3, luz: 3 };
 /** Tools that break: uses when new */
 export const DURABILITY: Partial<Record<ItemType, number>> = { bate: 12, red: 4, antorcha: 2 };
 /** How many you get from one pickup */
-const PICKUP_AMOUNT: Partial<Record<ItemType, number>> = { piedra: 3 };
+const PICKUP_AMOUNT: Partial<Record<ItemType, number>> = { piedra: 6, bomba: 2 };
 /** Only one of these is ever needed in the backpack */
-const UNIQUE: ItemType[] = ['resortera', 'antorcha'];
+/** Shown when you walk over something you already carry (one of each kind until it's used up) */
+const ALREADY_HAVE: Record<ItemType, string> = {
+  baya: 'Ya llevas una baya: dásela a tu compañero antes de tomar otra',
+  nuez: 'Ya llevas una nuez: úsala antes de tomar otra',
+  llave: 'Ya llevas una llave: úsala en su puerta antes de tomar otra',
+  resortera: 'Ya tienes una resortera',
+  piedra: 'Ya tienes piedras: úsalas todas antes de juntar más',
+  bate: 'Ya tienes un bate: úsalo hasta que se rompa para tomar otro',
+  red: 'Ya tienes una red: úsala hasta que se rompa para tomar otra',
+  bomba: 'Ya tienes bombas: lánzalas antes de tomar más',
+  luz: 'Ya tienes orbes de luz: lánzalos antes de tomar más',
+  antorcha: 'Ya tienes una antorcha: gástala antes de tomar otra',
+  palanca: 'Ya llevas una palanca: úsala en la trampilla antes de tomar otra',
+};
 /** Seconds before a pickup appears again */
 const RESPAWN_BY_TYPE: Partial<Record<ItemType, number>> = { piedra: 8, bate: 14, red: 14, resortera: 10, bomba: 9, antorcha: 6 };
 
@@ -458,6 +488,9 @@ export class ItemSystem {
       case 'llave':
         this.emit('La llave se usa sola: acércate a una puerta cerrada');
         return false;
+      case 'palanca':
+        this.emit('La palanca se usa sola: párate sobre la trampilla del sótano');
+        return false;
       case 'nuez':
         this.superJumpLeft = SUPER_JUMP_SECONDS;
         ctx.setJumpMultiplier(1.4);
@@ -727,34 +760,26 @@ export class ItemSystem {
 
       if (distXZ < 1.45 && dy >= -0.5 && dy <= 2.2) {
         const info = ITEM_INFO[p.type];
-        if (UNIQUE.includes(p.type) && this.has(p.type)) {
+        // One of each kind: use up (or break) what you carry before taking another
+        if (this.has(p.type)) {
           if (p.fullWarnCooldown <= 0) {
-            this.emit(`Ya tienes ${p.type === 'resortera' ? 'una resortera' : 'una antorcha'}`);
+            this.emit(ALREADY_HAVE[p.type]);
             p.fullWarnCooldown = 4;
           }
           continue;
         }
         const amount = PICKUP_AMOUNT[p.type] ?? 1;
         const max = STACK_MAX[p.type];
-        // Stackable: top up a slot that already has some
-        let slot = -1;
-        if (max !== undefined) {
-          slot = this.slots.findIndex((t, i) => t === p.type && this.counts[i] < max);
-        }
-        if (slot !== -1) {
-          this.counts[slot] = Math.min(max!, this.counts[slot] + amount);
-        } else {
-          slot = this.slots.indexOf(null);
-          if (slot === -1) {
-            if (p.fullWarnCooldown <= 0) {
-              this.emit('¡Mochila llena (5/5)! Usa o tira un objeto primero');
-              p.fullWarnCooldown = 2.5;
-            }
-            continue;
+        const slot = this.slots.indexOf(null);
+        if (slot === -1) {
+          if (p.fullWarnCooldown <= 0) {
+            this.emit('¡Mochila llena (5/5)! Usa o tira un objeto primero');
+            p.fullWarnCooldown = 2.5;
           }
-          this.slots[slot] = p.type;
-          this.counts[slot] = max !== undefined ? Math.min(max, amount) : defaultCount(p.type);
+          continue;
         }
+        this.slots[slot] = p.type;
+        this.counts[slot] = max !== undefined ? Math.min(max, amount) : defaultCount(p.type);
         p.available = false;
         p.respawnTimer = p.oneShot ? 1e9 : p.type === 'llave' ? 6 : RESPAWN_BY_TYPE[p.type] ?? RESPAWN_SECONDS;
         soundManager.playCollectible();

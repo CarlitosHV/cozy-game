@@ -24,6 +24,9 @@ import { generateLevel } from './levelGen';
 import { generateBossArena } from './bossArena';
 import { CombatStatus, CombatSystem } from './combat';
 import { PuzzleSystem } from './puzzles';
+import { DungeonContext, DungeonSystem } from './dungeon';
+import { AmbientDecor, Quality } from './ambience';
+import { computeRating, LevelRating, saveRating } from './rating';
 import { CompanionStyle } from './character';
 import { RemotePlayersManager } from './RemotePlayersManager';
 import {
@@ -91,7 +94,14 @@ export interface GameEngineCallbacks {
   onRoomPlayerFinished?: (payload: RoomPlayerFinishedPayload) => void;
   onRoomAllFinished?: (payload: RoomAllFinishedPayload) => void;
   onRoomLevelChanged?: (payload: RoomLevelChangedPayload) => void;
+  /** Deaths in this run (falls, caught by the Stalker, fainting in a boss fight) */
+  onDeathsChange?: (deaths: number) => void;
+  /** Party: seconds left to reach the goal after a friend finished (null = no timer) */
+  onPartyTimer?: (secondsLeft: number | null) => void;
 }
+
+/** Seconds the rest of the party has to reach the goal once someone finished */
+export const PARTY_FINISH_SECONDS = 90;
 
 export class GameEngine {
   private container: HTMLElement;
@@ -117,6 +127,10 @@ export class GameEngine {
   private itemCtx!: ItemUseContext;
   /** Push blocks, doors, key carriers and sentinels */
   public puzzleSystem: PuzzleSystem = new PuzzleSystem();
+  /** Guardian arenas and basement trapdoors of generated levels */
+  private dungeonSystem = new DungeonSystem();
+  /** Extra decor (particles, birds, far islands, flowers) that grows with the graphics quality */
+  private ambience!: AmbientDecor;
   /** 3D online multiplayer avatars */
   public remotePlayers!: RemotePlayersManager;
   private hasAppliedRoomSpawn = false;
@@ -154,6 +168,8 @@ export class GameEngine {
   public cameraDistance: number = 5.8;
   private targetCameraPos = new THREE.Vector3();
   private targetLookAt = new THREE.Vector3();
+  /** Point the camera orbits while mouse look is on (follows the player smoothly) */
+  private camPivot = new THREE.Vector3();
   private isMouseDragging: boolean = false;
   private lastMouseX: number = 0;
   private lastMouseY: number = 0;
@@ -179,6 +195,18 @@ export class GameEngine {
   /** Private party room from invite:result (`party_*`). Null = public level room. */
   public partyRoomId: string | null = null;
   public levelStartTime: number = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  /** Deaths in this run: they lower the level rating */
+  public deaths = 0;
+  /** Rating of the last finished run (shown on the victory screen) */
+  public lastRating: LevelRating | null = null;
+  /** Party: when (performance.now ms) the time to reach the goal runs out, null = no timer */
+  public partyDeadline: number | null = null;
+  private partyTimerShown = -1;
+  /** Party members who already finished this level */
+  private partyFinishedIds = new Set<string>();
+  /** Spectator mode: latest enemy snapshot of every friend still playing */
+  private spectateSnaps = new Map<string, { d: number[]; t: number }>();
+  private snapSendT = 0;
 
   // Spectator Mode in Party Rooms
   public isSpectating: boolean = false;
@@ -333,12 +361,25 @@ export class GameEngine {
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(this.currentLevel);
+    this.ambience = new AmbientDecor(this.scene);
+    {
+      let saved: string | null = null;
+      try {
+        saved = localStorage.getItem('cozy_graphics_quality');
+      } catch {
+        /* storage unavailable */
+      }
+      const q: Quality = saved === 'high' || saved === 'medium' || saved === 'low' ? saved : this.isSoftwareGl ? 'low' : 'high';
+      this.ambience.setQuality(q);
+      this.ambience.build(this.world, this.currentLevel, themeForLevel(this.currentLevel));
+    }
     this.addCompanionShowcase();
     this.playerModel = createPlayerCharacter(this.textures, this.playerAppearance);
     this.scene.add(this.playerModel.group);
 
     // 7. Physics Controller
     this.physics = new ParkourPhysics(this.world, this.playerModel);
+    this.physics.onFallDeath = () => this.countDeath();
 
     // 7b. Companion Powers (key G) & companion snacks around the islands
     this.companionPowers = new CompanionPowerSystem(this.scene);
@@ -349,6 +390,7 @@ export class GameEngine {
     this.itemSystem = new ItemSystem(this.scene);
     this.itemSystem.loadSpots(this.world.itemSpots);
     this.puzzleSystem.load(this.world.puzzles, this.world.platforms);
+    this.dungeonSystem.load(this.world.dungeon);
     this.itemCtx = {
       feedCompanion: () => this.companionPowers.feed(),
       setJumpMultiplier: (m: number) => {
@@ -385,7 +427,12 @@ export class GameEngine {
       this.puzzleSystem.setBlockRemote(data.blockIndex, data.x, data.y, data.z);
     });
     multiplayerClient.addWorldEventListener((data) => {
-      if (data.levelId !== this.currentLevel || !this.combat) return;
+      if (data.levelId !== this.currentLevel) return;
+      if (data.kind === 'minihit' || data.kind === 'trapopen') {
+        this.dungeonSystem.onEvent(data.kind, data.i ?? 0, data.v ?? 0, this.gameState === 'playing' ? this.dungeonCtx() : null);
+        return;
+      }
+      if (!this.combat) return;
       this.combat.onEvent(data.kind, data.i ?? 0, data.v ?? 0, data.target, data.userId ?? '', false);
     });
     multiplayerClient.addRoomStateListener((_players, raw) => {
@@ -436,6 +483,15 @@ export class GameEngine {
 
     multiplayerClient.addPlayerFinishedNoticeListener((payload) => {
       this.callbacks.onRoomPlayerFinished?.(payload);
+      const who = payload.userId || payload.id;
+      if (who) this.partyFinishedIds.add(who);
+      // A friend reached the goal: the rest have a limited time to finish too
+      const me = apiClient.getCurrentUser()?._id;
+      if (who && who !== me && !payload.forfeited && this.partyDeadline === null && !this.isSpectating && this.gameState === 'playing') {
+        this.partyDeadline = performance.now() + PARTY_FINISH_SECONDS * 1000;
+        this.partyTimerShown = -1;
+        this.itemSystem.notify(`¡Un compañero llegó a la meta! Tienes ${PARTY_FINISH_SECONDS} s para terminar o pasarás con calificación 0`);
+      }
       if (
         this.isSpectating &&
         this.spectateTargetUserId &&
@@ -443,6 +499,11 @@ export class GameEngine {
       ) {
         this.cycleSpectateTarget(1);
       }
+    });
+
+    multiplayerClient.addSpectateSnapListener((payload) => {
+      if (payload.levelId !== this.currentLevel) return;
+      this.spectateSnaps.set(payload.userId, { d: payload.d, t: performance.now() });
     });
 
     multiplayerClient.addSpectateSwitchedListener((payload) => {
@@ -466,10 +527,11 @@ export class GameEngine {
 
     multiplayerClient.addRoomLevelChangedListener((payload) => {
       this.stopSpectating();
+      this.resetRunStats();
       this.callbacks.onRoomLevelChanged?.(payload);
       if (payload.levelId && payload.levelId !== this.currentLevel) {
         this.loadLevel(payload.levelId);
-        this.beginRun(this.gameMode, false);
+        this.beginRun(this.gameMode, true);
       }
     });
 
@@ -731,15 +793,18 @@ export class GameEngine {
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(level);
+    this.ambience.build(this.world, level, themeForLevel(level));
     this.applyHostility();
     this.addCompanionShowcase();
     this.physics = new ParkourPhysics(this.world, this.playerModel);
+    this.physics.onFallDeath = () => this.countDeath();
     this.physics.jumpMultiplier = this.itemSystem.superJumpLeft > 0 ? 1.4 : 1;
     this.companionPowers.reset(this.physics);
     this.itemSystem.loadSpots(this.world.itemSpots);
     // Keys only open doors of their own level
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.load(this.world.puzzles, this.world.platforms);
+    this.dungeonSystem.load(this.world.dungeon);
     this.reapplySharedWorld();
     this.resetCombat();
 
@@ -755,7 +820,7 @@ export class GameEngine {
     }
   }
 
-  /** From the victory screen: travel to the next level keeping your backpack. */
+  /** From the victory screen: travel to the next level (every level starts with an empty backpack). */
   public goToNextLevel() {
     const next = this.currentLevel + 1;
     if (this.partyRoomId) {
@@ -764,7 +829,7 @@ export class GameEngine {
     }
     if (!isLevelUnlocked(next)) return;
     this.loadLevel(next);
-    this.beginRun(this.gameMode, false);
+    this.beginRun(this.gameMode, true);
   }
 
   public startSpectating(targetUserId?: string, rank?: number, timeSeconds?: number) {
@@ -907,8 +972,130 @@ export class GameEngine {
     return isHost ? offsets[0] : offsets[1];
   }
 
+  /** New attempt at the level: no deaths, no rating, no party timer. */
+  private resetRunStats() {
+    this.deaths = 0;
+    this.lastRating = null;
+    this.partyDeadline = null;
+    this.partyTimerShown = -1;
+    this.partyFinishedIds.clear();
+    this.spectateSnaps.clear();
+    this.callbacks.onDeathsChange?.(0);
+    this.callbacks.onPartyTimer?.(null);
+  }
+
+  /** Falling into the void, being caught by the Stalker or fainting in a boss fight. */
+  private countDeath() {
+    if (this.gameState !== 'playing' || this.isSpectating) return;
+    this.deaths++;
+    this.callbacks.onDeathsChange?.(this.deaths);
+  }
+
+  /** Rates the run that just ended (forfeited = the party timer ran out) and keeps the best. */
+  private rateRun(forfeited: boolean): LevelRating {
+    const timeSeconds = Math.max(1, Number(((performance.now() - this.levelStartTime) / 1000).toFixed(2)));
+    const rating = computeRating({
+      levelId: this.currentLevel,
+      timeSeconds,
+      deaths: this.deaths,
+      relics: this.physics.collectedCount,
+      totalRelics: this.physics.totalCollectibles,
+      forfeited,
+    });
+    this.lastRating = rating;
+    this.partyDeadline = null;
+    this.callbacks.onPartyTimer?.(null);
+    if (!isDevMode()) saveRating(this.currentLevel, rating);
+    return rating;
+  }
+
+  /** Party timer: counts down and, when it runs out, the player passes the level with rating 0. */
+  private updatePartyTimer() {
+    if (this.partyDeadline === null) return;
+    if (!this.partyRoomId || this.isSpectating || this.gameState !== 'playing') {
+      if (this.isSpectating || !this.partyRoomId) {
+        this.partyDeadline = null;
+        this.callbacks.onPartyTimer?.(null);
+      }
+      return;
+    }
+    const left = Math.max(0, (this.partyDeadline - performance.now()) / 1000);
+    const shown = Math.ceil(left);
+    if (shown !== this.partyTimerShown) {
+      this.partyTimerShown = shown;
+      this.callbacks.onPartyTimer?.(shown);
+    }
+    if (left > 0) return;
+    // Time's up: pass automatically, but with rating 0
+    this.lastUnlocked = isDevMode() ? null : markLevelComplete(this.currentLevel);
+    const rating = this.rateRun(true);
+    this.physics.hasReachedSummit = true;
+    multiplayerClient.emitPlayerFinish(this.currentLevel, rating.timeSeconds, this.physics.collectedCount, rating);
+    this.startSpectating(undefined, undefined, rating.timeSeconds);
+    this.itemSystem.notify('¡Se acabó el tiempo! Pasas al siguiente nivel con calificación 0');
+    soundManager.playGameOver();
+  }
+
+  // ---------------- Spectator mode: everyone sees the same enemies ----------------
+
+  /** Moving things whose position is simulated on each computer (enemies, bosses, the Stalker). */
+  private syncTargets(): { obj: THREE.Object3D; pos?: THREE.Vector3 }[] {
+    const out: { obj: THREE.Object3D; pos?: THREE.Vector3 }[] = [];
+    const em = this.world.enemyManager;
+    if (em) for (const e of em.enemies) out.push({ obj: e.group, pos: e.position });
+    for (const mb of this.dungeonSystem.miniBosses) out.push({ obj: mb.group, pos: mb.pos });
+    if (this.combat) for (const o of this.combat.syncObjects()) out.push({ obj: o });
+    if (this.stalker) out.push({ obj: this.stalker.group, pos: this.stalker.position });
+    return out;
+  }
+
+  /** While friends watch us (they already finished), stream what we see a few times a second. */
+  private sendSpectateSnap(dt: number) {
+    if (!this.partyRoomId || this.isSpectating || this.gameState !== 'playing') return;
+    const me = apiClient.getCurrentUser()?._id;
+    if (![...this.partyFinishedIds].some((id) => id !== me)) return;
+    this.snapSendT -= dt;
+    if (this.snapSendT > 0) return;
+    this.snapSendT = 0.2;
+    const d: number[] = [];
+    for (const { obj } of this.syncTargets().slice(0, 200)) {
+      const r = (n: number) => Math.round(n * 100) / 100;
+      d.push(r(obj.position.x), r(obj.position.y), r(obj.position.z), r(obj.rotation.y), r(obj.scale.y), obj.visible ? 1 : 0);
+    }
+    multiplayerClient.sendSpectateSnap(this.currentLevel, d);
+  }
+
+  /** Spectating: move our copy of the enemies to where the watched friend sees them. */
+  private applySpectateSnap(dt: number) {
+    if (!this.isSpectating || !this.spectateTargetUserId) return;
+    const snap = this.spectateSnaps.get(this.spectateTargetUserId);
+    if (!snap || performance.now() - snap.t > 1500) return;
+    const targets = this.syncTargets();
+    const k = 1 - Math.exp(-dt * 12);
+    for (let i = 0; i < targets.length && i * 6 + 5 < snap.d.length; i++) {
+      const { obj, pos } = targets[i];
+      const d = snap.d;
+      const o = i * 6;
+      const offX = pos ? obj.position.x - pos.x : 0;
+      const offY = pos ? obj.position.y - pos.y : 0;
+      const offZ = pos ? obj.position.z - pos.z : 0;
+      const far = Math.hypot(obj.position.x - d[o], obj.position.z - d[o + 2]) > 6;
+      const f = far ? 1 : k;
+      obj.position.x += (d[o] - obj.position.x) * f;
+      obj.position.y += (d[o + 1] - obj.position.y) * f;
+      obj.position.z += (d[o + 2] - obj.position.z) * f;
+      let dy = d[o + 3] - obj.rotation.y;
+      dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      obj.rotation.y += dy * f;
+      if (d[o + 4] > 0.01) obj.scale.y += (d[o + 4] - obj.scale.y) * f;
+      obj.visible = d[o + 5] > 0;
+      if (pos) pos.set(obj.position.x - offX, obj.position.y - offY, obj.position.z - offZ);
+    }
+  }
+
   private beginRun(mode: GameMode | undefined, freshBackpack: boolean) {
     this.gameOverReason = null;
+    this.resetRunStats();
     this.stopSpectating();
     this.levelStartTime = performance.now();
     this.lastUnlocked = null;
@@ -920,6 +1107,7 @@ export class GameEngine {
     if (freshBackpack) this.itemSystem.clearInventory(this.itemCtx);
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.reset();
+    this.dungeonSystem.reset(this.partySize());
     this.reapplySharedWorld();
     this.resetCombat();
     this.physics.respawnAtCheckpoint(0, false, this.getPartySpawnOffset());
@@ -1000,9 +1188,47 @@ export class GameEngine {
   }) {
     for (const i of data.orbs) this.puzzleSystem.collectOrbRemote(i, null, null);
     for (const b of data.blocks) this.puzzleSystem.setBlockRemote(b.index, b.x, b.y, b.z, true);
-    if (this.combat && data.events) {
-      for (const e of data.events) this.combat.onEvent(e.kind, e.i ?? 0, e.v ?? 0, e.target, e.userId ?? '', true);
+    if (data.events) {
+      for (const e of data.events) {
+        if (e.kind === 'minihit' || e.kind === 'trapopen') this.dungeonSystem.onEvent(e.kind, e.i ?? 0, e.v ?? 0, null);
+        else if (this.combat) this.combat.onEvent(e.kind, e.i ?? 0, e.v ?? 0, e.target, e.userId ?? '', true);
+      }
     }
+  }
+
+  /** You + the friends on this level */
+  private partySize(): number {
+    return 1 + (this.partyRoomId && this.remotePlayers ? this.remotePlayers.getPlayersInfo().length : 0);
+  }
+
+  private dungeonCtx(): DungeonContext {
+    const ph = this.physics;
+    return {
+      position: ph.position,
+      velocity: ph.velocity,
+      isGrounded: ph.isGrounded,
+      items: this.itemSystem,
+      partySize: this.partySize(),
+      send: (kind, i, v) => {
+        if (this.partyRoomId) multiplayerClient.sendEvent(this.currentLevel, kind, i, v);
+      },
+      teleport: (to, yaw) => {
+        ph.position.copy(to);
+        ph.velocity.set(0, 0, 0);
+        ph.lastSafePos.copy(to);
+        this.cameraYaw = yaw;
+      },
+      knock: (vx, vy, vz) => {
+        if (this.isSpectating) return;
+        ph.velocity.set(vx, vy, vz);
+        ph.isGrounded = false;
+        ph.knockbackTimer = 0.35;
+      },
+      onEnterCellar: (blockIndex) => {
+        const pos = this.puzzleSystem.resetBlock(blockIndex);
+        if (pos && this.partyRoomId) multiplayerClient.sendBlock(this.currentLevel, blockIndex, pos.x, pos.y, pos.z, true);
+      },
+    };
   }
 
   // ---------------------------------------------------------------- Boss fights
@@ -1056,6 +1282,7 @@ export class GameEngine {
       unlockMovement: () => {
         this.physics.isMovementLocked = this.isUIModalOpen || this.gameState === 'paused' || this.gameState === 'victory';
       },
+      onDeath: () => this.countDeath(),
     });
     if (this.partyRoomId) {
       const ws = multiplayerClient.getWorldState(this.currentLevel);
@@ -1242,6 +1469,8 @@ export class GameEngine {
 
   public restartGame(mode?: GameMode) {
     this.gameOverReason = null;
+    this.resetRunStats();
+    this.levelStartTime = performance.now();
     if (mode) {
       this.setGameMode(mode);
     }
@@ -1253,6 +1482,7 @@ export class GameEngine {
     this.itemSystem.clearInventory(this.itemCtx);
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.reset();
+    this.dungeonSystem.reset(this.partySize());
     this.reapplySharedWorld();
     this.resetCombat();
     this.gameState = 'playing';
@@ -2037,6 +2267,7 @@ export class GameEngine {
         if (lure) return; // it only bumped into the lure
         // Caught by Stalker! Respawn player at checkpoint with warning notice
         this.physics.respawnAtCheckpoint();
+        this.countDeath();
         if (this.stalker) {
           this.stalker.resetPosition(this.physics.position);
         }
@@ -2118,11 +2349,10 @@ export class GameEngine {
         const theme = atmos(this.currentLevel);
         this.transitionWeather(theme.victoryWeather, 4.5, 'milestone', theme.victoryTitle, theme.victoryDesc);
 
+        const rating = this.rateRun(false);
         if (this.partyRoomId) {
-          const timeSec = Math.max(1, Number(((performance.now() - this.levelStartTime) / 1000).toFixed(2)));
-          const relics = this.physics.collectedCount;
-          multiplayerClient.emitPlayerFinish(this.currentLevel, timeSec, relics);
-          this.startSpectating(undefined, 1, timeSec);
+          multiplayerClient.emitPlayerFinish(this.currentLevel, rating.timeSeconds, this.physics.collectedCount, rating);
+          this.startSpectating(undefined, 1, rating.timeSeconds);
           soundManager.playVictory();
         } else {
           this.gameState = 'victory';
@@ -2157,6 +2387,11 @@ export class GameEngine {
       });
     }
 
+    // 6b2. Guardian arenas and basement trapdoors
+    if (this.world.dungeon && this.gameState === 'playing') {
+      this.dungeonSystem.update(dt, time, this.dungeonCtx());
+    }
+
     // 6c. Boss fight (life, tools, the boss) — after physics so it can hold a grabbed player
     if (this.combat && this.gameState === 'playing') {
       this.combat.update(dt, time, this.currentInput);
@@ -2176,10 +2411,12 @@ export class GameEngine {
     this.weatherSystem.update(dt, this.physics.position, time);
     this.applyDarkness(this.combat?.darkness ?? 0);
 
-    // 7b. Mobile / Touchscreen: Camera smoothly follows behind character
+    // 7b. Mobile / Touchscreen: Camera smoothly follows behind character.
+    // Only for the on-screen joystick: with the keyboard (WASD) the camera is yours (mouse or Q/E),
+    // otherwise both fight each other and the view swings around.
     const inputMagnitude = Math.hypot(this.currentInput.forward, this.currentInput.right);
-    const isVirtualMove = inputMagnitude > 0.05;
-    const isTouchActive = (this.isTouchDevice || isVirtualMove) && this.autoChaseCamera;
+    const isVirtualMove = Math.hypot(this.virtualInput.forward, this.virtualInput.right) > 0.05;
+    const isTouchActive = (this.isTouchDevice || isVirtualMove) && this.autoChaseCamera && !this.pointerLocked;
     const horizSpeed = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
 
     // Track sudden input direction flips (e.g. flicking joystick from left to right or forward to back)
@@ -2291,16 +2528,29 @@ export class GameEngine {
       followPos.z - offsetZ
     );
 
-    // Exponential camera damping for buttery smooth motion
-    this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.targetCameraPos.x, 10.0, dt);
-    this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.targetCameraPos.y, 10.0, dt);
-    this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.targetCameraPos.z, 10.0, dt);
+    if (this.pointerLocked && this.gameState === 'playing') {
+      // Mouse look: turn around the player on a sphere (smoothing only the follow), so fast
+      // mouse turns don't cut through the middle and make the camera zoom in and wobble
+      this.camPivot.x = THREE.MathUtils.damp(this.camPivot.x, followPos.x, 12, dt);
+      this.camPivot.y = THREE.MathUtils.damp(this.camPivot.y, followPos.y, 12, dt);
+      this.camPivot.z = THREE.MathUtils.damp(this.camPivot.z, followPos.z, 12, dt);
+      this.camera.position.set(this.camPivot.x - offsetX, this.camPivot.y + 1.1 + offsetY, this.camPivot.z - offsetZ);
+      this.targetLookAt.set(this.camPivot.x, this.camPivot.y + 1.1 + this.lookRaise, this.camPivot.z);
+    } else {
+      // Exponential camera damping for buttery smooth motion
+      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.targetCameraPos.x, 10.0, dt);
+      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.targetCameraPos.y, 10.0, dt);
+      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.targetCameraPos.z, 10.0, dt);
+      this.camPivot.copy(followPos);
+    }
 
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(this.targetLookAt);
 
     // Fade out foliage or trees that block the camera view of the player
     this.updateTreeOcclusion(dt);
+
+    this.ambience.update(dt, time, followPos);
 
     // Follow light with player or spectated friend
     this.dirLight.position.set(followPos.x + 25, followPos.y + 45, followPos.z + 20);
@@ -2311,6 +2561,9 @@ export class GameEngine {
     if (this.remotePlayers) {
       this.remotePlayers.update(dt);
     }
+    this.updatePartyTimer();
+    this.sendSpectateSnap(dt);
+    this.applySpectateSnap(dt);
 
     if (this.gameState === 'playing' && this.partyRoomId) {
       const speed = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
@@ -2409,6 +2662,8 @@ export class GameEngine {
   }
 
   public setGraphicsQuality(quality: 'high' | 'medium' | 'low') {
+    // More decor, background life and animations the higher it goes
+    this.ambience?.setQuality(quality);
     if (this.isSoftwareGl || !this.renderer) return;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
@@ -2454,6 +2709,7 @@ export class GameEngine {
     this.itemSystem?.dispose();
     this.world.enemyManager?.dispose();
     this.weatherSystem.dispose();
+    this.ambience?.dispose();
     this.clock.dispose();
     this.renderer.dispose();
     if (dom.parentElement) {

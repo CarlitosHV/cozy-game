@@ -147,6 +147,15 @@ export const ItemThumb: React.FC<{
           <path d="M16 7 C18 9.5, 18 11, 16 12 C14 11, 14 9.5, 16 7 Z" fill="#fef08a" />
         </>
       );
+    case 'palanca':
+      return svg(
+        <>
+          <path d="M9 27 L21 9" stroke="#64748b" strokeWidth="3.2" strokeLinecap="round" />
+          <path d="M21 9 C22 5, 26.5 4.5, 27.5 8" stroke="#64748b" strokeWidth="3.2" fill="none" strokeLinecap="round" />
+          <path d="M9 27 L5.5 26" stroke="#64748b" strokeWidth="3.2" strokeLinecap="round" />
+          <path d="M11.5 23.3 L15 18.2" stroke="#b91c1c" strokeWidth="4.4" strokeLinecap="round" />
+        </>
+      );
     default:
       break;
   }
