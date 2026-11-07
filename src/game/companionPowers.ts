@@ -6,6 +6,8 @@
  *  - Catarina (catarina): rescues you if you fall off the islands
  *  - Lila (hada):         fairy dust — a second jump in mid-air
  *  - Jade (serpiente):    flies around you and knocks down enemies (and their projectiles) that get close
+ *  - Hombre Polilla (polilla): turns time back up to 5 seconds — you fly back along the path you
+ *    took (and, in boss fights, get back the life you had then)
  *
  * A power is triggered with a key (G) or the HUD button, lasts a short time,
  * and then the companion gets hungry: it can't be used again until you feed it
@@ -75,6 +77,15 @@ export const COMPANION_POWERS: Partial<Record<CompanionStyle, CompanionPowerInfo
     activeText: '¡Lila te llena de polvo de hada! Salta otra vez en el aire',
     color: '#f9a8d4',
   },
+  polilla: {
+    companion: 'polilla',
+    companionName: 'Hombre Polilla',
+    powerName: 'Regresar el tiempo',
+    desc: 'Regresas hasta 5 segundos atrás: a donde estabas (y con la vida que tenías en las peleas).',
+    duration: 1.2,
+    activeText: '¡El Hombre Polilla regresa el tiempo!',
+    color: '#c4a77d',
+  },
   serpiente: {
     companion: 'serpiente',
     companionName: 'Jade',
@@ -85,6 +96,16 @@ export const COMPANION_POWERS: Partial<Record<CompanionStyle, CompanionPowerInfo
     color: '#34d399',
   },
 };
+
+/** Seconds the Hombre Polilla can turn back */
+export const REWIND_SECONDS = 5;
+
+interface TimeSnap {
+  t: number;
+  p: THREE.Vector3;
+  /** Extra state to bring back (life in boss fights) */
+  x: number | null;
+}
 
 /** Enemies Jade can reach while guarding */
 export interface PowerFoes {
@@ -105,6 +126,8 @@ export interface CompanionPowerStatus {
 /** Minimal view of the physics controller the powers need to touch. */
 export interface PowerPhysicsHooks {
   position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  isMovementLocked: boolean;
   isGrounded: boolean;
   lastSafePos: THREE.Vector3;
   speedMultiplier: number;
@@ -152,6 +175,13 @@ export class CompanionPowerSystem {
   /** Jade: glowing ring circling the player while guarding */
   private guardRing: THREE.Group;
   private guardPos = new THREE.Vector3();
+  /** Hombre Polilla: the last seconds of your path, and the copy being played backwards */
+  private history: TimeSnap[] = [];
+  private rewindPath: TimeSnap[] = [];
+  private clock = 0;
+  private timeRing: THREE.Group;
+  /** Extra state the rewind brings back (set by the engine: life in boss fights) */
+  public rewindExtra: { get(): number | null; set(v: number): void; blocked?(): string | null } | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -179,6 +209,40 @@ export class CompanionPowerSystem {
     }
     this.guardRing.visible = false;
     scene.add(this.guardRing);
+    // Clock face of moth dust that spins backwards around you while time rewinds
+    this.timeRing = new THREE.Group();
+    const dial = new THREE.Mesh(
+      new THREE.RingGeometry(1.0, 1.12, 48),
+      new THREE.MeshBasicMaterial({ color: 0xe9d5a8, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending })
+    );
+    dial.rotation.x = -Math.PI / 2;
+    this.timeRing.add(dial);
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      const tick = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, i % 3 === 0 ? 0.3 : 0.16), new THREE.MeshBasicMaterial({ color: 0xfff3d6 }));
+      tick.position.set(Math.cos(a) * 0.9, 0, Math.sin(a) * 0.9);
+      tick.rotation.y = -a;
+      this.timeRing.add(tick);
+    }
+    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 0.75), new THREE.MeshBasicMaterial({ color: 0xc4a77d }));
+    hand.position.z = 0.37;
+    const handPivot = new THREE.Group();
+    handPivot.add(hand);
+    handPivot.name = 'hand';
+    this.timeRing.add(handPivot);
+    this.timeRing.visible = false;
+    scene.add(this.timeRing);
+  }
+
+  /** Seconds of path the Hombre Polilla could turn back right now. */
+  public get rewindSpan(): number {
+    if (this.history.length < 2) return 0;
+    return this.history[this.history.length - 1].t - this.history[0].t;
+  }
+
+  /** Forget the recorded path (new level, respawn…). */
+  public clearHistory() {
+    this.history.length = 0;
   }
 
   get info(): CompanionPowerInfo | undefined {
@@ -213,6 +277,7 @@ export class CompanionPowerSystem {
   /** Full reset for a new run: power ready. */
   public reset(physics: PowerPhysicsHooks) {
     this.endEffects(physics);
+    this.history.length = 0;
     this.state = this.info ? 'ready' : 'none';
     this.timeLeft = 0;
   }
@@ -245,6 +310,17 @@ export class CompanionPowerSystem {
     if (this.state === 'hungry') {
       this.emit(`${info.companionName} tiene hambre: dale una baya mágica de tu mochila`);
       return false;
+    }
+    if (this.companion === 'polilla') {
+      const why = this.rewindExtra?.blocked?.() ?? null;
+      if (why) {
+        this.emit(why);
+        return false;
+      }
+      if (this.rewindSpan < 0.4) {
+        this.emit('Aún no hay nada que regresar: muévete un poco');
+        return false;
+      }
     }
 
     this.state = 'active';
@@ -289,6 +365,14 @@ export class CompanionPowerSystem {
       case 'serpiente':
         this.guardRing.visible = true;
         break;
+      case 'polilla':
+        this.rewindPath = this.history.slice();
+        this.history.length = 0;
+        physics.isMovementLocked = true;
+        physics.velocity.set(0, 0, 0);
+        this.timeRing.visible = true;
+        soundManager.playUpdraft();
+        break;
       case 'catarina':
         physics.rescueGuard = true;
         physics.onRescue = () => {
@@ -311,6 +395,12 @@ export class CompanionPowerSystem {
     this.lureTarget = null;
     this.lure.visible = false;
     this.guardRing.visible = false;
+    if (this.rewindPath.length) {
+      // Interrupted rewind: give the controls back
+      physics.isMovementLocked = false;
+      this.rewindPath = [];
+    }
+    this.timeRing.visible = false;
   }
 
   /** Power is over: the companion is now hungry until it eats a snack. */
@@ -335,9 +425,50 @@ export class CompanionPowerSystem {
       if (this.dustT >= 1) this.dustRing.visible = false;
     }
 
+    // Hombre Polilla: remember the last seconds of your path (while not rewinding)
+    this.clock += dt;
+    if (this.companion === 'polilla' && this.state !== 'active') {
+      const last = this.history[this.history.length - 1];
+      if (!last || this.clock - last.t >= 1 / 30) {
+        this.history.push({ t: this.clock, p: physics.position.clone(), x: this.rewindExtra?.get() ?? null });
+        while (this.history.length > 2 && this.clock - this.history[0].t > REWIND_SECONDS) this.history.shift();
+      }
+    }
+
     // Active power countdown
     if (this.state === 'active') {
       this.timeLeft -= dt;
+
+      // Hombre Polilla: fly back along your path, newest to oldest
+      if (this.companion === 'polilla' && this.rewindPath.length) {
+        const path = this.rewindPath;
+        const tEnd = path[path.length - 1].t;
+        const span = tEnd - path[0].t;
+        const u = Math.min(1, 1 - Math.max(0, this.timeLeft) / this.duration);
+        const eased = u * u * (3 - 2 * u);
+        const want = tEnd - eased * span;
+        let k = path.length - 1;
+        while (k > 0 && path[k - 1].t >= want) k--;
+        const a = path[Math.max(0, k - 1)];
+        const b = path[k];
+        const f = b.t === a.t ? 0 : THREE.MathUtils.clamp((want - a.t) / (b.t - a.t), 0, 1);
+        physics.position.lerpVectors(a.p, b.p, f);
+        physics.velocity.set(0, 0, 0);
+        physics.isMovementLocked = true;
+        this.timeRing.position.set(physics.position.x, physics.position.y + 0.08, physics.position.z);
+        const hand = this.timeRing.getObjectByName('hand');
+        if (hand) hand.rotation.y = eased * Math.PI * 6;
+        this.timeRing.rotation.y = -time * 2;
+        if (this.timeLeft <= 0) {
+          const first = path[0];
+          physics.position.copy(first.p);
+          physics.lastSafePos.copy(first.p);
+          if (first.x !== null) this.rewindExtra?.set(first.x);
+          physics.isMovementLocked = false;
+          this.rewindPath = [];
+          this.emit(`¡Regresaste ${span.toFixed(1)} s en el tiempo!`);
+        }
+      }
 
       // Jade guards you: enemies and projectiles that get close are knocked down
       if (this.companion === 'serpiente') {
@@ -411,5 +542,6 @@ export class CompanionPowerSystem {
     this.scene.remove(this.lure);
     this.scene.remove(this.dustRing);
     this.scene.remove(this.guardRing);
+    this.scene.remove(this.timeRing);
   }
 }

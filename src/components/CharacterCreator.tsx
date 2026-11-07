@@ -142,6 +142,20 @@ export const COMPANION_ICONS: Record<CompanionStyle, React.ReactNode> = {
       <path d="M10 11 l-2.5 -3.5 3.8 1.6z" fill="#fde047" />
     </svg>
   ),
+  polilla: (
+    <svg viewBox="0 0 24 24" className="w-4 h-4" aria-hidden="true">
+      <path d="M12 9 C6 2, 0 5, 2 11 C3 14, 8 13, 12 11Z" fill="#8a7458" />
+      <path d="M12 9 C18 2, 24 5, 22 11 C21 14, 16 13, 12 11Z" fill="#8a7458" />
+      <path d="M12 12 C8 14, 4 18, 7 20 C9 21, 11 17, 12 14Z" fill="#5b4a39" />
+      <path d="M12 12 C16 14, 20 18, 17 20 C15 21, 13 17, 12 14Z" fill="#5b4a39" />
+      <circle cx="6" cy="8.5" r="1.5" fill="#e8d9b8" />
+      <circle cx="18" cy="8.5" r="1.5" fill="#e8d9b8" />
+      <ellipse cx="12" cy="13" rx="2.2" ry="5" fill="#3b322b" />
+      <circle cx="11" cy="9.5" r="0.9" fill="#ff2a2a" />
+      <circle cx="13" cy="9.5" r="0.9" fill="#ff2a2a" />
+      <path d="M11 7 L9.5 3.5 M13 7 L14.5 3.5" stroke="#bfae94" strokeWidth="0.9" strokeLinecap="round" />
+    </svg>
+  ),
   ninguno: <X className="w-4 h-4" />,
 };
 

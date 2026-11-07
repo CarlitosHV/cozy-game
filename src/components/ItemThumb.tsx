@@ -147,6 +147,24 @@ export const ItemThumb: React.FC<{
           <path d="M16 7 C18 9.5, 18 11, 16 12 C14 11, 14 9.5, 16 7 Z" fill="#fef08a" />
         </>
       );
+    case 'craneo':
+      return svg(
+        <>
+          <path d="M16 4 C8 4, 5 10, 6 15 C6.5 18, 9 19, 10 21 L10 25 L22 25 L22 21 C23 19, 25.5 18, 26 15 C27 10, 24 4, 16 4 Z" fill="#1c1426" stroke="#7c3aed" strokeWidth="1.2" />
+          <circle cx="12" cy="14" r="2.8" fill="#a855f7" />
+          <circle cx="20" cy="14" r="2.8" fill="#a855f7" />
+          <path d="M16 17 L14.6 20 L17.4 20 Z" fill="#a855f7" />
+          <path d="M12 25 L12 22 M15 25 L15 22 M18 25 L18 22 M21 25 L21 22" stroke="#7c3aed" strokeWidth="1" />
+        </>
+      );
+    case 'daga':
+      return svg(
+        <>
+          <path d="M24 4 L13 17 L15 19 L28 8 Z" fill="#241a33" stroke="#a78bfa" strokeWidth="1.2" strokeLinejoin="round" />
+          <path d="M10.5 16.5 L17.5 23.5" stroke="#9ca3af" strokeWidth="2.6" strokeLinecap="round" />
+          <path d="M13 21 L6 28" stroke="#78350f" strokeWidth="3.2" strokeLinecap="round" />
+        </>
+      );
     case 'palanca':
       return svg(
         <>

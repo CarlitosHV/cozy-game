@@ -927,3 +927,103 @@ export function createAlien(): AlienModel {
   return { group, body, head, jaw, legs, arms, tail };
 }
 
+
+// ---------------------------------------------------------------------------
+// Skinwalker (Backrooms boss): gaunt, hunched, a ragged hide over its back and a deer skull
+// ---------------------------------------------------------------------------
+export interface SkinwalkerModel {
+  group: THREE.Group;
+  /** Upper body pivot (hunch / crouch / rear back) */
+  torso: THREE.Group;
+  head: THREE.Group;
+  arms: THREE.Group[];
+  legs: THREE.Group[];
+  eyes: THREE.MeshBasicMaterial;
+}
+
+export function createSkinwalker(): SkinwalkerModel {
+  const group = new THREE.Group();
+  const skin = std(0x8a8077, 0.85, { flatShading: true });
+  const hide = std(0x4a3a2c, 0.95, { flatShading: true });
+  const bone = std(0xe7e0cf, 0.6, { flatShading: true });
+  const claw = std(0x2b2520, 0.4);
+  const eyes = basic(0xf5f5f5);
+
+  // Legs: bent backwards like an animal's
+  const legs: THREE.Group[] = [];
+  for (const s of [1, -1]) {
+    const hip = new THREE.Group();
+    hip.position.set(0.22 * s, 1.25, 0);
+    const thigh = add(hip, new THREE.CapsuleGeometry(0.1, 0.55, 4, 8), skin, 0, -0.3, 0.12);
+    thigh.rotation.x = -0.5;
+    const shin = add(hip, new THREE.CapsuleGeometry(0.075, 0.6, 4, 8), skin, 0, -0.85, 0.05);
+    shin.rotation.x = 0.55;
+    add(hip, new THREE.ConeGeometry(0.08, 0.22, 5), claw, 0, -1.2, 0.18).rotation.x = Math.PI / 2;
+    group.add(hip);
+    legs.push(hip);
+  }
+
+  const torso = new THREE.Group();
+  torso.position.y = 1.3;
+  torso.rotation.x = 0.45;
+  group.add(torso);
+  const chest = add(torso, new THREE.CapsuleGeometry(0.24, 0.75, 4, 10), skin, 0, 0.55, 0);
+  chest.scale.set(1, 1, 0.75);
+  // ribs
+  for (let i = 0; i < 4; i++) {
+    const rib = add(torso, new THREE.TorusGeometry(0.2, 0.018, 4, 12, Math.PI), skin, 0, 0.45 + i * 0.12, 0.05);
+    rib.rotation.set(0, 0, Math.PI / 2);
+    rib.scale.set(1, 1.1, 0.9);
+  }
+  // Ragged hide over the shoulders
+  const pelt = add(torso, new THREE.IcosahedronGeometry(0.42, 1), hide, 0, 0.95, -0.12);
+  pelt.scale.set(1.25, 0.55, 1.1);
+  for (let i = 0; i < 6; i++) {
+    const strip = add(torso, new THREE.ConeGeometry(0.07, 0.6, 4), hide, -0.3 + i * 0.12, 0.55, -0.32);
+    strip.rotation.x = Math.PI + 0.2;
+  }
+
+  // Long arms with claws
+  const arms: THREE.Group[] = [];
+  for (const s of [1, -1]) {
+    const sh = new THREE.Group();
+    sh.position.set(0.32 * s, 1.0, 0.05);
+    add(sh, new THREE.CapsuleGeometry(0.06, 0.7, 4, 8), skin, 0, -0.4, 0);
+    add(sh, new THREE.CapsuleGeometry(0.05, 0.75, 4, 8), skin, 0, -1.15, 0.08);
+    for (let f = -1; f <= 1; f++) {
+      const c = add(sh, new THREE.ConeGeometry(0.025, 0.22, 4), claw, f * 0.04, -1.62, 0.12);
+      c.rotation.x = Math.PI - 0.4;
+    }
+    torso.add(sh);
+    arms.push(sh);
+  }
+
+  // Deer skull with antlers
+  const head = new THREE.Group();
+  head.position.set(0, 1.35, 0.18);
+  torso.add(head);
+  const skull = add(head, new THREE.SphereGeometry(0.17, 12, 10), bone, 0, 0.05, 0);
+  skull.scale.set(0.9, 0.85, 1.05);
+  const snout = add(head, new THREE.BoxGeometry(0.13, 0.11, 0.36), bone, 0, -0.03, 0.24);
+  snout.rotation.x = 0.25;
+  const socket = basic(0x050505);
+  for (const s of [1, -1]) {
+    add(head, new THREE.SphereGeometry(0.05, 8, 6), socket, 0.08 * s, 0.07, 0.12);
+    add(head, new THREE.SphereGeometry(0.014, 6, 6), eyes, 0.08 * s, 0.07, 0.165);
+    // antler: main beam with tines
+    const beam = new THREE.Group();
+    beam.position.set(0.08 * s, 0.18, -0.02);
+    beam.rotation.z = -0.5 * s;
+    beam.rotation.x = -0.3;
+    add(beam, new THREE.CylinderGeometry(0.018, 0.028, 0.55, 5), bone, 0, 0.27, 0);
+    for (let t = 0; t < 3; t++) {
+      const tine = add(beam, new THREE.CylinderGeometry(0.01, 0.018, 0.22, 4), bone, 0.06 * s, 0.18 + t * 0.14, 0.03);
+      tine.rotation.z = -0.9 * s;
+    }
+    head.add(beam);
+  }
+  group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true;
+  });
+  return { group, torso, head, arms, legs, eyes };
+}

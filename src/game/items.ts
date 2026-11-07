@@ -23,7 +23,9 @@ export type ItemType =
   | 'bomba'
   | 'luz'
   | 'antorcha'
-  | 'palanca';
+  | 'palanca'
+  | 'craneo'
+  | 'daga';
 
 export interface ItemInfo {
   type: ItemType;
@@ -99,14 +101,26 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
     desc: 'La suelta el guardián de la arena. Abre la trampilla del sótano: se usa sola al pararte sobre ella.',
     color: '#94a3b8',
   },
+  craneo: {
+    type: 'craneo',
+    name: 'Cráneo de obsidiana',
+    desc: 'Úsalo cuando el Skinwalker esté cerca: lo espanta y huye un rato. Sirve 2 veces.',
+    color: '#7c3aed',
+  },
+  daga: {
+    type: 'daga',
+    name: 'Daga de obsidiana',
+    desc: 'Lo único que lastima al Skinwalker. Úsala cuando lo tengas enfrente; se rompe al primer golpe.',
+    color: '#a78bfa',
+  },
 };
 
-export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave', 'resortera', 'piedra', 'bate', 'red', 'bomba', 'luz', 'antorcha', 'palanca'];
+export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave', 'resortera', 'piedra', 'bate', 'red', 'bomba', 'luz', 'antorcha', 'palanca', 'craneo', 'daga'];
 
 /** Items that pile up in one slot (max per slot) */
 export const STACK_MAX: Partial<Record<ItemType, number>> = { piedra: 12, bomba: 3, luz: 3 };
 /** Tools that break: uses when new */
-export const DURABILITY: Partial<Record<ItemType, number>> = { bate: 12, red: 4, antorcha: 2 };
+export const DURABILITY: Partial<Record<ItemType, number>> = { bate: 12, red: 4, antorcha: 2, craneo: 2, daga: 1 };
 /** How many you get from one pickup */
 const PICKUP_AMOUNT: Partial<Record<ItemType, number>> = { piedra: 6, bomba: 2 };
 /** Only one of these is ever needed in the backpack */
@@ -123,9 +137,11 @@ const ALREADY_HAVE: Record<ItemType, string> = {
   luz: 'Ya tienes orbes de luz: lánzalos antes de tomar más',
   antorcha: 'Ya tienes una antorcha: gástala antes de tomar otra',
   palanca: 'Ya llevas una palanca: úsala en la trampilla antes de tomar otra',
+  craneo: 'Ya tienes un cráneo de obsidiana: gástalo antes de tomar otro',
+  daga: 'Ya tienes una daga: úsala contra el Skinwalker',
 };
 /** Seconds before a pickup appears again */
-const RESPAWN_BY_TYPE: Partial<Record<ItemType, number>> = { piedra: 8, bate: 14, red: 14, resortera: 10, bomba: 9, antorcha: 6 };
+const RESPAWN_BY_TYPE: Partial<Record<ItemType, number>> = { piedra: 8, bate: 14, red: 14, resortera: 10, bomba: 9, antorcha: 6, craneo: 10 };
 
 /** Count shown for a slot: stack size, uses left, or 1. */
 export function defaultCount(type: ItemType): number {
@@ -471,7 +487,7 @@ export class ItemSystem {
       this.emit(`La antorcha prende los candelabros sola: acércate a uno (le ${left === 1 ? 'queda 1 uso' : `quedan ${left} usos`})`);
       return false;
     }
-    if (type === 'bate' || type === 'red' || type === 'bomba' || type === 'luz') {
+    if (type === 'bate' || type === 'red' || type === 'bomba' || type === 'luz' || type === 'craneo' || type === 'daga') {
       const r = ctx.tool ? ctx.tool(type) : 'none';
       if (r === 'none') {
         if (!ctx.tool) this.emit(`${ITEM_INFO[type].name}: sirve en las luchas contra jefes`);
@@ -522,7 +538,11 @@ export class ItemSystem {
           ? '¡Tu bate se rompió! Busca otro en la arena'
           : type === 'antorcha'
             ? '¡Tu antorcha se consumió! Toma otra para seguir prendiendo'
-            : '¡Tu red se rompió! Busca otra en la arena'
+            : type === 'craneo'
+              ? 'El cráneo de obsidiana se hizo polvo: toma otro'
+              : type === 'daga'
+                ? 'La daga se rompió dentro de él… ¡busca otra!'
+                : '¡Tu red se rompió! Busca otra en la arena'
       );
     }
   }

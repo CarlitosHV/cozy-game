@@ -19,7 +19,8 @@ import { buildAeroWorld } from './levelAero';
 import { buildCosmicWorld } from './levelCosmic';
 import { buildSwampWorld } from './levelSwamp';
 import { makeGlowTexture } from './levelKit';
-import { LEVELS, markLevelComplete, isDevMode, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel } from './progress';
+import { LEVELS, markLevelComplete, isDevMode, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel, levelKind } from './progress';
+import { buildBackroomsWorld, buildSkinwalkerArena } from './levelBackrooms';
 import { generateLevel } from './levelGen';
 import { generateBossArena } from './bossArena';
 import { CombatStatus, CombatSystem } from './combat';
@@ -49,6 +50,7 @@ const THEME_ATMOS: Record<ThemeId, { weather: WeatherType; title: string; victor
   aero: { weather: 'aero_day', title: 'Valle Aero', victoryWeather: 'golden_hour', victoryTitle: 'Atardecer Aero', victoryDesc: '¡Llegaste a la Plaza del Globo!' },
   garden: { weather: 'garden_day', title: 'Jardín Gigante', victoryWeather: 'golden_hour', victoryTitle: 'Tarde en el Jardín', victoryDesc: '¡Llegaste al Girasol Gigante!' },
   castle: { weather: 'castle_night', title: 'Castillo Embrujado', victoryWeather: 'starlit_night', victoryTitle: 'Noche Estrellada', victoryDesc: '¡Llegaste a la Torre del Vampiro!' },
+  backrooms: { weather: 'backrooms', title: 'Los Backrooms', victoryWeather: 'backrooms', victoryTitle: 'SALIDA', victoryDesc: '¡Escapaste de los Backrooms!' },
 };
 const atmos = (level: number) => THEME_ATMOS[themeForLevel(level)];
 
@@ -383,6 +385,14 @@ export class GameEngine {
 
     // 7b. Companion Powers (key G) & companion snacks around the islands
     this.companionPowers = new CompanionPowerSystem(this.scene);
+    // Hombre Polilla: in boss fights turning time back also gives you back the life you had
+    this.companionPowers.rewindExtra = {
+      get: () => (this.combat ? this.combat.hp : null),
+      set: (v) => {
+        if (this.combat) this.combat.hp = Math.min(this.combat.maxHp, Math.max(this.combat.hp, v));
+      },
+      blocked: () => (this.isSpectating ? 'Estás mirando a tu equipo' : this.combat?.isDown ? 'Estás desmayado…' : this.combat?.grab ? '¡Primero suéltate!' : null),
+    };
     this.companionPowers.setCompanion(this.playerAppearance.companion, this.physics);
     this.companionPowers.reset(this.physics);
 
@@ -450,6 +460,16 @@ export class GameEngine {
         const start = this.world.checkpoints[0]?.spawnPos;
         if (start && this.physics.position.distanceTo(start) < 4) {
           this.physics.respawnAtCheckpoint(0, false, this.getPartySpawnOffset());
+        }
+      }
+      // Levels that split the party up: once we know our place in the group, go to our own corner
+      // (only if we haven't started walking yet)
+      if (this.world.partySpawns && this.gameState === 'playing' && this.physics.position.distanceTo(this.spawnedAt) < 3) {
+        const off = this.getPartySpawnOffset();
+        const start = this.world.checkpoints[0]?.spawnPos;
+        if (off && start && Math.hypot(start.x + off.x - this.physics.position.x, start.z + off.z - this.physics.position.z) > 1) {
+          this.physics.respawnAtCheckpoint(0, false, off);
+          this.spawnedAt.copy(this.physics.position);
         }
       }
     });
@@ -679,6 +699,12 @@ export class GameEngine {
   }
 
   private buildLevel(level: number): WorldBuildResult {
+    // Levels 15, 25, 35…: the Backrooms (25, 45, 65…: the Skinwalker's hall)
+    if (level > 4 && themeForLevel(level) === 'backrooms') {
+      return isBossLevel(level)
+        ? buildSkinwalkerArena(level, this.levelRoot, this.textures)
+        : buildBackroomsWorld(level, this.levelRoot, this.textures);
+    }
     switch (level) {
       case 2:
         return buildCosmicWorld(this.levelRoot, this.textures);
@@ -946,7 +972,8 @@ export class GameEngine {
 
   public getPartySpawnOffset(customIndex?: number): { x: number; z: number } | undefined {
     if (!this.partyRoomId) return undefined;
-    const offsets: Array<{ x: number; z: number }> = [
+    // Some levels split the party up (the Skinwalker's maze: everyone starts in another corner)
+    const offsets: Array<{ x: number; z: number }> = this.world.partySpawns ?? [
       { x: -0.9, z: 0 },
       { x: 0.9, z: 0 },
       { x: 0, z: 1.2 },
@@ -970,6 +997,22 @@ export class GameEngine {
     }
     const isHost = multiplayerClient.isPartyHostRole();
     return isHost ? offsets[0] : offsets[1];
+  }
+
+  private camRay = new THREE.Raycaster();
+  /** Where this run started (to know if the player already walked away from the spawn) */
+  private spawnedAt = new THREE.Vector3();
+  /** Pulls the camera in front of the first wall/ceiling between it and the player. */
+  private keepCameraInside(followPos: THREE.Vector3) {
+    const pivot = new THREE.Vector3(followPos.x, followPos.y + 1.1, followPos.z);
+    const dir = this.camera.position.clone().sub(pivot);
+    const dist = dir.length();
+    if (dist < 0.3) return;
+    dir.divideScalar(dist);
+    this.camRay.set(pivot, dir);
+    this.camRay.far = dist + 0.3;
+    const hit = this.camRay.intersectObjects(this.world.cameraColliders!, false)[0];
+    if (hit) this.camera.position.copy(pivot).addScaledVector(dir, Math.max(0.35, hit.distance - 0.3));
   }
 
   /** New attempt at the level: no deaths, no rating, no party timer. */
@@ -1046,6 +1089,7 @@ export class GameEngine {
     for (const mb of this.dungeonSystem.miniBosses) out.push({ obj: mb.group, pos: mb.pos });
     if (this.combat) for (const o of this.combat.syncObjects()) out.push({ obj: o });
     if (this.stalker) out.push({ obj: this.stalker.group, pos: this.stalker.position });
+    if (this.world.hazards) out.push(...this.world.hazards.syncObjects());
     return out;
   }
 
@@ -1108,9 +1152,11 @@ export class GameEngine {
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.reset();
     this.dungeonSystem.reset(this.partySize());
+    this.world.hazards?.reset();
     this.reapplySharedWorld();
     this.resetCombat();
     this.physics.respawnAtCheckpoint(0, false, this.getPartySpawnOffset());
+    this.spawnedAt.copy(this.physics.position);
     soundManager.init();
     soundManager.resume();
     if (mode) {
@@ -1403,6 +1449,10 @@ export class GameEngine {
     this.callbacks.onWeatherChange(weather, true);
 
     const descriptions: Record<WeatherType, { title: string; desc: string }> = {
+      backrooms: {
+        title: 'Los Backrooms',
+        desc: 'Zumbido de lámparas y alfombra húmeda',
+      },
       golden_hour: {
         title: 'Hora Dorada',
         desc: 'Luz ámbar cálida y polen resplandeciente',
@@ -1475,6 +1525,7 @@ export class GameEngine {
       this.setGameMode(mode);
     }
     this.physics.respawnAtCheckpoint(0, true, this.getPartySpawnOffset());
+    this.spawnedAt.copy(this.physics.position);
     this.resetCompanionPowers();
     this.physics.resetCollectibles();
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
@@ -1483,6 +1534,7 @@ export class GameEngine {
     this.itemSystem.removeAllOfType('llave');
     this.puzzleSystem.reset();
     this.dungeonSystem.reset(this.partySize());
+    this.world.hazards?.reset();
     this.reapplySharedWorld();
     this.resetCombat();
     this.gameState = 'playing';
@@ -1743,10 +1795,14 @@ export class GameEngine {
   }
 
   // ---------------- Mouse look (pointer lock) ----------------
-  /** A computer with a real mouse (not a phone or tablet). */
+  /** Fingers actually touched the screen (phones, tablets, touch laptops being used by touch) */
+  private usedTouch = false;
+
+  /** A computer with a real mouse (not a phone or tablet). Small windows and touch laptops count. */
   private hasFinePointer(): boolean {
+    if (this.usedTouch) return false;
     try {
-      return !this.isTouchDevice && window.matchMedia('(pointer: fine)').matches;
+      return window.matchMedia('(any-pointer: fine)').matches;
     } catch {
       return !this.isTouchDevice;
     }
@@ -1881,6 +1937,7 @@ export class GameEngine {
 
   private handleTouchStart = (e: TouchEvent) => {
     this.isTouchDevice = true;
+    this.usedTouch = true;
     if (e.touches.length === 2) {
       // Two-finger pinch to zoom camera
       const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -2392,6 +2449,23 @@ export class GameEngine {
       this.dungeonSystem.update(dt, time, this.dungeonCtx());
     }
 
+    // 6b3. The level's own monsters (the Backrooms)
+    if (this.world.hazards && this.gameState === 'playing') {
+      this.world.hazards.update(dt, time, {
+        position: this.physics.position,
+        camera: this.camera,
+        lure: this.companionPowers.lureTarget,
+        spectating: this.isSpectating,
+        caught: (text) => {
+          this.physics.respawnAtCheckpoint();
+          this.countDeath();
+          this.itemSystem.notify(`${text} Vuelves al último punto de control`);
+          soundManager.playGameOver();
+        },
+        notify: (text) => this.itemSystem.notify(text),
+      });
+    }
+
     // 6c. Boss fight (life, tools, the boss) — after physics so it can hold a grabbed player
     if (this.combat && this.gameState === 'playing') {
       this.combat.update(dt, time, this.currentInput);
@@ -2409,14 +2483,15 @@ export class GameEngine {
 
     // 7. Update Weather & Background Clouds
     this.weatherSystem.update(dt, this.physics.position, time);
-    this.applyDarkness(this.combat?.darkness ?? 0);
+    this.applyDarkness(Math.max(this.combat?.darkness ?? 0, this.world.hazards?.darkness ?? 0));
 
     // 7b. Mobile / Touchscreen: Camera smoothly follows behind character.
     // Only for the on-screen joystick: with the keyboard (WASD) the camera is yours (mouse or Q/E),
     // otherwise both fight each other and the view swings around.
     const inputMagnitude = Math.hypot(this.currentInput.forward, this.currentInput.right);
     const isVirtualMove = Math.hypot(this.virtualInput.forward, this.virtualInput.right) > 0.05;
-    const isTouchActive = (this.isTouchDevice || isVirtualMove) && this.autoChaseCamera && !this.pointerLocked;
+    // Never with the keyboard: the camera only turns when you move the mouse or press Q/E
+    const isTouchActive = isVirtualMove && this.autoChaseCamera && !this.pointerLocked;
     const horizSpeed = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
 
     // Track sudden input direction flips (e.g. flicking joystick from left to right or forward to back)
@@ -2543,6 +2618,9 @@ export class GameEngine {
       this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.targetCameraPos.z, 10.0, dt);
       this.camPivot.copy(followPos);
     }
+
+    // Closed rooms (the Backrooms): keep the camera on this side of walls and ceilings
+    if (this.world.cameraColliders?.length) this.keepCameraInside(followPos);
 
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(this.targetLookAt);

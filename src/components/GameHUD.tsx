@@ -137,6 +137,7 @@ const THEME_COMPANION: Record<ThemeId, CompanionStyle> = {
   aero: 'catarina',
   garden: 'hada',
   castle: 'serpiente',
+  backrooms: 'polilla',
 };
 
 const VICTORY_TEXT: Record<number, string> = {
@@ -4484,6 +4485,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
           <div className="text-[11px] text-white/80 drop-shadow-md bg-black/40 px-3 py-1 rounded-full backdrop-blur-xs">
             Usa las teclas <span className="font-bold text-amber-300">E</span> o <span className="font-bold text-amber-300">Q</span> para cambiar de compañero
+          </div>
+        </div>
+      )}
+
+      {power?.companion === 'polilla' && power.state === 'active' && gameState === 'playing' && (
+        <div className="fixed inset-0 z-20 pointer-events-none flex items-start justify-center" data-testid="rewind-overlay">
+          <div className="absolute inset-0 mix-blend-multiply" style={{ background: 'radial-gradient(ellipse at center, rgba(255,240,205,0.05) 30%, rgba(120,90,40,0.55) 100%)' }} />
+          <div className="absolute inset-0" style={{ backdropFilter: 'sepia(0.75) saturate(0.8)', WebkitBackdropFilter: 'sepia(0.75) saturate(0.8)' }} />
+          <div className="relative mt-24 px-4 py-2 rounded-2xl bg-stone-900/80 text-amber-100 font-bold text-sm shadow-xl border border-amber-200/40 flex items-center gap-2">
+            <RotateCcw className="w-4 h-4 animate-spin [animation-direction:reverse]" />
+            Regresando el tiempo…
           </div>
         </div>
       )}

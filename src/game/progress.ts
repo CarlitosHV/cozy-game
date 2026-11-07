@@ -4,7 +4,11 @@
  *    (themes rotate: Acogedor → Cósmico → Pantano → Aero → Jardín → Castillo).
  *  - Levels unlock in order: finish level N to play level N+1.
  *  - Companions unlock every 10 levels: 10 Nubi, 20 Estelita, 30 Chispa, 40 Catarina,
- *    50 Lila (hada), 60 Jade (serpiente voladora).
+ *    50 Lila (hada), 60 Jade (serpiente voladora); the Hombre Polilla comes with the first
+ *    Backrooms (level 15).
+ *  - The Backrooms: levels 15, 25, 35… are a special world (yellow rooms, a warehouse and a
+ *    corridor to run through) with monsters that hunt you (see levelBackrooms.ts); 25, 45, 65…
+ *    are a boss fight against the Skinwalker instead.
  *  - Two generators: "Caja de arena" (open zone with orbs) and "Lucha contra jefes"
  *    (an arena with the world's boss). Which one a level gets is random but fixed per level.
  * Tip for testing: add ?desbloquear=todo to the URL to unlock everything (up to level 61).
@@ -13,7 +17,9 @@
  */
 import type { CompanionStyle } from './character';
 
-export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero' | 'garden' | 'castle';
+export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero' | 'garden' | 'castle' | 'backrooms';
+/** The six open-air worlds (generated zones and boss arenas); the Backrooms have their own builder */
+export type OutdoorThemeId = Exclude<ThemeId, 'backrooms'>;
 
 export interface LevelInfo {
   id: number;
@@ -36,6 +42,7 @@ export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: s
   aero: { name: 'Valle Aero', desc: 'Pradera brillante, cascadas y ciudad de cristal.', accent: '#38bdf8' },
   garden: { name: 'Jardín Gigante', desc: 'Eres diminuto: flores, hojas y gnomos traviesos.', accent: '#f472b6' },
   castle: { name: 'Castillo Embrujado', desc: 'Torres bajo la luna, vampiros, hombres lobo y gárgolas.', accent: '#ef4444' },
+  backrooms: { name: 'Los Backrooms', desc: 'Cuartos amarillos sin fin, zumbido de lámparas y cosas que te siguen.', accent: '#d4b84a' },
 };
 
 // ---------------------------------------------------------------------------
@@ -43,7 +50,7 @@ export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: s
 // ---------------------------------------------------------------------------
 export interface DevLevelPick {
   level: number;
-  kind: 'sandbox' | 'boss';
+  kind: 'sandbox' | 'boss' | 'backrooms';
   theme: ThemeId;
 }
 export const DEV_MAX_LEVEL = 61;
@@ -83,7 +90,8 @@ export function getDevLevelPick(): DevLevelPick | null {
 
 /** Theme of any level: 1 to 6 in order (cozy, cosmic, swamp, aero, garden, castle), then looping smoothly. */
 export function themeForLevel(level: number): ThemeId {
-  if (devPick && devPick.level === level) return devPick.theme;
+  if (devPick && devPick.level === level) return devPick.kind === 'backrooms' ? 'backrooms' : devPick.theme;
+  if (isBackroomsLevel(level)) return 'backrooms';
   const idx = Math.max(0, Math.floor(level) - 1);
   return THEME_ORDER[idx % THEME_ORDER.length];
 }
@@ -92,8 +100,8 @@ export function themeForLevel(level: number): ThemeId {
 // Level generators: from level 5 on, each level is (at random, but always the same for a
 // given number) either a "Caja de arena" open zone or a "Lucha contra jefe" arena.
 // ---------------------------------------------------------------------------
-export type LevelKind = 'handmade' | 'sandbox' | 'boss';
-export type BossKind = 'bird' | 'glitch' | 'ufo' | 'skeleton' | 'gnome' | 'dracula';
+export type LevelKind = 'handmade' | 'sandbox' | 'boss' | 'backrooms';
+export type BossKind = 'bird' | 'glitch' | 'ufo' | 'skeleton' | 'gnome' | 'dracula' | 'skinwalker';
 
 /** One boss per world. */
 export const BOSS_FOR_THEME: Record<ThemeId, BossKind> = {
@@ -103,6 +111,8 @@ export const BOSS_FOR_THEME: Record<ThemeId, BossKind> = {
   swamp: 'skeleton',
   garden: 'gnome',
   castle: 'dracula',
+  // Levels 25, 45, 65…: the Skinwalker hunts you through the Backrooms
+  backrooms: 'skinwalker',
 };
 
 export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: string; steps: string[] }> = {
@@ -167,6 +177,20 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
       'Mientras está atrapado, golpéalo con el bate, piedras o cayéndole encima',
     ],
   },
+  skinwalker: {
+    name: 'El Skinwalker de los Backrooms',
+    short: 'Skinwalker',
+    desc: 'Una criatura con cráneo de venado que imita voces y te caza en la penumbra.',
+    steps: [
+      'El Skinwalker te caza: cuando se agacha, se va a lanzar sobre ti. ¡Esquívalo!',
+      'Toma un cráneo de obsidiana y úsalo cuando esté cerca: grita y huye un rato',
+      'Mientras huye, busca la daga de obsidiana (un brillo morado en algún cuarto)',
+      'Con la daga en la mano, déjalo acercarse y úsala cuando lo tengas enfrente',
+      'La daga se rompe al primer golpe: espántalo otra vez y busca otra',
+      'Suelta copias de ti y de tus amigos que se estiran como animales: rómpelas con el bate o piedras',
+      'Si escuchas que alguien te llama… no es tu amigo',
+    ],
+  },
   dracula: {
     name: 'El Conde Drácula',
     short: 'Drácula',
@@ -196,7 +220,14 @@ function mulberry(seed: number) {
 export function levelKind(level: number): LevelKind {
   if (level <= 4) return 'handmade';
   if (devPick && devPick.level === level) return devPick.kind;
+  // Every other Backrooms (25, 45, 65…) is the Skinwalker's hunting ground
+  if (isBackroomsLevel(level)) return level % 20 === 5 ? 'boss' : 'backrooms';
   return mulberry(level * 7717 + 3 * 131)() < 0.3 ? 'boss' : 'sandbox';
+}
+
+/** Levels 15, 25, 35… fall into the Backrooms. */
+export function isBackroomsLevel(level: number): boolean {
+  return level >= 15 && level % 10 === 5;
 }
 
 export function isBossLevel(level: number): boolean {
@@ -208,11 +239,11 @@ export function bossForLevel(level: number): BossKind | null {
 }
 
 /** Relics (crystals and acorns) in each kind of level — the generators place exactly these. */
-export const RELICS = { handmade: 12, zone: 25, boss: 8 } as const;
+export const RELICS = { handmade: 12, zone: 25, boss: 8, backrooms: 12 } as const;
 
 export function levelTotalCollectibles(level: number): number {
   const kind = levelKind(level);
-  return kind === 'handmade' ? RELICS.handmade : kind === 'boss' ? RELICS.boss : RELICS.zone;
+  return kind === 'handmade' ? RELICS.handmade : kind === 'boss' ? RELICS.boss : kind === 'backrooms' ? RELICS.backrooms : RELICS.zone;
 }
 
 export function levelInfo(level: number): LevelInfo {
@@ -316,6 +347,20 @@ export function levelHowTo(level: number, mode?: string): LevelHowTo {
     };
   }
 
+  if (levelKind(level) === 'backrooms') {
+    return {
+      title: `Nivel ${level} · Los Backrooms`,
+      goal: 'Encuentra la salida antes de que algo te encuentre a ti',
+      steps: [
+        'Cruza el laberinto de cuartos amarillos hasta la puerta del almacén',
+        'El Maniquí solo se mueve cuando no lo ves: no le quites la vista de encima',
+        'El Gateador te oye de cerca: corre (Shift) y no te metas a callejones sin salida',
+        'En el almacén se van las luces: en lo oscuro sale la Sonrisa. Salta los fosos y sube por las cajas',
+        'En el pasillo rojo, ¡corre sin parar hasta la puerta de SALIDA!',
+      ],
+    };
+  }
+
   if (level === 5) {
     return {
       title: 'Nivel 5 · Jardín Gigante',
@@ -350,6 +395,7 @@ export const LEVELS: LevelInfo[] = [1, 2, 3, 4, 5].map(levelInfo);
 /** Companions earned every 10 levels. */
 export const COMPANION_UNLOCKS: { companion: CompanionStyle; level: number }[] = [
   { companion: 'nube', level: 10 },
+  { companion: 'polilla', level: 15 },
   { companion: 'estrella', level: 20 },
   { companion: 'luciernaga', level: 30 },
   { companion: 'catarina', level: 40 },

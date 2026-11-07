@@ -203,9 +203,39 @@ export function createToolModel(type: ItemType): THREE.Group {
       return makeTorch();
     case 'palanca':
       return makeCrowbar();
+    case 'craneo':
+      return makeObsidianSkull();
+    case 'daga':
+      return makeObsidianDagger();
     default:
       return new THREE.Group();
   }
+}
+
+/** Black glassy skull with violet glints (scares the Skinwalker) */
+function makeObsidianSkull(): THREE.Group {
+  const g = new THREE.Group();
+  const obs = std(0x1c1426, 0.12, { metalness: 0.4, emissive: 0x2e1065, emissiveIntensity: 0.5 });
+  const cranium = add(g, new THREE.SphereGeometry(0.22, 14, 12), obs, 0, 0.05, 0);
+  cranium.scale.set(1, 0.95, 1.1);
+  const jaw = add(g, new THREE.BoxGeometry(0.24, 0.1, 0.2), obs, 0, -0.14, 0.07);
+  jaw.rotation.x = 0.15;
+  const holeM = new THREE.MeshBasicMaterial({ color: 0xa855f7 });
+  for (const s of [1, -1]) add(g, new THREE.SphereGeometry(0.05, 8, 6), holeM, 0.08 * s, 0.05, 0.19);
+  add(g, new THREE.ConeGeometry(0.03, 0.06, 3), holeM, 0, -0.04, 0.22).rotation.x = Math.PI;
+  return g;
+}
+
+/** Single-use obsidian dagger (the only thing that hurts the Skinwalker) */
+function makeObsidianDagger(): THREE.Group {
+  const g = new THREE.Group();
+  const blade = std(0x241a33, 0.08, { metalness: 0.5, emissive: 0x4c1d95, emissiveIntensity: 0.6 });
+  const b = add(g, new THREE.ConeGeometry(0.07, 0.5, 4), blade, 0, 0.18, 0);
+  b.scale.z = 0.35;
+  add(g, new THREE.BoxGeometry(0.22, 0.04, 0.06), std(0x9ca3af, 0.4, { metalness: 0.8 }), 0, -0.08, 0);
+  add(g, new THREE.CylinderGeometry(0.03, 0.035, 0.2, 8), std(0x5b3a1e, 0.8), 0, -0.2, 0);
+  g.rotation.z = 0.4;
+  return g;
 }
 
 /** Iron crowbar (opens the basement trapdoor in generated levels) */

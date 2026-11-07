@@ -56,6 +56,8 @@ export interface RemoteInfo {
   grabbed: boolean;
   /** Fainted, waiting for CPR */
   down: boolean;
+  /** Their character (the Skinwalker copies it) */
+  look?: CharacterAppearance;
 }
 
 export interface CombatDeps {
@@ -589,6 +591,7 @@ export class CombatSystem {
     if (type === 'bate') return this.swing();
     if (type === 'resortera') return this.shoot('piedra');
     if (type === 'red' || type === 'bomba' || type === 'luz') return this.shoot(type);
+    if (type === 'craneo' || type === 'daga') return this.boss.useItem(type);
     return 'none';
   }
 

@@ -11,7 +11,7 @@ export type HairStyle = 'flequillo' | 'puntas' | 'rapado' | 'coleta' | 'largo' |
 export type HatStyle = 'gorro' | 'gorra' | 'sombrero' | 'orejas' | 'flores' | 'ninguno';
 export type EyeStyle = 'redondos' | 'grandes' | 'felices';
 export type Accessory = 'ninguno' | 'lentes' | 'pecas';
-export type CompanionStyle = 'nube' | 'estrella' | 'luciernaga' | 'catarina' | 'hada' | 'serpiente' | 'ninguno';
+export type CompanionStyle = 'nube' | 'estrella' | 'luciernaga' | 'catarina' | 'hada' | 'serpiente' | 'polilla' | 'ninguno';
 export type OutfitStyle = 'sueter' | 'sudadera' | 'chaqueta' | 'overol' | 'vestido' | 'poncho';
 
 export interface CharacterAppearance {
@@ -156,6 +156,7 @@ export const COMPANIONS: { id: CompanionStyle; name: string; desc: string }[] = 
   { id: 'catarina', name: 'Catarina', desc: 'Mariquita de la suerte' },
   { id: 'hada', name: 'Lila', desc: 'Hada del jardín' },
   { id: 'serpiente', name: 'Jade', desc: 'Serpiente voladora' },
+  { id: 'polilla', name: 'Hombre Polilla', desc: 'Regresa el tiempo' },
   { id: 'ninguno', name: 'Sin compañero', desc: 'Viaje en solitario' },
 ];
 

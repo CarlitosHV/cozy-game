@@ -24,6 +24,8 @@ interface ThemeLook {
   flowers: number[];
   grass: number;
   bird: number;
+  /** Closed rooms (the Backrooms): only floating dust, no sky life or flowers */
+  indoor?: boolean;
 }
 
 const LOOK: Record<ThemeId, ThemeLook> = {
@@ -33,6 +35,7 @@ const LOOK: Record<ThemeId, ThemeLook> = {
   swamp: { particle: 0xd9f99d, particle2: 0xfde047, motion: 'float', island: 0x4d6b3c, rock: 0x55604a, flowers: [0xbef264, 0xfde047, 0xa3e635], grass: 0x4f772d, bird: 0x1c1917 },
   garden: { particle: 0xfbcfe8, particle2: 0xffffff, motion: 'fall', island: 0x7cc46b, rock: 0x9ca3af, flowers: [0xf472b6, 0xfb7185, 0xfacc15, 0xffffff], grass: 0x65a30d, bird: 0x57534e },
   castle: { particle: 0xfb923c, particle2: 0xfde68a, motion: 'rise', island: 0x3f3a4a, rock: 0x4b4458, flowers: [0xdc2626, 0x7c3aed, 0x1f2937], grass: 0x3f4f2f, bird: 0x0c0a09 },
+  backrooms: { particle: 0xfff3c4, particle2: 0xd6c58a, motion: 'float', island: 0, rock: 0, flowers: [], grass: 0, bird: 0, indoor: true },
 };
 
 const DENSITY: Record<Quality, { particles: number; flocks: number; islands: number; flowers: number; puffs: number }> = {
@@ -146,6 +149,7 @@ export class AmbientDecor {
     this.center.copy(center);
 
     this.buildParticles(d.particles, look, rng);
+    if (look.indoor) return;
     this.buildFlowers(world, d.flowers, look, rng);
     this.buildIslands(center, maxR, d.islands, look, rng);
     for (let i = 0; i < d.flocks; i++) this.buildFlock(center, maxR, look, rng, i);

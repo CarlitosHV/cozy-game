@@ -1257,6 +1257,93 @@ export function createPlayerCharacter(
       serpent.rotation.y = Math.sin(t * 0.8) * 0.6;
     };
     companionAnim(0, 0);
+  } else if (look.companion === 'polilla') {
+    // "Hombre Polilla": a small, fuzzy moth-man with big patterned wings and glowing red eyes
+    const moth = new THREE.Group();
+    const furM = new THREE.MeshStandardMaterial({ color: 0x4a4038, roughness: 0.95, flatShading: true });
+    const furL = new THREE.MeshStandardMaterial({ color: 0xbfae94, roughness: 0.95, flatShading: true });
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.026, 0.05, 4, 8), furM);
+    torso.position.y = -0.005;
+    const ruff = new THREE.Mesh(new THREE.IcosahedronGeometry(0.034, 1), furL);
+    ruff.position.y = 0.03;
+    ruff.scale.set(1.1, 0.6, 1);
+    const headM = new THREE.Mesh(new THREE.SphereGeometry(0.028, 12, 10), furM);
+    headM.position.y = 0.058;
+    const redEye = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
+    const glowEye = new THREE.MeshBasicMaterial({ color: 0xff5050, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending });
+    for (const side of [1, -1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.011, 10, 8), redEye);
+      eye.position.set(0.013 * side, 0.062, 0.022);
+      eye.scale.set(1, 1.25, 0.6);
+      const halo = new THREE.Mesh(new THREE.SphereGeometry(0.02, 8, 8), glowEye);
+      halo.position.copy(eye.position);
+      const antenna = new THREE.Mesh(new THREE.ConeGeometry(0.009, 0.05, 4), furL);
+      antenna.position.set(0.012 * side, 0.095, 0.005);
+      antenna.rotation.z = -0.5 * side;
+      antenna.scale.z = 0.3;
+      moth.add(eye, halo, antenna);
+    }
+    moth.add(torso, ruff, headM);
+    // Wings: dusty brown with eye spots, on pivots that flap
+    const wingTex = (() => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const g = c.getContext('2d')!;
+      const grad = g.createLinearGradient(0, 0, 64, 64);
+      grad.addColorStop(0, '#8a7458');
+      grad.addColorStop(1, '#4b3b2c');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 64, 64);
+      g.strokeStyle = 'rgba(30,20,10,0.5)';
+      g.lineWidth = 2;
+      for (let i = 0; i < 5; i++) {
+        g.beginPath();
+        g.moveTo(0, 32);
+        g.lineTo(64, i * 16);
+        g.stroke();
+      }
+      g.fillStyle = '#e8d9b8';
+      g.beginPath();
+      g.arc(40, 28, 9, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#2a1f17';
+      g.beginPath();
+      g.arc(40, 28, 5, 0, Math.PI * 2);
+      g.fill();
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    const wingM = new THREE.MeshStandardMaterial({ map: wingTex, roughness: 0.9, side: THREE.DoubleSide });
+    const mothWings: THREE.Group[] = [];
+    for (const side of [1, -1]) {
+      for (const upper of [true, false]) {
+        const pivot = new THREE.Group();
+        pivot.position.set(0.012 * side, upper ? 0.03 : 0.0, -0.012);
+        const r = upper ? 0.075 : 0.05;
+        const wg = new THREE.CircleGeometry(r, 16);
+        wg.scale(1, upper ? 0.7 : 0.6, 1);
+        wg.translate(r * side, upper ? 0.02 : -0.02, 0);
+        if (side < 0) {
+          // mirror the eye spot
+          const uv = wg.getAttribute('uv') as THREE.BufferAttribute;
+          for (let i = 0; i < uv.count; i++) uv.setX(i, 1 - uv.getX(i));
+        }
+        pivot.add(new THREE.Mesh(wg, wingM));
+        moth.add(pivot);
+        mothWings.push(pivot);
+      }
+    }
+    moth.scale.setScalar(1.6);
+    companionSprite.add(moth);
+    companionAnim = (t) => {
+      const flap = 0.25 + Math.sin(t * 14) * 0.55;
+      mothWings.forEach((p, i) => (p.rotation.y = (i < 2 ? -1 : 1) * flap));
+      moth.position.y = Math.sin(t * 3) * 0.015;
+      moth.rotation.y = Math.sin(t * 0.9) * 0.5;
+      glowEye.opacity = 0.25 + Math.sin(t * 5) * 0.12;
+    };
+    companionAnim(0, 0);
   }
   group.add(companionSprite);
   companionSprite.visible = look.companion !== 'ninguno';

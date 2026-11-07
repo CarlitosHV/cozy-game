@@ -74,6 +74,28 @@ export interface SolidObstacleCollider {
   topY: number;
 }
 
+/** What a level's own monsters need from the game each frame. */
+export interface LevelHazardContext {
+  position: THREE.Vector3;
+  camera: THREE.Camera;
+  /** Chispa's lure: monsters go for it instead of you */
+  lure: THREE.Vector3 | null;
+  /** Watching a friend (spectator mode): nothing can catch you */
+  spectating: boolean;
+  /** You were caught: back to the last checkpoint (counts as a death) */
+  caught: (text: string) => void;
+  notify: (text: string) => void;
+}
+
+export interface LevelHazards {
+  update(dt: number, time: number, ctx: LevelHazardContext): void;
+  reset(): void;
+  /** 0 → 1: lights off (blackouts) */
+  darkness: number;
+  /** Moving pieces that spectators copy from the friend they watch */
+  syncObjects(): { obj: THREE.Object3D; pos?: THREE.Vector3 }[];
+}
+
 export interface WorldBuildResult {
   platforms: PlatformItem[];
   checkpoints: CheckpointItem[];
@@ -109,6 +131,12 @@ export interface WorldBuildResult {
   boss?: BossSetup;
   /** Generated levels: guardian arenas and basement trapdoors (see dungeon.ts) */
   dungeon?: DungeonData;
+  /** Monsters and lights that belong to the level itself (the Backrooms) */
+  hazards?: LevelHazards;
+  /** Walls/ceilings the camera must stay in front of (closed rooms) */
+  cameraColliders?: THREE.Object3D[];
+  /** Party: each player starts at a different spot (offsets from the first checkpoint) */
+  partySpawns?: { x: number; z: number }[];
   /** Rooms far below the map (basements): falling checks are off inside them */
   deepZones?: { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }[];
 }

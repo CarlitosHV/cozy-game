@@ -18,6 +18,7 @@ import {
 } from '../services/multiplayerClient';
 import { apiClient } from '../services/apiClient';
 import { createBoneCage } from './bossModels';
+import type { CharacterAppearance } from './character';
 import { makeLabel } from './combatFx';
 
 interface RemotePlayerEntity {
@@ -129,7 +130,7 @@ function getNameTagTexture(label: string): { texture: THREE.CanvasTexture; aspec
   return entry;
 }
 
-function createNameTagSprite(username: string): THREE.Sprite {
+export function createNameTagSprite(username: string): THREE.Sprite {
   const label = (username || 'Explorador').trim() || 'Explorador';
   const { texture, aspect } = getNameTagTexture(label);
 
@@ -426,13 +427,14 @@ export class RemotePlayersManager {
   }
 
   /** Positions of everyone else in the room (boss fights: rescues, host choice). */
-  public getPlayersInfo(): { userId: string; username: string; pos: THREE.Vector3; grabbed: boolean; down: boolean }[] {
+  public getPlayersInfo(): { userId: string; username: string; pos: THREE.Vector3; grabbed: boolean; down: boolean; look: CharacterAppearance }[] {
     return [...this.players.values()].map((e) => ({
       userId: e.userId,
       username: e.username,
       pos: e.currentPos,
       grabbed: e.grabbed,
       down: e.down,
+      look: e.model.appearance,
     }));
   }
 

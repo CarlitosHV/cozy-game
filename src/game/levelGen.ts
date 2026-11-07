@@ -34,7 +34,7 @@ import { PlatformItem, WorldBuildResult } from './levels';
 import { createLevelKit } from './levelKit';
 import { Builder, createThemePack } from './levelThemes';
 import { ItemSpot } from './items';
-import { RELICS, THEME_INFO, themeForLevel, ThemeId } from './progress';
+import { OutdoorThemeId, RELICS, THEME_INFO, themeForLevel, ThemeId } from './progress';
 import { ExtraKind, spawnExtraEnemy } from './enemiesExtra';
 import { emptyDungeon, MiniBoss, Trapdoor } from './dungeon';
 import type { SolidObstacleCollider } from './levels';
@@ -69,7 +69,7 @@ function mulberry32(seed: number) {
 
 /** Relics on the open zone (+1 on the summit = RELICS.zone, the total the menus show) */
 const RELICS_IN_ZONE = RELICS.zone - 1;
-const STONE: Record<ThemeId, number> = { cozy: 0xa08a7a, cosmic: 0x6d6a8f, swamp: 0x55604a, aero: 0x6fb7dc, garden: 0x9ca3af, castle: 0x4b4458 };
+const STONE: Record<OutdoorThemeId, number> = { cozy: 0xa08a7a, cosmic: 0x6d6a8f, swamp: 0x55604a, aero: 0x6fb7dc, garden: 0x9ca3af, castle: 0x4b4458 };
 const ORB_COLORS = [0xf472b6, 0x38bdf8, 0xfacc15, 0x4ade80, 0xc084fc];
 
 type Puzzle = 'rock' | 'vault' | 'thief' | 'stealth' | 'dungeon';
@@ -152,7 +152,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   };
   const diff = difficultyForLevel(level);
   const kit = createLevelKit(root, textures);
-  const themeId = themeForLevel(level);
+  const themeId = themeForLevel(level) as OutdoorThemeId;
   const theme = createThemePack(themeId, kit, textures);
   const accent = parseInt(THEME_INFO[themeId].accent.slice(1), 16);
   const terrainBuilder = theme.terrain ?? theme.big;
@@ -1477,7 +1477,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
 export function addOpenBackdrop(
   root: THREE.Object3D,
   textures: ProceduralTextures,
-  themeId: ThemeId,
+  themeId: OutdoorThemeId,
   playR: number,
   animators: ((dt: number, time: number) => void)[]
 ) {

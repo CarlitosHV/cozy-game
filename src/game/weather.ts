@@ -105,6 +105,17 @@ export const WEATHER_PRESETS: Record<WeatherType, WeatherPreset> = {
     hemiGroundColor: 0x1c1428,
     hemiIntensity: 0.85,
   },
+  backrooms: {
+    // The Backrooms: stale yellow haze under humming fluorescent lamps
+    skyColor: 0x3a3218,
+    fogColor: 0xc9b56a,
+    fogDensity: 0.028,
+    sunColor: 0xfff4c8,
+    sunIntensity: 1.25,
+    hemiSkyColor: 0xfff0b0,
+    hemiGroundColor: 0x7a6a34,
+    hemiIntensity: 1.35,
+  },
   starlit_night: {
     skyColor: 0x0d1321,
     fogColor: 0x1d2d44,

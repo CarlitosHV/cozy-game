@@ -3,7 +3,17 @@
  * 100% Web Audio API - Zero external MP3/audio files (Zero 404s).
  */
 
-export type WeatherType = 'golden_hour' | 'cozy_rain' | 'sakura_breeze' | 'starlit_night' | 'aero_day' | 'cosmic' | 'swamp_mist' | 'garden_day' | 'castle_night';
+export type WeatherType =
+  | 'golden_hour'
+  | 'cozy_rain'
+  | 'sakura_breeze'
+  | 'starlit_night'
+  | 'aero_day'
+  | 'cosmic'
+  | 'swamp_mist'
+  | 'garden_day'
+  | 'castle_night'
+  | 'backrooms';
 
 class SoundtrackSynthesizer {
   private ctx: AudioContext | null = null;
@@ -24,6 +34,8 @@ class SoundtrackSynthesizer {
   private rainGainNode: GainNode | null = null;
   private nightGainNode: GainNode | null = null;
   private windNode: AudioNode | null = null;
+  /** The Backrooms: buzz of the fluorescent lamps */
+  private humGain: GainNode | null = null;
   private nightNode: AudioNode | null = null;
   private isRainGenerating: boolean = false;
   private currentWeather: WeatherType = 'golden_hour';
@@ -300,8 +312,8 @@ class SoundtrackSynthesizer {
         this.nightGainNode.gain.setTargetAtTime(0.22, now, timeConstant);
       }
     } else {
-      // Golden Hour
-      wGain.gain.setTargetAtTime(0.08, now, timeConstant);
+      // Golden Hour (and the windless Backrooms)
+      wGain.gain.setTargetAtTime(this.currentWeather === 'backrooms' ? 0.0 : 0.08, now, timeConstant);
       if (this.rainGainNode) {
         this.rainGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
       }
@@ -309,6 +321,37 @@ class SoundtrackSynthesizer {
         this.nightGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
       }
     }
+    this.setHum(this.currentWeather === 'backrooms', timeConstant);
+  }
+
+  /** Low electric buzz of old fluorescent lamps (only in the Backrooms). */
+  private setHum(on: boolean, timeConstant: number) {
+    if (!this.ctx || !this.ambientGain) return;
+    if (!this.humGain) {
+      if (!on) return;
+      this.humGain = this.ctx.createGain();
+      this.humGain.gain.value = 0;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 420;
+      for (const [freq, type, g] of [
+        [60, 'sawtooth', 0.5],
+        [120, 'square', 0.18],
+        [180, 'sawtooth', 0.1],
+      ] as [number, OscillatorType, number][]) {
+        const osc = this.ctx.createOscillator();
+        osc.type = type;
+        osc.frequency.value = freq;
+        const og = this.ctx.createGain();
+        og.gain.value = g;
+        osc.connect(og);
+        og.connect(filter);
+        osc.start();
+      }
+      filter.connect(this.humGain);
+      this.humGain.connect(this.ambientGain);
+    }
+    this.humGain.gain.setTargetAtTime(on ? 0.05 : 0, this.ctx.currentTime, timeConstant);
   }
 
   private ensureRainLoop() {

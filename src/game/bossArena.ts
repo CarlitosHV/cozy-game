@@ -19,7 +19,7 @@ import { WorldBuildResult } from './levels';
 import { createLevelKit } from './levelKit';
 import { Builder, createThemePack } from './levelThemes';
 import { ItemSpot, ItemType } from './items';
-import { BOSS_FOR_THEME, BOSS_INFO, BossKind, RELICS, THEME_INFO, themeForLevel } from './progress';
+import { BOSS_FOR_THEME, BOSS_INFO, BossKind, OutdoorThemeId, RELICS, THEME_INFO, themeForLevel } from './progress';
 import { addOpenBackdrop, difficultyForLevel } from './levelGen';
 import { VictoryPortalModel } from './models';
 
@@ -49,6 +49,14 @@ export interface BossSetup {
   food: { pos: THREE.Vector3; kind: 'burger' | 'fries' }[];
   portal: VictoryPortalModel;
   portalPos: THREE.Vector3;
+  /** Skinwalker: pillars and walls it walks around (center + half sizes) */
+  obstacles?: { x: number; z: number; hx: number; hz: number }[];
+  /** Skinwalker: where the obsidian dagger can show up */
+  searchSpots?: THREE.Vector3[];
+  /** Maze arenas: next point to walk to on the way from one place to another */
+  navStep?: (from: THREE.Vector3, to: THREE.Vector3) => THREE.Vector3;
+  /** Maze arenas: rooms between two places (0 = same room) */
+  cellDist?: (a: THREE.Vector3, b: THREE.Vector3) => number;
 }
 
 function mulberry32(seed: number) {
@@ -68,7 +76,7 @@ const HALF = (N * TILE) / 2; // 30
 
 export function generateBossArena(level: number, root: THREE.Object3D, textures: ProceduralTextures): WorldBuildResult & { boss: BossSetup } {
   const rng = mulberry32(level * 4241 + 7);
-  const themeId = themeForLevel(level);
+  const themeId = themeForLevel(level) as OutdoorThemeId;
   const kind = BOSS_FOR_THEME[themeId];
   const info = BOSS_INFO[kind];
   const diff = difficultyForLevel(level);
