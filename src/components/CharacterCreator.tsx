@@ -134,12 +134,14 @@ export const COMPANION_ICONS: Record<CompanionStyle, React.ReactNode> = {
   ),
   serpiente: (
     <svg viewBox="0 0 24 24" className="w-4 h-4" aria-hidden="true">
-      <path d="M3 17c3-6 6 2 9-4s6-3 6-7" fill="none" stroke="#34d399" strokeWidth="3.4" strokeLinecap="round" />
-      <path d="M3 17c3-6 6 2 9-4s6-3 6-7" fill="none" stroke="#fde68a" strokeWidth="1" strokeDasharray="1 2.2" strokeLinecap="round" />
-      <circle cx="18.5" cy="5" r="3" fill="#10b981" />
-      <circle cx="19.5" cy="4.3" r="0.8" fill="#111" />
-      <path d="M16.5 3 l-1.5 -2 M20 2.6 l0.6 -2.2" stroke="#fde047" strokeWidth="1" strokeLinecap="round" />
-      <path d="M10 11 l-2.5 -3.5 3.8 1.6z" fill="#fde047" />
+      <path d="M3 18c3-6 6 2 9-4s5-3 5-7" fill="none" stroke="#14b8a6" strokeWidth="3.4" strokeLinecap="round" />
+      <path d="M3 18c3-6 6 2 9-4s5-3 5-7" fill="none" stroke="#fde68a" strokeWidth="1" strokeDasharray="1 2.2" strokeLinecap="round" />
+      <path d="M2.5 18.5 l-1.8 -2.6 M2.8 18.6 l-2.4 -0.4 M3 18.8 l-0.6 2.6" stroke="#ef4444" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M9 12 l-3.2 -3.6 1.6 0.2 -0.6 -1.8 2.6 2.6z" fill="#22c55e" />
+      <path d="M17 1.2 l0.6 2.4 M13.6 2.6 l2 1.6 M20.6 2.4 l-1.6 2 M22.6 5.6 l-2.4 0.4 M13.2 6.2 l2.4 -0.2" stroke="#ef4444" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M15.2 1.8 l1 2.2 M21.8 3.6 l-2 1.4 M14 4.4 l2.1 0.8" stroke="#facc15" strokeWidth="1.2" strokeLinecap="round" />
+      <circle cx="17.6" cy="6" r="2.9" fill="#0d9488" />
+      <circle cx="18.6" cy="5.4" r="0.8" fill="#111" />
     </svg>
   ),
   polilla: (

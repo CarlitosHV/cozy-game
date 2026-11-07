@@ -5,7 +5,7 @@
  *  - Chispa (luciernaga): glowing lure that distracts enemies and the Stalker
  *  - Catarina (catarina): rescues you if you fall off the islands
  *  - Lila (hada):         fairy dust — a second jump in mid-air
- *  - Jade (serpiente):    flies around you and knocks down enemies (and their projectiles) that get close
+ *  - Quetsy (serpiente, a mini feathered serpent):    flies around you and knocks down enemies (and their projectiles) that get close
  *  - Hombre Polilla (polilla): turns time back up to 5 seconds — you fly back along the path you
  *    took (and, in boss fights, get back the life you had then)
  *
@@ -88,11 +88,11 @@ export const COMPANION_POWERS: Partial<Record<CompanionStyle, CompanionPowerInfo
   },
   serpiente: {
     companion: 'serpiente',
-    companionName: 'Jade',
+    companionName: 'Quetsy',
     powerName: 'Guardiana',
-    desc: 'Jade vuela a tu alrededor y derriba a los enemigos y proyectiles que se acercan.',
+    desc: 'Quetsy, la mini serpiente emplumada, vuela a tu alrededor y derriba a los enemigos y proyectiles que se acercan (en los Backrooms espanta a los monstruos).',
     duration: 10,
-    activeText: '¡Jade te protege! Los enemigos cercanos caen',
+    activeText: '¡Quetsy te protege! Los enemigos cercanos caen',
     color: '#34d399',
   },
 };
@@ -107,7 +107,7 @@ interface TimeSnap {
   x: number | null;
 }
 
-/** Enemies Jade can reach while guarding */
+/** Enemies Quetsy can reach while guarding */
 export interface PowerFoes {
   enemies?: EnemyManager | null;
   stalker?: AetherStalker | null;
@@ -158,6 +158,11 @@ function createLureModel(): THREE.Group {
 export class CompanionPowerSystem {
   public companion: CompanionStyle = 'nube';
   public state: PowerState = 'ready';
+
+  /** Quetsy is guarding you right now (the Backrooms monsters back off too) */
+  public get isGuarding(): boolean {
+    return this.companion === 'serpiente' && this.state === 'active';
+  }
   public timeLeft = 0;
   public duration = 0;
   /** Where Chispa's lure is while distracting (null when inactive) */
@@ -172,7 +177,7 @@ export class CompanionPowerSystem {
   /** Lila: pink ring burst under your feet on every air jump */
   private dustRing: THREE.Mesh;
   private dustT = 1;
-  /** Jade: glowing ring circling the player while guarding */
+  /** Quetsy: glowing ring circling the player while guarding */
   private guardRing: THREE.Group;
   private guardPos = new THREE.Vector3();
   /** Hombre Polilla: the last seconds of your path, and the copy being played backwards */
@@ -470,7 +475,7 @@ export class CompanionPowerSystem {
         }
       }
 
-      // Jade guards you: enemies and projectiles that get close are knocked down
+      // Quetsy guards you: enemies and projectiles that get close are knocked down
       if (this.companion === 'serpiente') {
         this.guardPos.set(physics.position.x, physics.position.y + 0.7, physics.position.z);
         this.guardRing.position.copy(this.guardPos);
@@ -494,7 +499,7 @@ export class CompanionPowerSystem {
         if (st && !st.isStunned && st.position.distanceTo(physics.position) < 4.5) {
           st.isStunned = true;
           st.stunTimer = 3;
-          this.emit('¡Jade espantó al Acechador!');
+          this.emit('¡Quetsy espantó al Acechador!');
         }
       }
 

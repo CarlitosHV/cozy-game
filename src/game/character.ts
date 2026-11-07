@@ -155,7 +155,7 @@ export const COMPANIONS: { id: CompanionStyle; name: string; desc: string }[] = 
   { id: 'luciernaga', name: 'Chispa', desc: 'Luciérnaga brillante' },
   { id: 'catarina', name: 'Catarina', desc: 'Mariquita de la suerte' },
   { id: 'hada', name: 'Lila', desc: 'Hada del jardín' },
-  { id: 'serpiente', name: 'Jade', desc: 'Serpiente voladora' },
+  { id: 'serpiente', name: 'Quetsy', desc: 'Mini serpiente emplumada' },
   { id: 'polilla', name: 'Hombre Polilla', desc: 'Regresa el tiempo' },
   { id: 'ninguno', name: 'Sin compañero', desc: 'Viaje en solitario' },
 ];

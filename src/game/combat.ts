@@ -227,7 +227,7 @@ export class CombatSystem {
   private actionCd = 0;
   /** Attacks a companion is shielding you from: tag → seconds left */
   private immune: Record<string, number> = {};
-  /** Jade guarding you: helpers of the boss that come close get eaten */
+  /** Quetsy guarding you: helpers of the boss that come close get eaten */
   public guardT = 0;
   /** Hombre Polilla: seconds the boss stays frozen in time */
   public bossFreezeT = 0;

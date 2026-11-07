@@ -149,7 +149,7 @@ export abstract class BossController {
     this.c.deps.items.spawnDrop(type, V(p.x + 0.6, p.y + 0.95, p.z));
   }
 
-  /** Jade (guardian) eats boss helpers that come close to you. */
+  /** Quetsy (guardian) eats boss helpers that come close to you. */
   protected guarding(pos: THREE.Vector3): boolean {
     return this.c.guardT > 0 && pos.distanceTo(this.c.playerPos) < 2.6;
   }
@@ -510,7 +510,7 @@ class BirdBoss extends BossController {
       }
       if (this.guarding(cr.pos)) {
         this.dropCrow(cr);
-        this.c.say('¡Jade se comió un cuervo!', 'jade-crow', 2);
+        this.c.say('¡Quetsy se comió un cuervo!', 'jade-crow', 2);
         continue;
       }
       const target = V();
@@ -626,7 +626,7 @@ class BirdBoss extends BossController {
       case 'serpiente':
         return {
           name: 'Guardiana',
-          desc: 'Jade se come a los cuervos que se te acerquen por 12 s',
+          desc: 'Quetsy se come a los cuervos que se te acerquen por 12 s',
           target: me,
           run: () => {
             this.c.guardT = 12;
@@ -947,7 +947,7 @@ class GlitchBoss extends BossController {
     for (const cl of [...this.clones]) {
       if (cl.state !== 'drop' && this.guarding(cl.pos)) {
         this.killClone(cl, true);
-        this.c.say('¡Jade se comió una copia! Recoge su orbe', 'jade-clone', 2);
+        this.c.say('¡Quetsy se comió una copia! Recoge su orbe', 'jade-clone', 2);
       }
     }
   }
@@ -998,7 +998,7 @@ class GlitchBoss extends BossController {
       case 'serpiente':
         return {
           name: 'Guardiana',
-          desc: 'Jade se come las copias que se te acercan (sueltan su orbe) por 12 s',
+          desc: 'Quetsy se come las copias que se te acercan (sueltan su orbe) por 12 s',
           target: me,
           run: () => {
             this.c.guardT = 12;
@@ -1290,7 +1290,7 @@ class UfoBoss extends BossController {
       if (a.state !== 'drop' && this.guarding(a.pos)) {
         a.hp = 0;
         this.hurtAlien(a, 9);
-        this.c.say('¡Jade se comió un alien!', 'jade-alien', 2);
+        this.c.say('¡Quetsy se comió un alien!', 'jade-alien', 2);
         continue;
       }
       const dx = p.x - a.pos.x;
@@ -1421,7 +1421,7 @@ class UfoBoss extends BossController {
       case 'serpiente':
         return {
           name: 'Guardiana',
-          desc: 'Jade se come a los aliens que se te acercan por 12 s',
+          desc: 'Quetsy se come a los aliens que se te acercan por 12 s',
           target: me,
           run: () => {
             this.c.guardT = 12;
@@ -2046,7 +2046,7 @@ class SkeletonBoss extends BossController {
       case 'serpiente':
         return {
           name: 'Cazadora de huesos',
-          desc: 'Jade derriba a todos los esqueletos bailarines',
+          desc: 'Quetsy derriba a todos los esqueletos bailarines',
           target: me,
           run: () => {
             for (const d of this.dancers) {
@@ -2104,7 +2104,7 @@ class SkeletonBoss extends BossController {
         d.yaw = turnTo(d.yaw, Math.atan2(dx, dz), 6, dt);
         if (this.guarding(d.pos)) {
           this.collapse(d);
-          this.c.say('¡Jade derribó a un esqueleto!', 'jade-dancer', 2);
+          this.c.say('¡Quetsy derribó a un esqueleto!', 'jade-dancer', 2);
           continue;
         }
         if (dist < 0.85 && Math.abs(p.y - d.pos.y) < 1.5 && !this.c.isImmune('grab')) {
@@ -2673,7 +2673,7 @@ class GnomeBoss extends BossController {
       }
       if (mi.state !== 'rise' && this.guarding(mi.pos)) {
         this.poof(mi);
-        this.c.say('¡Jade se comió un gnomo!', 'jade-gnome', 2);
+        this.c.say('¡Quetsy se comió un gnomo!', 'jade-gnome', 2);
         continue;
       }
       if (mi.state === 'rise') {
@@ -2816,7 +2816,7 @@ class GnomeBoss extends BossController {
       case 'serpiente':
         return {
           name: 'Guardiana',
-          desc: 'Jade se come a los gnomos que se te acercan por 12 s',
+          desc: 'Quetsy se come a los gnomos que se te acercan por 12 s',
           target: me,
           run: () => {
             this.c.guardT = 12;
@@ -3262,7 +3262,7 @@ class DraculaBoss extends BossController {
       case 'serpiente':
         return {
           name: 'Muralla',
-          desc: 'Jade te rodea: las manos de sombra no te agarran por 15 s',
+          desc: 'Quetsy te rodea: las manos de sombra no te agarran por 15 s',
           target: me,
           anytime: true,
           run: () => {
@@ -3652,7 +3652,7 @@ class SkinwalkerBoss extends BossController {
         if (!this.lungeHit && d < 1.6 && Math.abs(p.y - this.pos.y) < 2.2) {
           this.lungeHit = true;
           if (this.guarding(this.pos)) {
-            this.c.say('¡Jade lo mordió! Retrocede', 'skin-jade', 2);
+            this.c.say('¡Quetsy lo mordió! Retrocede', 'skin-jade', 2);
             this.scare(false);
             break;
           }
@@ -3877,7 +3877,7 @@ class SkinwalkerBoss extends BossController {
         }
         const d = Math.hypot(p.x - c.pos.x, p.z - c.pos.z);
         if (this.guarding(c.pos)) {
-          this.c.say('¡Jade se comió una copia!', 'skin-jade-copy', 2);
+          this.c.say('¡Quetsy se comió una copia!', 'skin-jade-copy', 2);
           this.killCopy(c);
           continue;
         }
@@ -4055,11 +4055,18 @@ class SkinwalkerBoss extends BossController {
         };
       case 'serpiente':
         return {
-          name: 'Guardiana',
-          desc: 'Jade lo muerde si se lanza contra ti en los próximos 12 s',
+          name: 'Guardiana emplumada',
+          desc: 'Quetsy se come a los perros cercanos y, por 12 s, muerde al Skinwalker si se lanza y a cualquier copia que se acerque',
           target: me,
           run: () => {
             this.c.guardT = 12;
+            let n = 0;
+            for (const cp of this.copies)
+              if (cp.phase !== 'die' && cp.pos.distanceTo(this.c.playerPos) < 8) {
+                this.killCopy(cp);
+                n++;
+              }
+            if (n) this.c.say(`¡Quetsy se comió ${n === 1 ? 'una copia' : n + ' copias'}!`, 'act-quetsy', 1);
           },
         };
       default:

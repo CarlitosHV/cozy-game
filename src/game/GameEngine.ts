@@ -2497,6 +2497,7 @@ export class GameEngine {
         consume: (type) => this.itemSystem.consume(type),
         has: (type) => this.itemSystem.has(type),
         shift: (o) => this.shiftView(o),
+        guarding: this.companionPowers.isGuarding,
       });
     }
 

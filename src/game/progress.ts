@@ -4,7 +4,7 @@
  *    (themes rotate: Acogedor → Cósmico → Pantano → Aero → Jardín → Castillo).
  *  - Levels unlock in order: finish level N to play level N+1.
  *  - Companions unlock every 10 levels: 10 Nubi, 20 Estelita, 30 Chispa, 40 Catarina,
- *    50 Lila (hada), 60 Jade (serpiente voladora); the Hombre Polilla comes with the first
+ *    50 Lila (hada), 60 Quetsy (mini serpiente emplumada); the Hombre Polilla comes with the first
  *    Backrooms (level 15).
  *  - The Backrooms: levels 15, 25, 35… are a special world (yellow rooms, a warehouse and a
  *    corridor to run through) with monsters that hunt you (see levelBackrooms.ts); 25, 45, 65…

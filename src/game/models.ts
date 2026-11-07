@@ -1201,49 +1201,88 @@ export function createPlayerCharacter(
       (fAura.material as THREE.MeshBasicMaterial).opacity = 0.1 + Math.sin(t * 6) * 0.05;
     };
   } else if (look.companion === 'serpiente') {
-    // "Jade": a little flying jade serpent (eastern dragon style) whose body ripples through the air
+    // "Quetsy": a mini feathered serpent — turquoise scales, a crown of red, gold and blue feathers
+    // around the head, little feathered wings and a fan of tail plumes; the body ripples as it flies
     const serpent = new THREE.Group();
-    const jadeA = new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.35, metalness: 0.1, emissive: 0x064e3b, emissiveIntensity: 0.25 });
-    const jadeB = new THREE.MeshStandardMaterial({ color: 0x34d399, roughness: 0.35, metalness: 0.1, emissive: 0x065f46, emissiveIntensity: 0.25 });
-    const goldM = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.3, metalness: 0.7 });
+    const scaleA = new THREE.MeshStandardMaterial({ color: 0x0d9488, roughness: 0.35, metalness: 0.15, emissive: 0x064e3b, emissiveIntensity: 0.25 });
+    const scaleB = new THREE.MeshStandardMaterial({ color: 0x2dd4bf, roughness: 0.35, metalness: 0.15, emissive: 0x115e59, emissiveIntensity: 0.25 });
+    const belly = new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.5 });
+    const featherMats = [0xef4444, 0xfacc15, 0x22c55e, 0x3b82f6].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.55, side: THREE.DoubleSide, emissive: c, emissiveIntensity: 0.12 }));
+    const featherGeo = new THREE.PlaneGeometry(0.018, 0.06);
+    featherGeo.translate(0, 0.03, 0);
+    const feather = (mat: THREE.Material, len = 1) => {
+      const f = new THREE.Mesh(featherGeo, mat);
+      f.scale.set(1, len, 1);
+      return f;
+    };
     const segs: THREE.Mesh[] = [];
     const N = 12;
     for (let i = 0; i < N; i++) {
-      const r = 0.032 - i * 0.0019;
-      const sgm = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), i % 2 ? jadeB : jadeA);
-      if (i % 3 === 1) {
-        const fin = new THREE.Mesh(new THREE.ConeGeometry(r * 0.45, r * 1.4, 4), goldM);
-        fin.position.y = r * 0.9;
-        sgm.add(fin);
+      const r = 0.03 - i * 0.0017;
+      const sgm = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), i % 2 ? scaleB : scaleA);
+      // pale belly stripe
+      const bl = new THREE.Mesh(new THREE.SphereGeometry(r * 0.7, 8, 6), belly);
+      bl.position.y = -r * 0.45;
+      sgm.add(bl);
+      // a row of little feathers along the back
+      if (i % 2 === 0 && i > 0 && i < N - 2) {
+        const f = feather(featherMats[(i / 2) % 4], 0.6);
+        f.position.y = r * 0.8;
+        f.rotation.x = -0.6;
+        sgm.add(f);
       }
       serpent.add(sgm);
       segs.push(sgm);
     }
-    const headS = new THREE.Group();
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 10), jadeA);
-    skull.scale.set(1, 0.85, 1.25);
-    const snout = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), jadeB);
-    snout.position.set(0, -0.008, 0.04);
-    snout.scale.set(1.1, 0.7, 1);
-    const sEye1 = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 6), eyeMat);
-    sEye1.position.set(0.022, 0.014, 0.03);
-    const sEye2 = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 6), eyeMat);
-    sEye2.position.set(-0.022, 0.014, 0.03);
-    headS.add(skull, snout, sEye1, sEye2);
+    // Feathered wings on the third segment
+    const wings: THREE.Group[] = [];
     for (const side of [1, -1]) {
-      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.007, 0.045, 5), goldM);
-      horn.position.set(0.018 * side, 0.04, -0.012);
-      horn.rotation.x = -0.6;
-      const whisker = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.001, 0.07, 3), goldM);
-      whisker.position.set(0.03 * side, -0.012, 0.05);
-      whisker.rotation.set(0.4, 0, -1.1 * side);
-      const wingS = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.06, 3), new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.4, transparent: true, opacity: 0.85 }));
-      wingS.position.set(0.035 * side, 0.01, -0.06);
-      wingS.rotation.z = -1.3 * side;
-      wingS.scale.z = 0.3;
-      headS.add(horn, whisker);
-      segs[2].add(wingS);
+      const w = new THREE.Group();
+      w.position.set(0.02 * side, 0.01, 0);
+      for (let k = 0; k < 4; k++) {
+        const f = feather(featherMats[k], 1.1 - k * 0.12);
+        f.rotation.z = -side * (1.0 + k * 0.28);
+        f.rotation.y = side * 0.3;
+        w.add(f);
+      }
+      segs[2].add(w);
+      wings.push(w);
     }
+    // Tail plumes
+    const tail = new THREE.Group();
+    for (let k = 0; k < 5; k++) {
+      const f = feather(featherMats[k % 4], 1.3);
+      f.rotation.x = -Math.PI / 2 - 0.3;
+      f.rotation.y = (k - 2) * 0.35;
+      tail.add(f);
+    }
+    segs[N - 1].add(tail);
+    // Head: snout, big friendly eyes, and a crown of feathers all around
+    const headS = new THREE.Group();
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.038, 12, 10), scaleA);
+    skull.scale.set(1, 0.85, 1.2);
+    const snout = new THREE.Mesh(new THREE.SphereGeometry(0.024, 10, 8), scaleB);
+    snout.position.set(0, -0.008, 0.038);
+    snout.scale.set(1.1, 0.7, 1);
+    const sEye1 = new THREE.Mesh(new THREE.SphereGeometry(0.0095, 6, 6), eyeMat);
+    sEye1.position.set(0.021, 0.013, 0.028);
+    const sEye2 = new THREE.Mesh(new THREE.SphereGeometry(0.0095, 6, 6), eyeMat);
+    sEye2.position.set(-0.021, 0.013, 0.028);
+    const tongue = new THREE.Mesh(new THREE.ConeGeometry(0.004, 0.03, 4), new THREE.MeshStandardMaterial({ color: 0xf43f5e }));
+    tongue.rotation.x = Math.PI / 2;
+    tongue.position.set(0, -0.014, 0.068);
+    headS.add(skull, snout, sEye1, sEye2, tongue);
+    const crown = new THREE.Group();
+    const NC = 11;
+    for (let k = 0; k < NC; k++) {
+      const a = -Math.PI * 0.85 + (k / (NC - 1)) * Math.PI * 1.7;
+      const f = feather(featherMats[k % 4], 0.9 + (k % 2) * 0.35);
+      // fan around the back of the head, like a ruff
+      f.position.set(Math.sin(a) * 0.032, Math.cos(a) * 0.032 + 0.005, -0.012);
+      f.rotation.set(-0.5, 0, -a);
+      crown.add(f);
+    }
+    headS.add(crown);
     serpent.add(headS);
     serpent.scale.setScalar(1.3);
     companionSprite.add(serpent);
@@ -1254,6 +1293,12 @@ export function createPlayerCharacter(
       }
       headS.position.set(Math.sin(t * 3.2 + 0.55) * 0.045, Math.cos(t * 2.4 + 0.44) * 0.03 - 0.004, 0.012);
       headS.rotation.y = Math.cos(t * 3.2 + 0.55) * 0.5;
+      const flap = Math.sin(t * 14) * 0.45;
+      wings[0].rotation.y = flap;
+      wings[1].rotation.y = -flap;
+      crown.scale.setScalar(1 + Math.sin(t * 5) * 0.06);
+      tail.rotation.z = Math.sin(t * 4) * 0.3;
+      tongue.visible = Math.sin(t * 2.3) > 0.85;
       serpent.rotation.y = Math.sin(t * 0.8) * 0.6;
     };
     companionAnim(0, 0);

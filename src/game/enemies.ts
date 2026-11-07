@@ -89,7 +89,7 @@ export class EnemyManager {
   public registerEnemy(e: CozyEnemy) {
     this.enemies.push(e);
   }
-  /** Removes enemy projectiles near a point (Jade's guardian power). Returns how many. */
+  /** Removes enemy projectiles near a point (Quetsy's guardian power). Returns how many. */
   public clearProjectilesNear(pos: THREE.Vector3, radius: number): number {
     let n = 0;
     for (let i = this.projectiles.length - 1; i >= 0; i--) {

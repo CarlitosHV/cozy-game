@@ -484,6 +484,7 @@ class BackroomsHazards implements LevelHazards {
   private lastP = new THREE.Vector3();
   private flashes: { mesh: THREE.Mesh; t: number }[] = [];
   private loopMsgCd = 0;
+  private quetsyCd = 0;
   private solved = false;
 
   constructor(
@@ -696,6 +697,7 @@ class BackroomsHazards implements LevelHazards {
     this.grace = Math.max(0, this.grace - dt);
     this.warnCd = Math.max(0, this.warnCd - dt);
     this.loopMsgCd = Math.max(0, this.loopMsgCd - dt);
+    this.quetsyCd = Math.max(0, this.quetsyCd - dt);
     const cam = ctx.camera;
     cam.updateMatrixWorld();
     this.m4.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
@@ -890,6 +892,28 @@ class BackroomsHazards implements LevelHazards {
       m.model.anim(time, moving, dt);
       m.model.group.position.set(m.pos.x + shake, m.pos.y, m.pos.z);
       m.model.group.rotation.y = m.yaw;
+
+      // Quetsy guarding you: whatever comes close gets bitten and backs off
+      if (ctx.guarding && !stunned && !ctx.spectating && (m.kind !== 'sonrisa' || m.fade > 0.3) && (m.kind !== 'corredor' || m.active)) {
+        const gx = m.pos.x - P.x;
+        const gz = m.pos.z - P.z;
+        if (gx * gx + gz * gz < 3.4 * 3.4 && Math.abs(m.pos.y - P.y) < 3) {
+          if (m.kind === 'corredor') {
+            m.pos.z = Math.max(this.corr.z0, m.pos.z - 8);
+            m.stunT = 2.5;
+          } else if (m.kind === 'sonrisa') {
+            m.stunT = 5;
+          } else {
+            this.sendHome(m);
+          }
+          soundManager.playEnemyBonk();
+          if (this.quetsyCd <= 0) {
+            this.quetsyCd = 2;
+            ctx.notify(`¡Quetsy mordió ${NAMES[m.kind].replace(/^el /, 'al ').replace(/^una /, 'a una ')} y lo espantó!`);
+          }
+          continue;
+        }
+      }
 
       // Caught!
       const dangerous = !stunned && (m.kind === 'sonrisa' ? m.fade > 0.6 : m.kind === 'corredor' ? m.active : true);

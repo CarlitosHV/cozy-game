@@ -93,6 +93,8 @@ export interface LevelHazardContext {
   has?: (type: ItemType) => boolean;
   /** Moves you and the camera by an offset in one frame, without a visible jump (endless corridor) */
   shift?: (offset: THREE.Vector3) => void;
+  /** Quetsy (the feathered serpent) is guarding you: monsters that come close are scared off */
+  guarding?: boolean;
 }
 
 /** Extra HUD info of a level with its own rules (the Backrooms: hearts, the key, the levers) */
