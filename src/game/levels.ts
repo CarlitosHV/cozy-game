@@ -35,12 +35,16 @@ import { ItemSpot } from './items';
 import type { ItemType, ToolResult } from './items';
 import type { PuzzleData } from './puzzles';
 
+export type PlatformSurfaceType = 'grass' | 'stone' | 'wood' | 'cloud' | 'soil' | 'crystal';
+
 export interface PlatformItem {
   id: string;
   type: 'static' | 'moving' | 'bouncy' | 'updraft' | 'crumbling';
   position: THREE.Vector3;
   size: THREE.Vector3;
   mesh: THREE.Object3D;
+  /** Surface material type for physics, step sounds and logical contextual vegetation/decor */
+  surface?: PlatformSurfaceType;
   /** Tall walls, doors and push rocks: always block the player sideways, even while standing on another floor */
   solid?: boolean;
   movement?: {
@@ -307,6 +311,7 @@ export function buildCozyParkourWorld(
       size: new THREE.Vector3(w, h, d),
       mesh: group,
       originalY: y,
+      surface,
     };
     platforms.push(platform);
     return platform;
@@ -613,8 +618,27 @@ export function buildCozyParkourWorld(
   });
   registerShrineColliders('shrine_3', new THREE.Vector3(-17.5, 24.5, 102.0));
 
+  // Stone planter box with rich soil for the Sakura tree on the Celestial Spire stone terrace
+  const planterGroup = new THREE.Group();
+  planterGroup.position.set(-21.0, 24.5, 103.0);
+  const planterRim = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.4, 1.5, 0.45, 12),
+    stoneMat
+  );
+  planterRim.position.y = 0.225;
+  planterRim.castShadow = true;
+  planterRim.receiveShadow = true;
+  const planterSoil = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.25, 1.25, 0.46, 12),
+    new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.95 })
+  );
+  planterSoil.position.y = 0.23;
+  planterGroup.add(planterRim, planterSoil);
+  scene.add(planterGroup);
+  decorativeMeshes.push(planterGroup);
+
   const sakuraTree2 = createCozyTree('sakura', 1.3, textures);
-  sakuraTree2.position.set(-21.0, 24.5, 103.0);
+  sakuraTree2.position.set(-21.0, 24.5 + 0.45, 103.0);
   scene.add(sakuraTree2);
   decorativeMeshes.push(sakuraTree2);
   registerCylinderCollider('tree_sakura_cp3', -21.0, 24.5, 103.0, 0.48, 4.5);

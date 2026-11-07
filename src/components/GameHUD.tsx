@@ -1290,9 +1290,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const isParty = multiplayerClient.isInPartyRoom();
     if (!isParty && (gameState !== 'playing' || isAnyModalOpen)) return;
     if (isParty && gameState !== 'playing' && gameState !== 'paused') return;
+    let lastTick = performance.now();
     const interval = setInterval(() => {
-      setElapsedTime((prev) => prev + 1);
-    }, 1000);
+      const now = performance.now();
+      const deltaSec = (now - lastTick) / 1000;
+      lastTick = now;
+      setElapsedTime((prev) => prev + deltaSec);
+    }, 200);
     return () => clearInterval(interval);
   }, [gameState, isAnyModalOpen]);
 
@@ -1314,25 +1318,25 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     prevCollectedRef.current = collectedCount;
   }, [collectedCount, gameState]);
 
-  // Realtime FPS measurement loop
+  // Realtime FPS measurement from GameEngine's actual render loop
   useEffect(() => {
     if (!showFps) return;
-    let frames = 0;
-    let lastTime = performance.now();
-    let animId: number;
-    const loop = () => {
-      frames++;
-      const now = performance.now();
-      if (now >= lastTime + 1000) {
-        setFps(Math.round((frames * 1000) / (now - lastTime)));
-        frames = 0;
-        lastTime = now;
+    if (engine) {
+      if (typeof engine.currentFps === 'number' && engine.currentFps > 0) {
+        setFps(engine.currentFps);
       }
-      animId = requestAnimationFrame(loop);
-    };
-    animId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animId);
-  }, [showFps]);
+      engine.onFps = (val) => setFps(val);
+      const interval = setInterval(() => {
+        if (typeof engine.currentFps === 'number' && engine.currentFps > 0) {
+          setFps(engine.currentFps);
+        }
+      }, 250);
+      return () => {
+        clearInterval(interval);
+        if (engine.onFps) engine.onFps = undefined;
+      };
+    }
+  }, [showFps, engine]);
 
   // Live Canvas Filter in Photo Mode
   useEffect(() => {

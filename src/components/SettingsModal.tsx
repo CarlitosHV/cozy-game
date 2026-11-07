@@ -54,6 +54,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const saved = localStorage.getItem('cozy_auto_chase');
     return saved !== null ? saved === 'true' : true;
   });
+  const [fpsLimit, setFpsLimit] = useState<'30' | '60' | '120' | 'unlimited'>(() => {
+    return (localStorage.getItem('cozy_fps_limit') as '30' | '60' | '120' | 'unlimited') || 'unlimited';
+  });
+  const [renderDistance, setRenderDistance] = useState<50 | 70 | 100>(() => {
+    const saved = localStorage.getItem('cozy_render_distance');
+    if (saved === '50' || saved === '70' || saved === '100') return Number(saved) as 50 | 70 | 100;
+    return 100;
+  });
 
   useEffect(() => {
     soundManager.setMusicVolume(musicVol * 0.45);
@@ -88,6 +96,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
     localStorage.setItem('cozy_auto_chase', String(autoChase));
   }, [autoChase, engine]);
+
+  useEffect(() => {
+    if (engine) {
+      engine.setFpsLimit(fpsLimit);
+    }
+    localStorage.setItem('cozy_fps_limit', fpsLimit);
+  }, [fpsLimit, engine]);
+
+  useEffect(() => {
+    if (engine) {
+      engine.setRenderDistance(renderDistance);
+    }
+    localStorage.setItem('cozy_render_distance', String(renderDistance));
+  }, [renderDistance, engine]);
 
   if (!isOpen) return null;
 
@@ -265,6 +287,74 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span className="text-[9px] opacity-75">{g.sub}</span>
               </button>
             ))}
+          </div>
+
+          {/* FPS Limiter (30, 60, 120, unlimited) */}
+          <div className="space-y-1.5 p-3 rounded-2xl bg-cozy-panel-deep border border-cozy-line">
+            <div className="flex justify-between items-center text-xs text-cozy-ink font-medium">
+              <span>{isEs ? 'Límite de fotogramas (FPS)' : 'Framerate limit (FPS)'}</span>
+              <span className="text-cozy-accent-deep font-mono text-[11px]">
+                {fpsLimit === '30' ? '30 FPS' : fpsLimit === '60' ? '60 FPS' : fpsLimit === '120' ? '120 FPS' : isEs ? 'Ilimitado (Sin tope)' : 'Unlimited (Unlocked)'}
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-1.5 pt-1">
+              {(
+                [
+                  { id: '30' as const, label: '30', sub: 'FPS' },
+                  { id: '60' as const, label: '60', sub: 'FPS' },
+                  { id: '120' as const, label: '120', sub: 'FPS' },
+                  { id: 'unlimited' as const, label: isEs ? 'Máx' : 'Max', sub: isEs ? 'Ilimitado' : 'Uncapped' },
+                ] as const
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFpsLimit(f.id)}
+                  className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl text-center transition-all cursor-pointer border ${
+                    fpsLimit === f.id ? 'cozy-tab-active border-cozy-accent' : 'cozy-btn text-cozy-muted border-cozy-line'
+                  }`}
+                >
+                  <span className="text-xs font-bold">{f.label}</span>
+                  <span className="text-[9px] opacity-75">{f.sub}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Distancia de Renderizado (50%, 70%, 100%) */}
+          <div className="space-y-1.5 p-3 rounded-2xl bg-cozy-panel-deep border border-cozy-line">
+            <div className="flex justify-between items-center text-xs text-cozy-ink font-medium">
+              <span>{isEs ? 'Distancia de renderizado' : 'Render distance'}</span>
+              <span className="text-cozy-accent-deep font-mono text-[11px]">
+                {renderDistance}%
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              {(
+                [
+                  { id: 50 as const, label: '50%', sub: isEs ? 'Corta · Más FPS' : 'Short · Max FPS' },
+                  { id: 70 as const, label: '70%', sub: isEs ? 'Media · Equilibrada' : 'Medium · Balanced' },
+                  { id: 100 as const, label: '100%', sub: isEs ? 'Completa · Lejana' : 'Full · Far view' },
+                ] as const
+              ).map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => setRenderDistance(d.id)}
+                  className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl text-center transition-all cursor-pointer border ${
+                    renderDistance === d.id ? 'cozy-tab-active border-cozy-accent' : 'cozy-btn text-cozy-muted border-cozy-line'
+                  }`}
+                >
+                  <span className="text-xs font-bold">{d.label}</span>
+                  <span className="text-[9px] opacity-75">{d.sub}</span>
+                </button>
+              ))}
+            </div>
+            <span className="text-[10px] text-cozy-muted block pt-0.5">
+              {isEs
+                ? 'Oculta plataformas lejanas y detrás de la cámara para elevar los fotogramas'
+                : 'Culls far platforms and behind the camera to boost framerate'}
+            </span>
           </div>
 
           <div className="p-3 rounded-2xl bg-cozy-panel-deep border border-cozy-line flex items-center justify-between gap-3">

@@ -101,14 +101,98 @@ export interface GameEngineCallbacks {
   onDeathsChange?: (deaths: number) => void;
   /** Party: seconds left to reach the goal after a friend finished (null = no timer) */
   onPartyTimer?: (secondsLeft: number | null) => void;
+  /** Actual rendered frames per second update */
+  onFpsUpdate?: (fps: number) => void;
 }
 
 /** Seconds the rest of the party has to reach the goal once someone finished */
 export const PARTY_FINISH_SECONDS = 90;
 
+export type FpsLimit = '30' | '60' | '120' | 'unlimited';
+export type RenderDistancePercent = 50 | 70 | 100;
+
 export class GameEngine {
   private container: HTMLElement;
   private callbacks: GameEngineCallbacks;
+  public currentFps: number = 60;
+  public onFps?: (fps: number) => void;
+  public reTriggerLoop?: () => void;
+
+  public fpsLimit: FpsLimit = (() => {
+    try {
+      const saved = localStorage.getItem('cozy_fps_limit');
+      if (saved === '30' || saved === '60' || saved === '120' || saved === 'unlimited') return saved as FpsLimit;
+      return 'unlimited';
+    } catch {
+      return 'unlimited';
+    }
+  })();
+
+  public renderDistance: RenderDistancePercent = (() => {
+    try {
+      const saved = localStorage.getItem('cozy_render_distance');
+      if (saved === '50' || saved === '70' || saved === '100') return Number(saved) as RenderDistancePercent;
+      return 100;
+    } catch {
+      return 100;
+    }
+  })();
+
+  public setFpsLimit(limit: FpsLimit) {
+    this.fpsLimit = limit;
+    try {
+      localStorage.setItem('cozy_fps_limit', limit);
+    } catch {}
+    if (limit === '30') {
+      this.currentFps = 30;
+      this.callbacks.onFpsUpdate?.(30);
+      this.onFps?.(30);
+    } else if (limit === '60') {
+      this.currentFps = 60;
+      this.callbacks.onFpsUpdate?.(60);
+      this.onFps?.(60);
+    } else if (limit === '120') {
+      this.currentFps = 120;
+      this.callbacks.onFpsUpdate?.(120);
+      this.onFps?.(120);
+    }
+    this.reTriggerLoop?.();
+  }
+
+  public setRenderDistance(percent: RenderDistancePercent) {
+    this.renderDistance = percent;
+    try {
+      localStorage.setItem('cozy_render_distance', String(percent));
+    } catch {}
+    this.applyRenderDistance();
+  }
+
+  public applyRenderDistance() {
+    if (!this.camera) return;
+    const pct = this.renderDistance;
+    if (pct === 50) {
+      this.camera.far = 75;
+    } else if (pct === 70) {
+      this.camera.far = 135;
+    } else {
+      this.camera.far = 260;
+    }
+    this.camera.updateProjectionMatrix();
+
+    if (this.scene && this.scene.fog && 'density' in this.scene.fog) {
+      const fog = this.scene.fog as THREE.FogExp2;
+      const base = 0.008;
+      if (pct === 50) {
+        fog.density = 0.022;
+      } else if (pct === 70) {
+        fog.density = 0.013;
+      } else {
+        fog.density = base;
+      }
+    }
+
+    this.updatePlatformCulling(true);
+  }
 
   // Three.js core
   public renderer!: THREE.WebGLRenderer;
@@ -421,6 +505,7 @@ export class GameEngine {
     this.weatherSystem.onTransitionChange = (target, progress, finished) => {
       this.callbacks.onWeatherChange(target, !finished);
     };
+    this.applyRenderDistance();
 
     // 8b. Online Multiplayer Remote Players Manager
     this.remotePlayers = new RemotePlayersManager(this.scene, this.textures);
@@ -846,6 +931,7 @@ export class GameEngine {
     this.weatherSystem.setWeather(this.levelWeather(), 0.2);
     soundManager.setWeather(this.levelWeather(), 1.5);
     this.callbacks.onWeatherChange(this.levelWeather(), true);
+    this.applyRenderDistance();
     if (!this.isSoftwareGl) {
       this.renderer.compile(this.scene, this.camera);
     }
@@ -2087,33 +2173,87 @@ export class GameEngine {
       frameId = window.setTimeout(poll, 5);
     };
 
+    let lastRenderTime = performance.now();
+    let fpsFrames = 0;
+    let fpsLastTime = performance.now();
+
+    const scheduleNext = (cb: () => void) => {
+      if (this.isSoftwareGl) {
+        afterDraw(cb);
+      } else if (this.fpsLimit === '120') {
+        this.frameId = window.setTimeout(cb, 7);
+      } else if (this.fpsLimit === 'unlimited') {
+        this.frameId = window.setTimeout(cb, 0);
+      } else {
+        this.frameId = requestAnimationFrame(cb);
+      }
+    };
+
+    this.reTriggerLoop = () => {
+      window.cancelAnimationFrame(this.frameId);
+      window.clearTimeout(this.frameId);
+      lastRenderTime = performance.now();
+      scheduleNext(tick);
+    };
+
     const tick = () => {
       if (this.isDisposed) return;
+
+      const now = performance.now();
+
+      // Precise pacing
+      if (this.fpsLimit === '30') {
+        const elapsed = now - lastRenderTime;
+        // Skip frames under 30.0ms to guarantee strictly 30 FPS without fluctuating to 45
+        if (elapsed < 30.0) {
+          scheduleNext(tick);
+          return;
+        }
+        lastRenderTime = now;
+      } else if (this.fpsLimit === '60') {
+        const elapsed = now - lastRenderTime;
+        // Skip sub-frame jitter under 14.5ms on 120Hz/144Hz displays to strictly lock to 60 FPS
+        if (elapsed < 14.5) {
+          scheduleNext(tick);
+          return;
+        }
+        lastRenderTime = now;
+      } else if (this.fpsLimit === '120') {
+        const elapsed = now - lastRenderTime;
+        if (elapsed < 7.2) {
+          scheduleNext(tick);
+          return;
+        }
+        lastRenderTime = now;
+      } else {
+        lastRenderTime = now;
+      }
 
       this.clock.update();
       const rawDt = this.clock.getDelta();
       const dt = Math.min(rawDt, 0.05);
       const elapsedTime = this.clock.getElapsed();
 
-      const now = performance.now();
       const wallDt = Math.min(Math.max(0, (now - this.lastWallTime) / 1000), 2.0);
       this.lastWallTime = now;
 
       this.update(dt, elapsedTime, wallDt);
       this.renderer.render(this.scene, this.camera);
 
-      if (this.isSoftwareGl) {
-        afterDraw(tick);
-      } else {
-        this.frameId = requestAnimationFrame(tick);
+      // Real rendered game frames measurement
+      fpsFrames++;
+      if (now >= fpsLastTime + 350) {
+        this.currentFps = Math.max(1, Math.round((fpsFrames * 1000) / (now - fpsLastTime)));
+        fpsFrames = 0;
+        fpsLastTime = now;
+        this.callbacks.onFpsUpdate?.(this.currentFps);
+        this.onFps?.(this.currentFps);
       }
+
+      scheduleNext(tick);
     };
 
-    if (this.isSoftwareGl) {
-      afterDraw(tick);
-    } else {
-      this.frameId = requestAnimationFrame(tick);
-    }
+    scheduleNext(tick);
   }
 
   private update(dt: number, time: number, wallDt: number) {
@@ -2379,67 +2519,71 @@ export class GameEngine {
 
     // 6. Physics Step
     const prevCollectibles = this.physics.collectedCount;
-    this.physics.update(
-      dt,
-      this.currentInput,
-      this.cameraYaw,
-      (cpName) => {
-        const cpIdx = this.physics.currentCheckpointIndex;
-        this.callbacks.onCheckpointChange(cpName, cpIdx + 1);
+    const onCheckpoint = (cpName: string) => {
+      const cpIdx = this.physics.currentCheckpointIndex;
+      this.callbacks.onCheckpointChange(cpName, cpIdx + 1);
 
-        // Mode specific checkpoint bonuses
-        if (this.gameMode === 'time_trial') {
-          this.addTimeTrialBonus(15, 'Punto de Control (+15s)');
-        } else if (this.gameMode === 'chase' && this.stalker) {
-          this.stalker.setCheckpointSpeed(cpIdx + 1);
-        }
-
-        // Milestone-triggered smooth weather transitions (level 1 only; Valle Aero stays sunny)
-        if (this.currentLevel !== 1) {
-          // no weather change
-        } else if (cpIdx === 1) {
-          // Checkpoint 2: Windy Canopy
-          this.transitionWeather(
-            'sakura_breeze',
-            3.5,
-            'milestone',
-            'Brisa de Sakura',
-            'Pétalos al viento al alcanzar el Dosel Ventoso'
-          );
-        } else if (cpIdx === 2) {
-          // Checkpoint 3: Celestial Spire
-          this.transitionWeather(
-            'cozy_rain',
-            3.5,
-            'milestone',
-            'Lluvia Acogedora',
-            'Gotas suaves y niebla en la Aguja Celestial'
-          );
-        }
-      },
-      () => {
-        // Milestone: Summit Victory! (finishing a level unlocks its companion)
-        // Developer mode never touches the saved progress
-        this.lastUnlocked = isDevMode() ? null : markLevelComplete(this.currentLevel);
-        if (this.stalker) {
-          this.stalker.isStunned = true;
-          this.stalker.stunTimer = 999;
-        }
-        const theme = atmos(this.currentLevel);
-        this.transitionWeather(theme.victoryWeather, 4.5, 'milestone', theme.victoryTitle, theme.victoryDesc);
-
-        const rating = this.rateRun(false);
-        if (this.partyRoomId) {
-          multiplayerClient.emitPlayerFinish(this.currentLevel, rating.timeSeconds, this.physics.collectedCount, rating);
-          this.startSpectating(undefined, 1, rating.timeSeconds);
-          soundManager.playVictory();
-        } else {
-          this.gameState = 'victory';
-          this.callbacks.onStateChange('victory');
-          soundManager.playVictory();
-        }
+      // Mode specific checkpoint bonuses
+      if (this.gameMode === 'time_trial') {
+        this.addTimeTrialBonus(15, 'Punto de Control (+15s)');
+      } else if (this.gameMode === 'chase' && this.stalker) {
+        this.stalker.setCheckpointSpeed(cpIdx + 1);
       }
-    );
+
+      // Milestone-triggered smooth weather transitions (level 1 only; Valle Aero stays sunny)
+      if (this.currentLevel !== 1) {
+        // no weather change
+      } else if (cpIdx === 1) {
+        // Checkpoint 2: Windy Canopy
+        this.transitionWeather(
+          'sakura_breeze',
+          3.5,
+          'milestone',
+          'Brisa de Sakura',
+          'Pétalos al viento al alcanzar el Dosel Ventoso'
+        );
+      } else if (cpIdx === 2) {
+        // Checkpoint 3: Celestial Spire
+        this.transitionWeather(
+          'cozy_rain',
+          3.5,
+          'milestone',
+          'Lluvia Acogedora',
+          'Gotas suaves y niebla en la Aguja Celestial'
+        );
+      }
+    };
+
+    const onSummit = () => {
+      // Milestone: Summit Victory! (finishing a level unlocks its companion)
+      // Developer mode never touches the saved progress
+      this.lastUnlocked = isDevMode() ? null : markLevelComplete(this.currentLevel);
+      if (this.stalker) {
+        this.stalker.isStunned = true;
+        this.stalker.stunTimer = 999;
+      }
+      const theme = atmos(this.currentLevel);
+      this.transitionWeather(theme.victoryWeather, 4.5, 'milestone', theme.victoryTitle, theme.victoryDesc);
+
+      const rating = this.rateRun(false);
+      if (this.partyRoomId) {
+        multiplayerClient.emitPlayerFinish(this.currentLevel, rating.timeSeconds, this.physics.collectedCount, rating);
+        this.startSpectating(undefined, 1, rating.timeSeconds);
+        soundManager.playVictory();
+      } else {
+        this.gameState = 'victory';
+        this.callbacks.onStateChange('victory');
+        soundManager.playVictory();
+      }
+    };
+
+    if (dt > 0.022) {
+      const halfDt = dt * 0.5;
+      this.physics.update(halfDt, this.currentInput, this.cameraYaw, onCheckpoint, onSummit);
+      this.physics.update(halfDt, this.currentInput, this.cameraYaw, onCheckpoint, onSummit);
+    } else {
+      this.physics.update(dt, this.currentInput, this.cameraYaw, onCheckpoint, onSummit);
+    }
 
     // 6b. Puzzles (push blocks, doors, key carriers, sentinels)
     if (this.world.puzzles && this.gameState === 'playing') {
@@ -2662,6 +2806,7 @@ export class GameEngine {
 
     // Fade out foliage or trees that block the camera view of the player
     this.updateTreeOcclusion(dt);
+    this.updatePlatformCulling();
 
     this.ambience.update(dt, time, followPos);
 
@@ -2695,6 +2840,71 @@ export class GameEngine {
         this.playerModel.group.rotation.y,
         anim
       );
+    }
+  }
+
+  private lastCullCheck = 0;
+  private _camFwd = new THREE.Vector3();
+  private _toPlatform = new THREE.Vector3();
+
+  /**
+   * Distance and frustum culling:
+   * Hides distant platforms according to renderDistance setting (50%, 70%, 100%)
+   * and culls platforms that are behind the camera outside the player's immediate circle.
+   */
+  public updatePlatformCulling(force = false) {
+    if (!this.world || !this.world.platforms || !this.camera) return;
+    const now = performance.now();
+    if (!force && now - this.lastCullCheck < 40) return;
+    this.lastCullCheck = now;
+
+    const pct = this.renderDistance;
+    // 50% = ~46m, 70% = ~76m, 100% = ~145m
+    const maxDist = pct === 50 ? 46 : pct === 70 ? 76 : 145;
+    const maxDistSq = maxDist * maxDist;
+
+    const camPos = this.camera.position;
+    const playerPos = this.physics.position;
+    this.camera.getWorldDirection(this._camFwd);
+
+    const platforms = this.world.platforms;
+    const currentPlatform = this.physics.currentPlatform;
+    const len = platforms.length;
+
+    for (let i = 0; i < len; i++) {
+      const p = platforms[i];
+      if (!p.mesh) continue;
+
+      // Never cull the platform the player is actively standing on
+      if (p === currentPlatform) {
+        if (!p.mesh.visible) p.mesh.visible = true;
+        continue;
+      }
+
+      // 1. Distance check from player (squared distance for maximum performance)
+      const dx = p.position.x - playerPos.x;
+      const dy = (p.position.y - playerPos.y) * 0.7;
+      const dz = p.position.z - playerPos.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+
+      if (distSq > maxDistSq) {
+        if (p.mesh.visible) p.mesh.visible = false;
+        continue;
+      }
+
+      // 2. Behind camera check ("ni hacia atrás")
+      // Only cull if outside the 8-meter safety circle around player/camera
+      this._toPlatform.set(p.position.x - camPos.x, p.position.y - camPos.y, p.position.z - camPos.z);
+      const camDist = this._toPlatform.length();
+      if (camDist > 8.0) {
+        const dot = (this._toPlatform.x * this._camFwd.x + this._toPlatform.y * this._camFwd.y + this._toPlatform.z * this._camFwd.z) / camDist;
+        if (dot < -0.15) {
+          if (p.mesh.visible) p.mesh.visible = false;
+          continue;
+        }
+      }
+
+      if (!p.mesh.visible) p.mesh.visible = true;
     }
   }
 

@@ -63,7 +63,7 @@ export class ParkourPhysics {
   public isMovementLocked: boolean = false;
 
   // Attached moving platform
-  private currentPlatform: PlatformItem | null = null;
+  public currentPlatform: PlatformItem | null = null;
   private platformVelocity: THREE.Vector3 = new THREE.Vector3();
 
   // Character dimensions & physical parameters

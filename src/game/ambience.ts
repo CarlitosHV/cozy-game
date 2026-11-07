@@ -16,7 +16,7 @@
  * Purely decorative: nothing here collides or takes part in the game.
  */
 import * as THREE from 'three';
-import type { WorldBuildResult } from './levels';
+import type { WorldBuildResult, PlatformItem, PlatformSurfaceType } from './levels';
 import { ThemeId } from './progress';
 import { buildBackdrop, Backdrop } from './backdrops';
 
@@ -75,52 +75,108 @@ const G = {
   box: (w: number, h: number, d: number, y = h / 2) => () => new THREE.BoxGeometry(w, h, d).translate(0, y, 0),
   slab: (r: number) => () => new THREE.CylinderGeometry(r, r, 0.006, 14).translate(0, 0.006, 0),
   puff: () => new THREE.IcosahedronGeometry(0.26, 1).scale(1.3, 0.55, 1).translate(0, 0.08, 0),
+  pebble: (r: number = 0.12) => () => new THREE.DodecahedronGeometry(r, 0).scale(1.2, 0.55, 0.9).translate(0, r * 0.28, 0),
+  rockShard: (r: number = 0.09, h: number = 0.22) => () => new THREE.ConeGeometry(r, h, 4).rotateY(0.4).translate(0, h * 0.5, 0),
+  zenStack: () => () => new THREE.CylinderGeometry(0.07, 0.13, 0.16, 5).translate(0, 0.08, 0),
+  woodLeaf: () => () => new THREE.CircleGeometry(0.08, 5).rotateX(-Math.PI / 2).scale(1.4, 1, 0.8).translate(0, 0.005, 0),
+  shelfFungus: () => () => new THREE.CylinderGeometry(0.14, 0.02, 0.03, 6, 1, false, 0, Math.PI).translate(0, 0.02, 0),
   tombTop: () => new THREE.CylinderGeometry(0.25, 0.25, 0.12, 10, 1, false, -Math.PI / 2, Math.PI).rotateX(Math.PI / 2).translate(0, 0.55, 0),
 };
 
-const DECOR: Record<ThemeId, DecorKind[]> = {
-  cozy: [
-    { share: 0.6, parts: [{ geo: G.tuft, colors: [0x6fbf4a, 0x5aa83a] }], scale: [0.7, 1.5], tilt: 0.3, stretch: [0.8, 1.4] },
-    { share: 0.32, parts: [{ geo: G.stem(0.3), colors: [0x3f6212] }, { geo: G.head(0.09, 0.3), colors: [0xf9a8d4, 0xfde68a, 0xffffff, 0xc4b5fd] }], scale: [0.8, 1.4], tilt: 0.1 },
-    { share: 0.08, parts: [{ geo: G.post(0.035, 0.16), colors: [0xfef3c7] }, { geo: G.cap(0.12, 0.15), colors: [0xef4444, 0xf97316] }], scale: [0.8, 1.5], tilt: 0.15 },
+/** Classifies the surface type of any static platform for logical decoration */
+export function classifyPlatformSurface(p: PlatformItem, theme: ThemeId): PlatformSurfaceType {
+  if (p.surface) return p.surface;
+  const id = (p.id || '').toLowerCase();
+  if (/stone|rock|pebble|slate|paving|cobble|ruin|terrace|temple|castle|pillar|slab|monolith|fort|wall|parapet/.test(id)) {
+    return 'stone';
+  }
+  if (/wood|bridge|plank|timber|dock|pier|boardwalk|tree|branch/.test(id)) {
+    return 'wood';
+  }
+  if (/cloud|aero_puff|mist|puff/.test(id)) {
+    return 'cloud';
+  }
+  if (/dirt|soil|planter|mud|peat|field/.test(id)) {
+    return 'soil';
+  }
+  if (/crystal|gem|shard|prism|meteor|space|cosmic|astral/.test(id)) {
+    return 'crystal';
+  }
+  if (/grass|lawn|meadow|moss|pasture|island|summit|spawn/.test(id)) {
+    return 'grass';
+  }
+
+  // Color-based matching from platform mesh
+  let c: number | undefined;
+  if (p.mesh) {
+    p.mesh.traverse((child) => {
+      if (c !== undefined) return;
+      const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial | THREE.MeshLambertMaterial | undefined;
+      if (mat && mat.color && typeof mat.color.getHex === 'function') {
+        c = mat.color.getHex();
+      }
+    });
+  }
+  if (c !== undefined) {
+    if (c === 0x888888 || c === 0x64748b || c === 0x475569 || c === 0x334155 || c === 0x94a3b8 || c === 0x555555 || c === 0x6d6a8f || c === 0x4b4458 || c === 0x3f3a4a) {
+      return 'stone';
+    }
+    if (c === 0x8b5a2b || c === 0xa0522d || c === 0x78350f || c === 0x92400e || c === 0xb45309 || c === 0x854d0e || c === 0x6b4f3a || c === 0x5c4033) {
+      return 'wood';
+    }
+    if (c === 0x55aa44 || c === 0x86c26b || c === 0x6fbf4a || c === 0x4d7c0f || c === 0x65a30d || c === 0x84cc16 || c === 0x3f6212 || c === 0x8fd4a8) {
+      return 'grass';
+    }
+    if (c === 0xffffff || c === 0xf0f9ff || c === 0xe0f2fe || c === 0xbae6fd) {
+      return 'cloud';
+    }
+  }
+
+  if (theme === 'castle') return 'stone';
+  if (theme === 'cosmic') return 'crystal';
+  if (theme === 'aero') return 'cloud';
+  if (theme === 'swamp') return 'soil';
+  return 'grass';
+}
+
+/** Distinctive decoration tables keyed logically by platform surface type */
+const SURFACE_DECOR: Record<PlatformSurfaceType, DecorKind[]> = {
+  grass: [
+    { share: 0.58, parts: [{ geo: G.tuft, colors: [0x6fbf4a, 0x5aa83a, 0x84cc16] }], scale: [0.7, 1.4], tilt: 0.3, stretch: [0.8, 1.4] },
+    { share: 0.34, parts: [{ geo: G.stem(0.3), colors: [0x3f6212] }, { geo: G.head(0.09, 0.3), colors: [0xf9a8d4, 0xfde68a, 0xffffff, 0xc4b5fd, 0xf472b6] }], scale: [0.8, 1.3], tilt: 0.1 },
+    { share: 0.08, parts: [{ geo: G.post(0.035, 0.16), colors: [0xfef3c7] }, { geo: G.cap(0.12, 0.15), colors: [0xef4444, 0xf97316] }], scale: [0.8, 1.4], tilt: 0.12 },
   ],
-  aero: [
-    { share: 0.35, parts: [{ geo: G.puff, colors: [0xffffff, 0xe0f2fe] }], scale: [0.6, 1.6], tilt: 0 },
-    { share: 0.3, parts: [{ geo: G.stem(0.38), colors: [0x86efac] }, { geo: G.ball(0.075, 0.4), colors: [0xffffff], emissive: 0.15 }], scale: [0.8, 1.4], tilt: 0.25 },
-    { share: 0.2, parts: [{ geo: G.crystal(0.09, 0.4), colors: [0x7dd3fc, 0xa5f3fc, 0xbae6fd], emissive: 0.25 }], scale: [0.7, 1.8], tilt: 0.35 },
-    { share: 0.15, parts: [{ geo: G.tuft, colors: [0x8fd4a8] }], scale: [0.6, 1.2], tilt: 0.5 },
+  stone: [
+    { share: 0.55, parts: [{ geo: G.pebble(0.13), colors: [0x78716c, 0x64748b, 0x94a3b8, 0x57534e] }], scale: [0.7, 1.5], tilt: 0.1 },
+    { share: 0.30, parts: [{ geo: G.rockShard(0.09, 0.22), colors: [0x64748b, 0x94a3b8, 0xcfd8dc] }], scale: [0.6, 1.3], tilt: 0.2 },
+    { share: 0.15, parts: [{ geo: G.zenStack(), colors: [0x78716c, 0x64748b] }], scale: [0.7, 1.2], tilt: 0.05 },
   ],
-  cosmic: [
-    { share: 0.38, parts: [{ geo: G.crystal(0.1, 0.5), colors: [0xc084fc, 0x67e8f9, 0xf0abfc], emissive: 0.75 }], scale: [0.6, 2.0], tilt: 0.4 },
-    { share: 0.27, parts: [{ geo: G.post(0.03, 0.22), colors: [0xe9d5ff] }, { geo: G.cap(0.13, 0.21), colors: [0x22d3ee, 0xa855f7, 0xf472b6], emissive: 0.8 }], scale: [0.7, 1.6], tilt: 0.15 },
-    { share: 0.35, parts: [{ geo: G.head(0.05, 0.05), colors: [0xfef08a, 0x67e8f9], emissive: 1 }], scale: [0.6, 1.4], tilt: 0 },
+  wood: [
+    { share: 0.50, parts: [{ geo: G.woodLeaf(), colors: [0xd97706, 0xb45309, 0x92400e, 0xca8a04, 0x78350f] }], scale: [0.7, 1.3], tilt: 0.05 },
+    { share: 0.35, parts: [{ geo: G.shelfFungus(), colors: [0xa16207, 0x78350f, 0x854d0e] }], scale: [0.8, 1.5], tilt: 0.1 },
+    { share: 0.15, parts: [{ geo: G.ball(0.06, 0.05), colors: [0x451a03, 0x5c2c10] }], scale: [0.7, 1.2], tilt: 0 },
   ],
-  swamp: [
-    { share: 0.35, parts: [{ geo: () => new THREE.CylinderGeometry(0.014, 0.02, 0.95, 3).translate(0, 0.475, 0), colors: [0x4d7c0f, 0x65a30d] }, { geo: G.post(0.045, 0.2, 0.68), colors: [0x78350f] }], scale: [0.8, 1.5], tilt: 0.18 },
-    { share: 0.35, parts: [{ geo: G.puff, colors: [0x3f6212, 0x4d6b3c] }], scale: [0.5, 1.2], tilt: 0.1 },
-    { share: 0.2, parts: [{ geo: G.post(0.04, 0.12), colors: [0xd9f99d] }, { geo: G.cap(0.14, 0.11), colors: [0xbef264, 0xfde047], emissive: 0.7 }], scale: [0.6, 1.4], tilt: 0.2 },
-    { share: 0.1, parts: [{ geo: G.slab(0.32), colors: [0x14532d], opacity: 0.85 }], scale: [0.7, 1.6], tilt: 0 },
+  cloud: [
+    { share: 0.65, parts: [{ geo: G.puff, colors: [0xffffff, 0xf0f9ff, 0xe0f2fe] }], scale: [0.6, 1.5], tilt: 0 },
+    { share: 0.35, parts: [{ geo: G.ball(0.07, 0.08), colors: [0xe0f2fe, 0xfef08a, 0xbae6fd], emissive: 0.6 }], scale: [0.6, 1.3], tilt: 0 },
   ],
-  garden: [
-    { share: 0.3, parts: [{ geo: G.tuft, colors: [0x65a30d, 0x84cc16] }], scale: [0.7, 1.3], tilt: 0.3 },
-    { share: 0.3, parts: [{ geo: G.stem(0.32), colors: [0x3f6212] }, { geo: () => new THREE.CylinderGeometry(0.075, 0.045, 0.15, 6).translate(0, 0.38, 0), colors: [0xf472b6, 0xfb7185, 0xfacc15, 0xffffff, 0xa855f7] }], scale: [0.8, 1.3], tilt: 0.1 },
-    { share: 0.28, parts: [{ geo: G.stem(0.3), colors: [0x3f6212] }, { geo: G.head(0.09, 0.3), colors: [0xf472b6, 0xfacc15, 0xffffff] }], scale: [0.8, 1.4], tilt: 0.12 },
-    { share: 0.12, parts: [{ geo: G.post(0.05, 0.12), colors: [0x78350f] }, { geo: G.ball(0.3, 0.38), colors: [0x4d7c0f, 0x65a30d] }], scale: [0.8, 1.4], tilt: 0 },
+  soil: [
+    { share: 0.50, parts: [{ geo: G.tuft, colors: [0x365314, 0x4d7c0f] }], scale: [0.6, 1.2], tilt: 0.25 },
+    { share: 0.30, parts: [{ geo: G.pebble(0.1), colors: [0x57534e, 0x44403c, 0x78716c] }], scale: [0.7, 1.3], tilt: 0.08 },
+    { share: 0.20, parts: [{ geo: G.post(0.03, 0.14), colors: [0xd6d3d1] }, { geo: G.cap(0.1, 0.12), colors: [0x78350f, 0xa16207] }], scale: [0.7, 1.3], tilt: 0.15 },
   ],
-  castle: [
-    { share: 0.58, parts: [{ geo: G.tuft, colors: [0x78716c, 0x8a7653, 0x57534e] }], scale: [0.7, 1.5], tilt: 0.55, stretch: [0.7, 1.5] },
-    { share: 0.08, parts: [{ geo: () => new THREE.ConeGeometry(0.018, 0.6, 3).translate(0, 0.3, 0), colors: [0x44403c] }], scale: [0.5, 1.0], tilt: 0.9 },
-    { share: 0.14, parts: [{ geo: G.post(0.04, 0.24), colors: [0xfef3c7, 0xe7e5e4] }, { geo: G.cone(0.03, 0.08, 0.25), colors: [0xfb923c], emissive: 1 }], scale: [0.7, 1.4], tilt: 0.05, stretch: [0.6, 1.8] },
-    { share: 0.1, parts: [{ geo: G.box(0.5, 0.55, 0.12), colors: [0x6b7280, 0x57534e] }, { geo: G.tombTop, colors: [0x6b7280, 0x57534e] }], scale: [0.7, 1.1], tilt: 0.2 },
-    { share: 0.1, parts: [{ geo: G.ball(0.09, 0.08), colors: [0xe7e5e4] }], scale: [0.8, 1.3], tilt: 0.3 },
-  ],
-  backrooms: [
-    { share: 0.4, parts: [{ geo: G.box(0.3, 0.004, 0.42, 0.004), colors: [0xfafaf9, 0xfef9c3] }], scale: [0.8, 1.2], tilt: 0.03 },
-    { share: 0.25, parts: [{ geo: G.slab(0.5), colors: [0x8a7a3a, 0x6b5f2e], opacity: 0.55 }], scale: [0.6, 2.2], tilt: 0 },
-    { share: 0.2, parts: [{ geo: G.box(0.6, 0.03, 0.6, 0.02), colors: [0xe7e0bf, 0xd6cc9c] }], scale: [0.9, 1.1], tilt: 0.12 },
-    { share: 0.15, parts: [{ geo: G.post(0.05, 0.22), colors: [0xbae6fd], opacity: 0.8 }, { geo: G.post(0.022, 0.05, 0.22), colors: [0x1d4ed8] }], scale: [0.9, 1.1], tilt: 0 },
+  crystal: [
+    { share: 0.60, parts: [{ geo: G.crystal(0.1, 0.45), colors: [0xc084fc, 0x67e8f9, 0xf0abfc, 0x818cf8], emissive: 0.75 }], scale: [0.6, 1.8], tilt: 0.35 },
+    { share: 0.40, parts: [{ geo: G.head(0.06, 0.06), colors: [0xfef08a, 0x67e8f9, 0xa855f7], emissive: 0.9 }], scale: [0.6, 1.4], tilt: 0 },
   ],
 };
+
+const BACKROOMS_DECOR: DecorKind[] = [
+  { share: 0.4, parts: [{ geo: G.box(0.3, 0.004, 0.42, 0.004), colors: [0xfafaf9, 0xfef9c3] }], scale: [0.8, 1.2], tilt: 0.03 },
+  { share: 0.25, parts: [{ geo: G.slab(0.5), colors: [0x8a7a3a, 0x6b5f2e], opacity: 0.55 }], scale: [0.6, 2.2], tilt: 0 },
+  { share: 0.2, parts: [{ geo: G.box(0.6, 0.03, 0.6, 0.02), colors: [0xe7e0bf, 0xd6cc9c] }], scale: [0.9, 1.1], tilt: 0.12 },
+  { share: 0.15, parts: [{ geo: G.post(0.05, 0.22), colors: [0xbae6fd], opacity: 0.8 }, { geo: G.post(0.022, 0.05, 0.22), colors: [0x1d4ed8] }], scale: [0.9, 1.1], tilt: 0 },
+];
 
 const DENSITY: Record<Quality, { particles: number; flocks: number; islands: number; flowers: number; puffs: number }> = {
   low: { particles: 0, flocks: 0, islands: 0, flowers: 0, puffs: 0 },
@@ -283,38 +339,91 @@ export class AmbientDecor {
     this.group.add(this.particles);
   }
 
-  /** Ground decor on the floors, picked for this world (one instanced mesh per part and color). */
+  /** Ground decor on the floors, logically grouped by platform surface (grass, stone, wood, cloud, soil, crystal) */
   private buildGroundDecor(world: WorldBuildResult, count: number, rng: () => number) {
     if (!count) return;
     const indoor = !!LOOK[this.theme].indoor;
     const floors = world.platforms.filter(
       (p) =>
         p.type === 'static' &&
-        p.size.x >= 4 &&
-        p.size.z >= 4 &&
+        p.size.x >= 3.5 &&
+        p.size.z >= 3.5 &&
         p.position.y > -20 &&
         p.position.y < (indoor ? 2 : 60) &&
         !/shield|hatch|cellar|summit_shield|fort_wall|core|rim_|altar|pillar|cover|wall|ceil|roof|mez|shelf/.test(p.id)
     );
     if (!floors.length) return;
-    const area = floors.reduce((a, p) => a + p.size.x * p.size.z, 0);
-    const pickFloor = () => {
-      let x = rng() * area;
-      for (const f of floors) {
-        x -= f.size.x * f.size.z;
-        if (x <= 0) return f;
-      }
-      return floors[floors.length - 1];
-    };
+
     const m4 = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const e = new THREE.Euler();
     const sc = new THREE.Vector3();
     const p = new THREE.Vector3();
-    for (const kind of DECOR[this.theme]) {
+
+    // In closed indoor spaces (Backrooms), spawn only indoor debris (loose tiles, stains, paper)
+    if (indoor) {
+      const area = floors.reduce((a, f) => a + f.size.x * f.size.z, 0);
+      const pickFloor = () => {
+        let x = rng() * area;
+        for (const f of floors) {
+          x -= f.size.x * f.size.z;
+          if (x <= 0) return f;
+        }
+        return floors[floors.length - 1];
+      };
+      this.instantiateDecorKinds(BACKROOMS_DECOR, count, floors, area, pickFloor, true, rng, m4, q, e, sc, p);
+      return;
+    }
+
+    // Partition floors strictly by surface type
+    const surfaceMap = new Map<PlatformSurfaceType, PlatformItem[]>();
+    for (const f of floors) {
+      const s = classifyPlatformSurface(f, this.theme);
+      const list = surfaceMap.get(s) ?? [];
+      list.push(f);
+      surfaceMap.set(s, list);
+    }
+
+    const totalArea = floors.reduce((a, f) => a + f.size.x * f.size.z, 0);
+
+    // Populate each platform surface only with its logically appropriate decor
+    surfaceMap.forEach((surfaceFloors, sType) => {
+      const sArea = surfaceFloors.reduce((a, f) => a + f.size.x * f.size.z, 0);
+      if (sArea <= 0) return;
+      const sShare = sArea / totalArea;
+      const sCount = Math.max(8, Math.round(count * sShare));
+      const decorList = SURFACE_DECOR[sType] || SURFACE_DECOR.grass;
+
+      const pickFloor = () => {
+        let x = rng() * sArea;
+        for (const f of surfaceFloors) {
+          x -= f.size.x * f.size.z;
+          if (x <= 0) return f;
+        }
+        return surfaceFloors[surfaceFloors.length - 1];
+      };
+
+      this.instantiateDecorKinds(decorList, sCount, surfaceFloors, sArea, pickFloor, false, rng, m4, q, e, sc, p);
+    });
+  }
+
+  private instantiateDecorKinds(
+    decorList: DecorKind[],
+    count: number,
+    floors: PlatformItem[],
+    area: number,
+    pickFloor: () => PlatformItem,
+    indoor: boolean,
+    rng: () => number,
+    m4: THREE.Matrix4,
+    q: THREE.Quaternion,
+    e: THREE.Euler,
+    sc: THREE.Vector3,
+    p: THREE.Vector3
+  ) {
+    for (const kind of decorList) {
       const n = Math.round(count * kind.share);
       if (!n) continue;
-      // Per part: one instanced mesh per color, filled round-robin
       const meshes = kind.parts.map((part) => {
         const geo = part.geo();
         return part.colors.map((c) => {
@@ -331,9 +440,14 @@ export class AmbientDecor {
           return im;
         });
       });
+
       for (let i = 0; i < n; i++) {
         const f = pickFloor();
-        p.set(f.position.x + (rng() - 0.5) * (f.size.x - 0.6), f.position.y + 0.01 + (indoor ? i * 0.00002 : 0), f.position.z + (rng() - 0.5) * (f.size.z - 0.6));
+        p.set(
+          f.position.x + (rng() - 0.5) * (f.size.x - 0.6),
+          f.position.y + 0.01 + (indoor ? i * 0.00002 : 0),
+          f.position.z + (rng() - 0.5) * (f.size.z - 0.6)
+        );
         q.setFromEuler(e.set((rng() - 0.5) * kind.tilt, rng() * Math.PI * 2, (rng() - 0.5) * kind.tilt));
         const k = kind.scale[0] + rng() * (kind.scale[1] - kind.scale[0]);
         const st = kind.stretch ? kind.stretch[0] + rng() * (kind.stretch[1] - kind.stretch[0]) : 1;
@@ -341,18 +455,20 @@ export class AmbientDecor {
         m4.compose(p, q, sc);
         const ci = Math.floor(rng() * 1000);
         meshes.forEach((variants, pi) => {
-          // Parts of one decor keep matching colors when they have the same palette size (tombstone body + top)
           const im = variants[(kind.parts[pi].colors.length === kind.parts[0].colors.length ? ci : ci + pi) % variants.length];
           if (im.count < im.instanceMatrix.count) im.setMatrixAt(im.count++, m4);
         });
       }
-      for (const variants of meshes)
+
+      for (const variants of meshes) {
         for (const im of variants) {
           im.instanceMatrix.needsUpdate = true;
-          im.frustumCulled = false;
+          im.computeBoundingSphere();
+          im.frustumCulled = true;
           im.receiveShadow = true;
           this.group.add(im);
         }
+      }
     }
   }
 
