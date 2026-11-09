@@ -1095,15 +1095,45 @@ export class GameEngine {
   private spawnedAt = new THREE.Vector3();
   /** Pulls the camera in front of the first wall/ceiling between it and the player. */
   private keepCameraInside(followPos: THREE.Vector3) {
+    const colliders = this.world.cameraColliders!;
     const pivot = new THREE.Vector3(followPos.x, followPos.y + 1.1, followPos.z);
-    const dir = this.camera.position.clone().sub(pivot);
+    const cam = this.camera.position;
+    const dir = cam.clone().sub(pivot);
     const dist = dir.length();
     if (dist < 0.3) return;
     dir.divideScalar(dist);
-    this.camRay.set(pivot, dir);
-    this.camRay.far = dist + 0.3;
-    const hit = this.camRay.intersectObjects(this.world.cameraColliders!, false)[0];
-    if (hit) this.camera.position.copy(pivot).addScaledVector(dir, Math.max(0.35, hit.distance - 0.3));
+    // A fat ray: the center and four rays around it (the camera's view has a width, so a thin ray
+    // let its edges slip into a wall or above the ceiling, and that wall vanished from view)
+    const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0));
+    if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+    right.normalize();
+    const up = new THREE.Vector3().crossVectors(right, dir).normalize();
+    const R = 0.28;
+    let safe = dist;
+    for (const [a, b] of [
+      [0, 0],
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ]) {
+      const from = pivot.clone().addScaledVector(right, a * R).addScaledVector(up, b * R);
+      this.camRay.set(from, dir);
+      this.camRay.far = dist + 0.4;
+      const hit = this.camRay.intersectObjects(colliders, false)[0];
+      if (hit) safe = Math.min(safe, hit.distance - 0.4);
+    }
+    cam.copy(pivot).addScaledVector(dir, Math.max(0.3, safe));
+    // Still too close to a wall or the ceiling (e.g. sliding along a wall)? Push it away a little
+    const MARGIN = 0.38;
+    const horiz = new THREE.Vector3(dir.x, 0, dir.z).normalize();
+    const side = new THREE.Vector3(-horiz.z, 0, horiz.x);
+    for (const d of [right, right.clone().negate(), new THREE.Vector3(0, 1, 0), dir, horiz, side, side.clone().negate(), new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)]) {
+      this.camRay.set(cam, d);
+      this.camRay.far = MARGIN;
+      const hit = this.camRay.intersectObjects(colliders, false)[0];
+      if (hit) cam.addScaledVector(d, -(MARGIN - hit.distance));
+    }
   }
 
   /** New attempt at the level: no deaths, no rating, no party timer. */
