@@ -20,7 +20,11 @@ import { buildAeroWorld } from './levelAero';
 import { buildCosmicWorld } from './levelCosmic';
 import { buildSwampWorld } from './levelSwamp';
 import { makeGlowTexture } from './levelKit';
-import { LEVELS, markLevelComplete, isDevMode, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel, levelKind } from './progress';
+import { LEVELS, markLevelComplete, isDevMode, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel, levelKind, getDevLevelPick, setDevLevelPick, DevLevelPick } from './progress';
+
+/** Developer level picks shared with the party: world kind and theme as event numbers */
+const DEV_KINDS: DevLevelPick['kind'][] = ['sandbox', 'boss', 'backrooms'];
+const DEV_THEMES: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero', 'garden', 'castle', 'backrooms'];
 import { buildBackroomsWorld, buildSkinwalkerArena } from './levelBackrooms';
 import { generateLevel } from './levelGen';
 import { generateBossArena } from './bossArena';
@@ -526,6 +530,11 @@ export class GameEngine {
     });
     multiplayerClient.addWorldEventListener((data) => {
       if (data.levelId !== this.currentLevel) return;
+      if (data.kind === 'devpick') {
+        if (data.userId) this.devPickBook().set(data.userId, { i: data.i ?? 3, v: data.v ?? 0 });
+        this.followDevPick(data.username);
+        return;
+      }
       if (data.kind === 'minihit' || data.kind === 'trapopen') {
         this.dungeonSystem.onEvent(data.kind, data.i ?? 0, data.v ?? 0, this.gameState === 'playing' ? this.dungeonCtx() : null);
         return;
@@ -1355,12 +1364,79 @@ export class GameEngine {
   }) {
     for (const i of data.orbs) this.puzzleSystem.collectOrbRemote(i, null, null);
     for (const b of data.blocks) this.puzzleSystem.setBlockRemote(b.index, b.x, b.y, b.z, true);
+    // Developer mode: everybody plays the same world on this level (the one the party agreed on)
+    if (this.partyRoomId) {
+      const book = this.devPickBook();
+      for (const e of data.events ?? []) if (e.kind === 'devpick' && e.userId) book.set(e.userId, { i: e.i ?? 3, v: e.v ?? 0 });
+      const me = apiClient.getCurrentUser()?._id ?? 'me';
+      const mine = getDevLevelPick();
+      const mineHere = mine && mine.level === this.currentLevel ? mine : null;
+      if (this.devPickDirty && mineHere) {
+        // Just chosen in the developer panel: it wins (newer than any other pick here)
+        const seq = 1 + Math.max(0, ...[...book.values()].map((p) => Math.floor(p.v / 8)));
+        this.devPickDirty = false;
+        this.announceDevPick(seq);
+      } else if (mineHere && !book.has(me)) {
+        this.announceDevPick(0);
+      }
+      this.devPickDirty = false;
+      if (this.followDevPick(null)) return; // rebuilt: the state comes again
+    }
     if (data.events) {
       for (const e of data.events) {
+        if (e.kind === 'devpick') continue;
         if (e.kind === 'minihit' || e.kind === 'trapopen') this.dungeonSystem.onEvent(e.kind, e.i ?? 0, e.v ?? 0, null);
         else if (this.combat) this.combat.onEvent(e.kind, e.i ?? 0, e.v ?? 0, e.target, e.userId ?? '', true);
       }
     }
+  }
+
+  /** The developer panel changed the world of this level: tell the party when we (re)join it. */
+  private devPickDirty = false;
+  public markDevPickChanged() {
+    this.devPickDirty = true;
+  }
+
+  /** Developer picks of each party member for the level being played (latest one of each) */
+  private devPicks: { level: number; byUser: Map<string, { i: number; v: number }> } = { level: -1, byUser: new Map() };
+  private devPickBook() {
+    if (this.devPicks.level !== this.currentLevel) this.devPicks = { level: this.currentLevel, byUser: new Map() };
+    return this.devPicks.byUser;
+  }
+
+  /** Tells the party which world we picked for this level number (with how recent the pick is). */
+  private announceDevPick(seq: number) {
+    if (!this.partyRoomId) return;
+    const pick = getDevLevelPick();
+    if (!pick || pick.level !== this.currentLevel) return;
+    const i = DEV_KINDS.indexOf(pick.kind);
+    const v = Math.max(0, DEV_THEMES.indexOf(pick.theme)) + 8 * Math.min(120, seq);
+    this.devPickBook().set(apiClient.getCurrentUser()?._id ?? 'me', { i, v });
+    multiplayerClient.sendEvent(this.currentLevel, 'devpick', i, v);
+  }
+
+  /**
+   * Plays the world the party agreed on for this level number: the newest developer pick
+   * (ties: the lowest user id), or the normal world if nobody picked one. Rebuilds the level if
+   * needed; returns true when it did.
+   */
+  private followDevPick(from: string | null | undefined): boolean {
+    let best: { id: string; i: number; v: number } | null = null;
+    for (const [id, p] of this.devPickBook()) {
+      if (p.i < 0 || p.i >= DEV_KINDS.length) continue;
+      if (!best || Math.floor(p.v / 8) > Math.floor(best.v / 8) || (Math.floor(p.v / 8) === Math.floor(best.v / 8) && id < best.id)) best = { id, ...p };
+    }
+    const want: DevLevelPick | null = best ? { level: this.currentLevel, kind: DEV_KINDS[best.i], theme: DEV_THEMES[best.v % 8] ?? 'cozy' } : null;
+    const cur = getDevLevelPick();
+    const curHere = cur && cur.level === this.currentLevel ? cur : null;
+    const same = (!want && !curHere) || (want && curHere && want.kind === curHere.kind && want.theme === curHere.theme);
+    if (same) return false;
+    setDevLevelPick(want);
+    const wasPlaying = this.gameState === 'playing';
+    this.reloadLevel(this.currentLevel);
+    if (wasPlaying) this.beginRun(this.gameMode, true);
+    this.itemSystem.notify(`Se cargó el mismo mundo que ${from ? `eligió ${from}` : 'tiene tu grupo'} en este nivel (modo desarrollador)`);
+    return true;
   }
 
   /** You + the friends on this level */

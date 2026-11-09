@@ -4767,6 +4767,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             setDevOn(true);
           }
           setDevLevelPick(pick.kind === 'handmade' ? null : { level: pick.level, kind: pick.kind, theme: pick.theme });
+          // In a party: your friends get this same world when you enter it
+          engine?.markDevPickChanged();
           setShowDevPanel(false);
           setPendingLevel(pick.level);
           engine?.reloadLevel(pick.level);
