@@ -728,6 +728,47 @@ class SoundtrackSynthesizer {
     osc.stop(now + 0.42);
   }
 
+  /** A short burst of white noise shaped by a filter (rips, rumbles). */
+  private noiseBurst(dur: number, type: BiquadFilterType, f0: number, f1: number, q: number, peak: number, crackle = 0) {
+    if (!this.ctx || !this.sfxGain || this.isMuted) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const len = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      // crackle: little gaps, like threads snapping one by one
+      const gate = crackle > 0 && Math.sin(i * 0.013) * Math.sin(i * 0.0071) > 1 - crackle ? 0.15 : 1;
+      d[i] = (Math.random() * 2 - 1) * gate;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = type;
+    filter.Q.value = q;
+    filter.frequency.setValueAtTime(f0, now);
+    filter.frequency.exponentialRampToValueAtTime(f1, now + dur);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + Math.min(0.08, dur * 0.2));
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.sfxGain);
+    src.start(now);
+    src.stop(now + dur + 0.05);
+  }
+
+  /** Cloth (or wallpaper) tearing. */
+  public playRip(volume = 1) {
+    this.noiseBurst(0.9, 'bandpass', 900, 3800, 1.4, 0.35 * Math.max(0.05, Math.min(1, volume)), 0.6);
+  }
+
+  /** Walls grinding as they move: a deep rumble. */
+  public playRumble(volume = 1) {
+    this.noiseBurst(1.8, 'lowpass', 160, 60, 0.8, 0.5 * Math.max(0.05, Math.min(1, volume)));
+  }
+
   /** Skinwalker scream: a high, wavering screech with a noisy rasp under it. */
   public playScream(volume = 1) {
     if (!this.ctx || !this.sfxGain || this.isMuted) return;

@@ -1516,14 +1516,15 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
   const P = backroomsParts(kit, root, textures, cameraColliders);
   const info = BOSS_INFO.skinwalker;
   const Y = 0;
-  const N = 11;
+  const N = 15;
   const CELL = 6.5;
   const g = gridMaze(rng, N, N, CELL, 0.12);
   // Two open halls (2×2) to fight in
-  for (const [hi, hj] of [
-    [2 + Math.floor(rng() * 2), 6 + Math.floor(rng() * 2)],
-    [6 + Math.floor(rng() * 2), 2 + Math.floor(rng() * 2)],
-  ]) {
+  const halls: [number, number][] = [
+    [3 + Math.floor(rng() * 2), 9 + Math.floor(rng() * 2)],
+    [9 + Math.floor(rng() * 2), 3 + Math.floor(rng() * 2)],
+  ];
+  for (const [hi, hj] of halls) {
     g.east[hi][hj] = g.east[hi][hj + 1] = true;
     g.north[hi][hj] = g.north[hi + 1][hj] = true;
   }
@@ -1531,6 +1532,7 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
   const mid = Math.floor(N / 2);
   g.east[mid][mid] = g.east[mid - 1][mid] = g.north[mid][mid] = g.north[mid][mid - 1] = true;
   const HALF = (N * CELL) / 2;
+  const fixedCell = (i: number, j: number) => (i === mid && j === mid) || halls.some(([hi, hj]) => i >= hi && i <= hi + 1 && j >= hj && j <= hj + 1);
 
   kit.addPlatform('sw_floor', 0, Y, 0, HALF * 2, HALF * 2, 1, P.carpetB);
   const obstacles: { x: number; z: number; hx: number; hz: number }[] = [];
@@ -1542,11 +1544,36 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
   wallSeg('sw_s', -HALF, HALF, HALF, HALF);
   wallSeg('sw_w', -HALF, -HALF, -HALF, HALF);
   wallSeg('sw_e', HALF, -HALF, HALF, HALF);
+
+  // ---- Moving walls: about a quarter of the inner walls can rise from the floor or sink into it,
+  //      so the maze changes shape while you fight (the Skinwalker does it when it's hurt) ----
+  interface MovingWall {
+    dir: 'e' | 'n';
+    i: number;
+    j: number;
+    plat: PlatformItem;
+    obs: { x: number; z: number; hx: number; hz: number };
+    home: { x: number; z: number; hx: number; hz: number };
+    cur: number;
+    target: number;
+  }
+  const moving: MovingWall[] = [];
+  const isMoving = new Set<string>();
+  for (let i = 0; i < N; i++)
+    for (let j = 0; j < N; j++)
+      for (const dir of ['e', 'n'] as const) {
+        if (dir === 'e' && i >= N - 1) continue;
+        if (dir === 'n' && j >= N - 1) continue;
+        const [i2, j2] = dir === 'e' ? [i + 1, j] : [i, j + 1];
+        if (fixedCell(i, j) || fixedCell(i2, j2)) continue;
+        if (rng() < 0.27) isMoving.add(`${dir}${i},${j}`);
+      }
+  // Fixed walls (merged into long runs)
   let wn = 0;
   for (let j = 0; j < N - 1; j++) {
     let start = -1;
     for (let i = 0; i <= N; i++) {
-      const closed = i < N && !g.north[i][j];
+      const closed = i < N && !g.north[i][j] && !isMoving.has(`n${i},${j}`);
       if (closed && start < 0) start = i;
       if (!closed && start >= 0) {
         const z = g.z0 + (j + 1) * CELL;
@@ -1558,7 +1585,7 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
   for (let i = 0; i < N - 1; i++) {
     let start = -1;
     for (let j = 0; j <= N; j++) {
-      const closed = j < N && !g.east[i][j];
+      const closed = j < N && !g.east[i][j] && !isMoving.has(`e${i},${j}`);
       if (closed && start < 0) start = j;
       if (!closed && start >= 0) {
         const x = g.x0 + (i + 1) * CELL;
@@ -1567,8 +1594,113 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
       }
     }
   }
+  const WH = WALL_H + 0.5;
+  for (const key of isMoving) {
+    const dir = key[0] as 'e' | 'n';
+    const [i, j] = key.slice(1).split(',').map(Number);
+    const x0 = dir === 'e' ? g.x0 + (i + 1) * CELL : g.x0 + i * CELL;
+    const z0 = dir === 'e' ? g.z0 + j * CELL : g.z0 + (j + 1) * CELL;
+    const x1 = dir === 'e' ? x0 : x0 + CELL;
+    const z1 = dir === 'e' ? z0 + CELL : z0;
+    const sx = Math.max(0.4, Math.abs(x1 - x0) + (x1 !== x0 ? 0.4 : 0));
+    const sz = Math.max(0.4, Math.abs(z1 - z0) + (z1 !== z0 ? 0.4 : 0));
+    const plat = kit.addPlatform(`sw_m${key}`, (x0 + x1) / 2, WALL_H, (z0 + z1) / 2, sx, sz, WH, P.wallB);
+    plat.solid = true;
+    const home = { x: (x0 + x1) / 2, z: (z0 + z1) / 2, hx: Math.abs(x1 - x0) / 2 + 0.2, hz: Math.abs(z1 - z0) / 2 + 0.2 };
+    const closed = dir === 'e' ? !g.east[i][j] : !g.north[i][j];
+    const obs = closed ? { ...home } : { x: 1e6, z: 1e6, hx: 0, hz: 0 };
+    obstacles.push(obs);
+    const w: MovingWall = { dir, i, j, plat, obs, home, cur: closed ? 1 : 0, target: closed ? 1 : 0 };
+    moving.push(w);
+  }
+  const setOpen = (w: MovingWall, open: boolean) => {
+    if (w.dir === 'e') g.east[w.i][w.j] = open;
+    else g.north[w.i][w.j] = open;
+  };
+  const placeWall = (w: MovingWall) => {
+    w.plat.mesh.position.y = THREE.MathUtils.lerp(-0.7, WALL_H, w.cur);
+    w.plat.mesh.visible = w.cur > 0.01;
+    // Solid only once it's mostly up (and gone as soon as it starts to sink)
+    const solid = w.target > 0.5 && w.cur > 0.55;
+    w.plat.position.y = solid ? WALL_H : -100;
+    if (solid) Object.assign(w.obs, w.home);
+    else Object.assign(w.obs, { x: 1e6, z: 1e6, hx: 0, hz: 0 });
+  };
+  moving.forEach(placeWall);
+  let shiftN = 0;
+  const allConnected = () => {
+    const seen = new Set<number>([0]);
+    const q: [number, number][] = [[0, 0]];
+    for (let h = 0; h < q.length; h++)
+      for (const [a, b] of gNeighbors(g, q[h][0], q[h][1])) if (!seen.has(a * 100 + b)) (seen.add(a * 100 + b), q.push([a, b]));
+    return seen.size === N * N ? null : seen;
+  };
+  const shiftMaze = (avoid: THREE.Vector3[]) => {
+    const r2 = mulberry32(level * 911 + ++shiftN * 7919);
+    const near = (w: MovingWall) => avoid.some((a) => Math.abs(a.x - w.home.x) < w.home.hx + 1.4 && Math.abs(a.z - w.home.z) < w.home.hz + 1.4);
+    let changed = 0;
+    const want = new Map<MovingWall, boolean>();
+    for (const w of moving) {
+      const close = r2() < 0.55 && !near(w);
+      want.set(w, close);
+      setOpen(w, !close);
+    }
+    // Make sure you can still reach every room: open walls between the parts that got cut off
+    for (let guard = 0; guard < 400; guard++) {
+      const seen = allConnected();
+      if (!seen) break;
+      const cand = moving.filter((w) => {
+        if (!want.get(w)) return false;
+        const a = w.i * 100 + w.j;
+        const b = w.dir === 'e' ? (w.i + 1) * 100 + w.j : w.i * 100 + w.j + 1;
+        return seen.has(a) !== seen.has(b);
+      });
+      if (!cand.length) break;
+      const w = cand[Math.floor(r2() * cand.length)];
+      want.set(w, false);
+      setOpen(w, true);
+    }
+    for (const w of moving) {
+      const t = want.get(w) ? 1 : 0;
+      if (t !== w.target) changed++;
+      w.target = t;
+      placeWall(w);
+    }
+    return changed;
+  };
+  kit.animators.push((dt) => {
+    for (const w of moving) {
+      if (w.cur === w.target) continue;
+      w.cur = THREE.MathUtils.clamp(w.cur + Math.sign(w.target - w.cur) * dt * 0.85, 0, 1);
+      placeWall(w);
+    }
+  });
+  // A wall of the room you're in, to burst out of
+  const wallNear = (p: THREE.Vector3) => {
+    const [ci, cj] = gCell(g, p);
+    const c = gCenter(g, ci, cj);
+    const sides: { d: THREE.Vector3; closed: boolean }[] = [
+      { d: new THREE.Vector3(1, 0, 0), closed: ci >= N - 1 || !g.east[ci][cj] },
+      { d: new THREE.Vector3(-1, 0, 0), closed: ci <= 0 || !g.east[ci - 1][cj] },
+      { d: new THREE.Vector3(0, 0, 1), closed: cj >= N - 1 || !g.north[ci][cj] },
+      { d: new THREE.Vector3(0, 0, -1), closed: cj <= 0 || !g.north[ci][cj - 1] },
+    ];
+    const opts = sides
+      .filter((s) => s.closed)
+      .map((s) => ({
+        pos: c
+          .clone()
+          .addScaledVector(s.d, CELL / 2 - 0.22)
+          .setY(Y),
+        normal: s.d.clone().negate(),
+      }))
+      // not right next to you
+      .filter((o) => Math.hypot(o.pos.x - p.x, o.pos.z - p.z) > 2.4);
+    if (!opts.length) return null;
+    return opts[Math.floor(Math.random() * opts.length)];
+  };
   P.ceiling(-HALF, -HALF, HALF, HALF, WALL_H);
-  // Lamps: many broken, a few flickering
+  // Lamps: many broken, a few flickering; a blackout turns them all off
   const lampGeo = new THREE.PlaneGeometry(1.4, 0.7);
   for (let i = 0; i < N; i++)
     for (let j = 0; j < N; j++) {
@@ -1580,7 +1712,16 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
       lamp.position.set(c.x, WALL_H - 0.02, c.z);
       root.add(lamp);
     }
+  let lights = 1;
+  const OFF = 0x14120a;
   kit.animators.push((_dt, time) => {
+    if (lights < 0.5) {
+      P.lampOn.color.setHex(OFF);
+      P.lampFlickA.color.setHex(OFF);
+      P.lampFlickB.color.setHex(OFF);
+      return;
+    }
+    P.lampOn.color.setHex(0xfffbe6);
     P.lampFlickA.color.setHex(Math.sin(time * 21) * Math.sin(time * 6.1) > 0.45 ? 0x2a2614 : 0xfffbe6);
     P.lampFlickB.color.setHex(Math.sin(time * 1.3) > 0.9 ? 0x2a2614 : 0xfffbe6);
   });
@@ -1628,6 +1769,11 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
       return r.dist <= 0 ? to : gCenter(g, r.next[0], r.next[1]);
     },
     cellDist: (a, b) => gBfs(g, gCell(g, a), gCell(g, b)).dist,
+    shiftMaze,
+    wallNear,
+    setLights: (on) => {
+      lights = on;
+    },
   };
   const isCorner = (i: number, j: number) => corners.slice(0, 4).some(([a, b]) => a === i && b === j);
   const deadEnds: [number, number][] = [];

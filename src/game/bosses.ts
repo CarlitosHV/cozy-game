@@ -3335,7 +3335,7 @@ class DraculaBoss extends BossController {
 // obsidian dagger (single use) hurts it: scare it, find the dagger while it's gone, then let it
 // come close and stab it. Sometimes it takes YOUR shape and walks toward you…
 // ===========================================================================
-type SkinState = 'intro' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'scared' | 'hurt' | 'mimic';
+type SkinState = 'intro' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'scared' | 'hurt' | 'mimic' | 'tear';
 
 /** A copy of a player that the Skinwalker sheds: it twists and stretches into a giant, long-legged dog */
 interface SkinCopy {
@@ -3389,6 +3389,21 @@ class SkinwalkerBoss extends BossController {
   private screamT = 0;
   /** Running on all fours (when you're far) */
   private crawlK = 0;
+  // ---- The more it's hurt, the more erratic it gets ----
+  /** Bursting out of a wall: where, and the rip it leaves */
+  private tearCd = 20;
+  private tearAt: { pos: THREE.Vector3; normal: THREE.Vector3 } | null = null;
+  private rips: { g: THREE.Group; slit: THREE.Mesh; flaps: THREE.Mesh[]; t: number }[] = [];
+  /** Sudden sideways darts while it runs */
+  private dartT = 0;
+  private dartCd = 1;
+  private dartSide = 1;
+  /** The maze moves: at 75/50/25 % life, then every so often */
+  private shiftsDone = 0;
+  private shiftCd = 30;
+  /** Blackouts when it has little life left */
+  private lightT = 10;
+  private lightsOff = false;
 
   constructor(c: CombatSystem) {
     super(c, 100 + 40 * c.setup.diff);
@@ -3406,8 +3421,13 @@ class SkinwalkerBoss extends BossController {
     this.root.add(this.beam);
   }
 
+  /** 0 → 1: how hurt (and how erratic) it is */
+  private get rage() {
+    return THREE.MathUtils.clamp(1 - this.hp / this.maxHp, 0, 1);
+  }
+
   private get speed() {
-    return 4.9 + 1.8 * this.s.diff;
+    return (4.9 + 1.8 * this.s.diff) * (1 + 0.35 * this.rage);
   }
 
   /** You're in the same room (or the next one, through an opening) */
@@ -3529,9 +3549,11 @@ class SkinwalkerBoss extends BossController {
       (this.beam.material as THREE.MeshBasicMaterial).opacity = 0.25 + Math.sin(time * 4) * 0.1;
     }
 
+    this.updateRips(dt);
     if (this.dead) {
       this.deadT += dt;
       this.c.darknessTarget = 0;
+      if (this.lightsOff) this.setBlackout(false);
       this.updateCopies(dt, time);
       m.torso.rotation.x = Math.min(1.4, 0.45 + this.deadT);
       m.jaw.rotation.x = Math.min(0.9, this.deadT);
@@ -3546,8 +3568,9 @@ class SkinwalkerBoss extends BossController {
 
     const d = this.dist();
     this.t -= dt;
-    // Dim rooms; darker when it's close
-    this.c.darknessTarget = this.state === 'scared' ? 0.35 : d < 9 ? 0.55 + Math.max(0, Math.sin(time * 17)) * 0.15 : 0.45;
+    // Dim rooms; darker when it's close; pitch black in a blackout
+    this.c.darknessTarget = this.lightsOff ? 0.93 : this.state === 'scared' ? 0.35 : d < 9 ? 0.55 + Math.max(0, Math.sin(time * 17)) * 0.15 : 0.45;
+    this.updateRage(dt);
 
     // It sheds copies of the players that stretch into long, crawling animals
     this.updateCopies(dt, time);
@@ -3564,23 +3587,27 @@ class SkinwalkerBoss extends BossController {
     const crawl = (this.state === 'hunt' && d > 7 && this.fogT <= 0) || this.state === 'scared';
     this.crawlK = THREE.MathUtils.damp(this.crawlK, crawl ? 1 : 0, 5, dt);
     const ck = this.crawlK;
-    const sp = this.state === 'scared' ? 17 : 10 + 4 * ck;
+    const rage = this.rage;
+    const sp = (this.state === 'scared' ? 17 : 10 + 4 * ck) + 7 * rage;
     const gait = (i: number) => Math.sin(time * sp + i * Math.PI);
     m.legs.forEach((l, i) => (l.rotation.x = moving ? gait(i) * (0.6 + 0.3 * ck) : 0));
     m.arms.forEach((a, i) => {
       // Upright: arms swing and hang; crawling: they reach forward like front legs
       const upright = moving ? -gait(i) * 0.5 : this.state === 'windup' ? -1.4 : this.state === 'lunge' ? -1.9 : -0.2;
       a.rotation.x = THREE.MathUtils.lerp(upright, -1.25 + gait(i + 0.5) * 0.55, ck);
-      a.rotation.z = (i ? -1 : 1) * (this.state === 'windup' ? 0.5 : 0.08);
+      // Hurt and furious: the arms flail as it runs
+      a.rotation.z = (i ? -1 : 1) * (this.state === 'windup' ? 0.5 : 0.08 + (moving ? rage * (0.35 + Math.sin(time * 19 + i * 2) * 0.35) : 0));
     });
     m.forearms.forEach((f, i) => (f.rotation.x = THREE.MathUtils.lerp(this.state === 'windup' ? -0.9 : -0.25, -0.5 + gait(i) * 0.3, ck)));
     const hunch = this.state === 'windup' ? 0.95 : this.state === 'scared' ? 1.25 : this.state === 'hurt' ? -0.35 : THREE.MathUtils.lerp(0.5, 1.3, ck);
     m.torso.rotation.x = THREE.MathUtils.damp(m.torso.rotation.x, hunch, 8, dt);
     m.torso.position.y = THREE.MathUtils.lerp(1.5, 1.05, ck);
+    // Jerky, broken movement the more it's hurt
+    m.torso.rotation.z = moving ? Math.sin(time * 23) * Math.sin(time * 7.7) * 0.22 * rage + (this.dartT > 0 ? this.dartSide * 0.35 : 0) : 0;
     // Head twitches: a sudden snap sideways, held for a moment
     this.twitchCd -= dt;
     if (this.twitchCd <= 0 && this.state !== 'mimic') {
-      this.twitchCd = 1.2 + Math.random() * 2.8;
+      this.twitchCd = (1.2 + Math.random() * 2.8) * (1 - 0.7 * this.rage);
       this.twitchT = 0.25 + Math.random() * 0.5;
       this.twitchAng = (Math.random() < 0.5 ? -1 : 1) * (0.6 + Math.random() * 0.9);
     }
@@ -3592,7 +3619,7 @@ class SkinwalkerBoss extends BossController {
     m.head.rotation.y = this.twitchT > 0 ? Math.sin(time * 40) * 0.08 : 0;
     const jawOpen = this.screamT > 0 ? 1.05 : this.state === 'lunge' ? 0.9 : this.state === 'windup' ? 0.6 : 0.08 + Math.max(0, Math.sin(time * 2.3)) * 0.06;
     m.jaw.rotation.x = THREE.MathUtils.damp(m.jaw.rotation.x, jawOpen, 18, dt);
-    const angry = this.state === 'windup' || this.state === 'lunge' || this.screamT > 0;
+    const angry = this.state === 'windup' || this.state === 'lunge' || this.screamT > 0 || this.lightsOff;
     m.eyes.color.setHex(angry ? 0xff2020 : 0xf5f5f5);
     m.eyeGlow.color.setHex(angry ? 0xff3030 : 0xfff1d6);
     m.eyeGlow.opacity = angry ? 0.75 : 0.35 + Math.sin(time * 3) * 0.1;
@@ -3613,12 +3640,36 @@ class SkinwalkerBoss extends BossController {
           break;
         }
         this.walk(p, this.speed * (1 + 0.25 * this.crawlK), dt);
+        // Erratic: sudden darts to the side (more often the more it's hurt)
+        this.dartCd -= dt;
+        if (this.dartCd <= 0 && this.rage > 0.25) {
+          this.dartCd = (0.6 + Math.random() * 1.6) / (0.4 + this.rage);
+          this.dartT = 0.18 + Math.random() * 0.15;
+          this.dartSide = Math.random() < 0.5 ? -1 : 1;
+          this.twitchT = 0.3;
+        }
+        if (this.dartT > 0) {
+          this.dartT -= dt;
+          this.pos.x += Math.cos(this.yaw) * this.dartSide * 9 * dt;
+          this.pos.z -= Math.sin(this.yaw) * this.dartSide * 9 * dt;
+          this.collide();
+        }
+        // Hurt enough, it stops walking the halls: it rips out of the wall of your room
+        this.tearCd -= dt * (this.lightsOff ? 2 : 1);
+        if (this.tearCd <= 0 && this.rage > 0.25 && d > 9 && !this.c.isDown && this.s.wallNear) {
+          this.tearCd = THREE.MathUtils.lerp(24, 9, this.rage) * (0.8 + Math.random() * 0.4);
+          const w = this.s.wallNear(p);
+          if (w) {
+            this.startTear(w);
+            break;
+          }
+        }
         if (d < 4.4 && Math.abs(p.y - this.pos.y) < 2.5 && !this.c.isDown && this.sameArea(this.pos)) this.startWindup();
         // Voices: it calls you with a friend's voice
         this.voiceCd -= dt;
         if (this.voiceCd <= 0 && d > 10) {
-          this.voiceCd = 16 + Math.random() * 10;
-          if (Math.random() < 0.5) this.scream(1.2);
+          this.voiceCd = (16 + Math.random() * 10) * (1 - 0.5 * this.rage);
+          if (Math.random() < 0.5 + 0.5 * this.rage) this.scream(1.2);
           const r = this.c.deps.remotes();
           const who = r.length ? r[Math.floor(Math.random() * r.length)].username : 'tu compañero';
           this.c.say(`Escuchas a ${who}: "¿Hola? ¡Ven, ayúdame!"… no es ${r.length ? 'él' : 'real'}`, 'skin-voice', 6);
@@ -3666,6 +3717,29 @@ class SkinwalkerBoss extends BossController {
       case 'recover':
         if (this.t <= 0) this.state = 'hunt';
         break;
+      case 'tear': {
+        // Inside the wall: the wallpaper bulges and rips open like cloth…
+        const w = this.tearAt!;
+        const rip = this.rips[this.rips.length - 1];
+        if (rip) {
+          const k = THREE.MathUtils.clamp(1 - this.t / 1.3, 0, 1);
+          rip.slit.scale.set(0.2 + k * 0.9, 0.15 + k * 1.0, 1);
+          rip.flaps.forEach((f, i) => (f.rotation.y = (i % 2 ? 1 : -1) * k * 1.3 + Math.sin(time * 40 + i) * 0.05 * k));
+          rip.g.position.copy(w.pos).addScaledVector(w.normal, 0.02 + Math.sin(time * 30) * 0.015 * k);
+        }
+        if (this.t <= 0) {
+          // …and it bursts out, screaming, right at you
+          this.pos.copy(w.pos).addScaledVector(w.normal, 0.8);
+          this.yaw = Math.atan2(p.x - this.pos.x, p.z - this.pos.z);
+          this.m.group.visible = true;
+          this.scream(1.1);
+          soundManager.playRip(1);
+          this.c.addEffect(burstEffect(this.root, w.pos.clone().add(V(0, 1.6, 0)), new THREE.MeshStandardMaterial({ color: 0xd4c27a }), 14, 0.18, 5, 1));
+          this.c.say('¡Salió de la pared! ¡CORRE!', 'skin-tear', 1);
+          this.startWindup(0.3);
+        }
+        break;
+      }
       case 'scared':
         this.walk(this.fleeTo, this.speed * 1.4, dt);
         if (this.t <= 0) {
@@ -3685,9 +3759,131 @@ class SkinwalkerBoss extends BossController {
     this.center.copy(this.pos).add(V(0, 1.9 - 0.6 * this.crawlK, 0));
   }
 
+  /** It vanishes into the walls and tears its way out of one in your room. */
+  private startTear(w: { pos: THREE.Vector3; normal: THREE.Vector3 }) {
+    this.state = 'tear';
+    this.t = 1.3;
+    this.tearAt = w;
+    this.m.group.visible = false;
+    if (this.copy) (this.endMimic(false), (this.state = 'tear'));
+    // The rip: a dark slit that opens, with flaps of wallpaper curling outwards
+    const g = new THREE.Group();
+    g.position.copy(w.pos);
+    g.rotation.y = Math.atan2(w.normal.x, w.normal.z);
+    // A ragged, lens-shaped hole (jagged edges like torn cloth)
+    const lens = new THREE.Shape();
+    const H = 1.6;
+    const pts = 9;
+    lens.moveTo(0, -H);
+    for (let k = 1; k < pts; k++) {
+      const y = -H + (2 * H * k) / pts;
+      lens.lineTo(0.55 * Math.sqrt(1 - (y / H) ** 2) + (Math.random() - 0.3) * 0.12, y);
+    }
+    lens.lineTo(0, H);
+    for (let k = pts - 1; k > 0; k--) {
+      const y = -H + (2 * H * k) / pts;
+      lens.lineTo(-0.55 * Math.sqrt(1 - (y / H) ** 2) - (Math.random() - 0.3) * 0.12, y);
+    }
+    const slit = new THREE.Mesh(new THREE.ShapeGeometry(lens), new THREE.MeshBasicMaterial({ color: 0x030202 }));
+    slit.scale.set(0.2, 0.15, 1);
+    slit.position.y = 1.75;
+    g.add(slit);
+    // Its eyes, watching from inside the hole
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
+    for (const sx of [-0.13, 0.13]) {
+      const eye = new THREE.Mesh(new THREE.CircleGeometry(0.06, 10), eyeMat);
+      eye.position.set(sx, 0.55, 0.01);
+      slit.add(eye);
+    }
+    // Torn wallpaper curling out from the edges (the back of the paper is paler)
+    const paper = new THREE.MeshStandardMaterial({ color: 0xc9b56a, roughness: 0.95, side: THREE.FrontSide });
+    const back = new THREE.MeshStandardMaterial({ color: 0xefe6c4, roughness: 0.95, side: THREE.BackSide });
+    const flaps: THREE.Mesh[] = [];
+    for (let k = 0; k < 8; k++) {
+      const shape = new THREE.Shape();
+      const h = 0.55 + Math.random() * 0.45;
+      shape.moveTo(0, 0);
+      shape.lineTo(0, h);
+      shape.lineTo(0.22 + Math.random() * 0.2, h * (0.55 + Math.random() * 0.3));
+      shape.lineTo(0.12 + Math.random() * 0.25, h * 0.25);
+      const geo = new THREE.ShapeGeometry(shape);
+      const f = new THREE.Mesh(geo, paper);
+      f.add(new THREE.Mesh(geo, back));
+      const side = k % 2 ? 1 : -1;
+      f.position.set(side * 0.12, 0.45 + Math.floor(k / 2) * 0.68, 0.03);
+      f.scale.x = side;
+      g.add(f);
+      flaps.push(f);
+    }
+    this.root.add(g);
+    this.rips.push({ g, slit, flaps, t: 0 });
+    soundManager.playRip(0.6);
+    soundManager.playStalkerWarning();
+    this.c.say('Algo rasga el papel tapiz de las paredes…', 'skin-tear-warn', 3);
+  }
+
+  /** Old rips fade away after a while. */
+  private updateRips(dt: number) {
+    for (let i = this.rips.length - 1; i >= 0; i--) {
+      const r = this.rips[i];
+      if (this.state === 'tear' && i === this.rips.length - 1) continue;
+      r.t += dt;
+      if (r.t > 9) {
+        disposeGroup(this.root, r.g);
+        this.rips.splice(i, 1);
+      }
+    }
+  }
+
+  /** The maze moves and the lights fail as it gets hurt. */
+  private updateRage(dt: number) {
+    if (this.state === 'intro') return;
+    const rage = this.rage;
+    // The maze rearranges itself at 75 %, 50 % and 25 % life, then every so often when it's badly hurt
+    const due = rage >= 0.25 * (this.shiftsDone + 1) && this.shiftsDone < 3;
+    this.shiftCd -= dt;
+    if (this.s.shiftMaze && (due || (rage >= 0.5 && this.shiftCd <= 0))) {
+      if (due) this.shiftsDone++;
+      this.shiftCd = THREE.MathUtils.lerp(34, 18, rage);
+      const avoid = [this.c.playerPos.clone(), this.pos.clone(), ...this.c.deps.remotes().map((r) => r.pos.clone()), ...this.copies.map((c) => c.pos.clone())];
+      const n = this.s.shiftMaze(avoid);
+      if (n) {
+        soundManager.playRumble(1);
+        this.scream(0.8);
+        this.c.say('¡Las paredes se mueven! El laberinto cambió de forma', 'skin-shift', 1);
+      }
+    }
+    // Blackouts below 40 % life
+    if (rage >= 0.6 && this.s.setLights) {
+      this.lightT -= dt;
+      if (!this.lightsOff && this.lightT <= 1 && this.lightT > 0) {
+        // flicker before it goes out
+        this.s.setLights(Math.sin(this.lightT * 40) > 0 ? 1 : 0);
+      }
+      if (this.lightT <= 0) {
+        this.setBlackout(!this.lightsOff);
+        this.lightT = this.lightsOff ? 3.5 + Math.random() * 2 : THREE.MathUtils.lerp(14, 7, rage) + Math.random() * 3;
+      }
+    }
+  }
+
+  private setBlackout(off: boolean) {
+    this.lightsOff = off;
+    this.s.setLights?.(off ? 0 : 1);
+    if (off) {
+      soundManager.playStalkerWarning();
+      this.c.say('Se fue la luz… solo ves sus ojos', 'skin-dark', 4);
+    }
+  }
+
   /** It screams and runs to the far side of the hall for a while. */
   private scare(fromSkull: boolean) {
     const p = this.c.playerPos;
+    if (this.state === 'tear' && this.tearAt) {
+      // Caught inside the wall: it comes out where it was going to, and runs away
+      this.pos.copy(this.tearAt.pos).addScaledVector(this.tearAt.normal, 0.8);
+      this.m.group.visible = true;
+    }
     const h = this.s.half - 3;
     const corners = [V(h, 0, h), V(-h, 0, h), V(h, 0, -h), V(-h, 0, -h)];
     corners.sort((a, b) => Math.hypot(b.x - p.x, b.z - p.z) - Math.hypot(a.x - p.x, a.z - p.z));
@@ -3956,17 +4152,18 @@ class SkinwalkerBoss extends BossController {
 
   targets(out: AimTarget[]) {
     if (this.dead) return;
-    out.push({
-      pos: this.center,
-      radius: 1.35,
-      accepts: ['bate', 'piedra', 'stomp'],
-      top: this.pos.y + 3.0 - 0.9 * this.crawlK,
-      hit: () => {
-        if (this.hitCd > 0) return;
-        this.hitCd = 0.5;
-        this.c.say('Nada lo lastima… solo la daga de obsidiana', 'skin-immune', 3);
-      },
-    });
+    if (this.state !== 'tear')
+      out.push({
+        pos: this.center,
+        radius: 1.35,
+        accepts: ['bate', 'piedra', 'stomp'],
+        top: this.pos.y + 3.0 - 0.9 * this.crawlK,
+        hit: () => {
+          if (this.hitCd > 0) return;
+          this.hitCd = 0.5;
+          this.c.say('Nada lo lastima… solo la daga de obsidiana', 'skin-immune', 3);
+        },
+      });
     // Its copies can be beaten with anything
     for (const c of this.copies) {
       if (c.phase === 'die') continue;

@@ -57,6 +57,12 @@ export interface BossSetup {
   navStep?: (from: THREE.Vector3, to: THREE.Vector3) => THREE.Vector3;
   /** Maze arenas: rooms between two places (0 = same room) */
   cellDist?: (a: THREE.Vector3, b: THREE.Vector3) => number;
+  /** Skinwalker: the maze rearranges itself (walls rise and sink); nobody gets walled in at `avoid` */
+  shiftMaze?: (avoid: THREE.Vector3[]) => number;
+  /** Skinwalker: a wall of the room you're in (its surface, facing into the room), to burst out of */
+  wallNear?: (p: THREE.Vector3) => { pos: THREE.Vector3; normal: THREE.Vector3 } | null;
+  /** Skinwalker: ceiling lamps on (1) or a blackout (0) */
+  setLights?: (on: number) => void;
 }
 
 function mulberry32(seed: number) {
