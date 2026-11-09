@@ -3718,6 +3718,7 @@ class SkinwalkerBoss extends BossController {
     if (this.dead) {
       this.deadT += dt;
       this.c.darknessTarget = 0;
+      soundManager.setTension(0);
       if (this.lightsOff) this.setBlackout(false);
       this.updateCopies(dt, time);
       m.torso.rotation.x = Math.min(1.4, 0.45 + this.deadT);
@@ -3736,6 +3737,12 @@ class SkinwalkerBoss extends BossController {
     // Dim rooms; darker when it's close; pitch black in a blackout
     this.c.darknessTarget = this.lightsOff ? 0.93 : this.state === 'scared' ? 0.35 : d < 9 ? 0.55 + Math.max(0, Math.sin(time * 17)) * 0.15 : 0.45;
     this.updateRage(dt);
+    // Music: heartbeat and strings the closer it (or a werewolf copy) is
+    let tension = this.lightsOff ? 0.6 : 0;
+    if (this.state === 'windup' || this.state === 'lunge' || this.state === 'tear') tension = 1;
+    else if (this.state !== 'scared' && this.state !== 'intro') tension = Math.max(tension, 1 - Math.max(0, d - 4) / 24);
+    for (const cp of this.copies) if (cp.phase === 'hunt' || cp.phase === 'distort') tension = Math.max(tension, 1 - cp.pos.distanceTo(p) / 20);
+    soundManager.setTension(tension);
 
     // It sheds copies of the players that stretch into long, crawling animals
     this.updateCopies(dt, time);
@@ -4033,6 +4040,10 @@ class SkinwalkerBoss extends BossController {
   }
 
   private setBlackout(off: boolean) {
+    if (off !== this.lightsOff) {
+      if (off) soundManager.playPowerDown();
+      else soundManager.playPowerUp();
+    }
     this.lightsOff = off;
     this.s.setLights?.(off ? 0 : 1);
     if (off) {
@@ -4259,6 +4270,7 @@ class SkinwalkerBoss extends BossController {
     c.t = 0;
     c.m.group.remove(c.tag);
     soundManager.playStalkerWarning();
+    soundManager.playBoneCrack(1 - Math.min(0.8, c.pos.distanceTo(this.c.playerPos) / 40));
     this.c.say(c.name === 'ti' ? '¡Era una copia tuya! ¡Se convierte en un hombre lobo!' : `¡No era ${c.name}! Se convierte en un hombre lobo…`, 'skin-reveal', 1.5);
   }
 
@@ -4345,6 +4357,7 @@ class SkinwalkerBoss extends BossController {
         c.lostT = far ? c.lostT + dt : 0;
         if (c.lostT > 1.5) {
           c.phase = 'revert';
+          soundManager.playWhisper(0.6);
           c.t = 0;
           c.lostT = 0;
           this.c.say('Te alejaste y la copia volvió a parecer normal… cuidado con quién se te acerque', 'skin-revert', 10);

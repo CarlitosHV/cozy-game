@@ -485,6 +485,7 @@ class BackroomsHazards implements LevelHazards {
   private flashes: { mesh: THREE.Mesh; t: number }[] = [];
   private loopMsgCd = 0;
   private quetsyCd = 0;
+  private giggleCd = 0;
   private solved = false;
 
   constructor(
@@ -698,6 +699,7 @@ class BackroomsHazards implements LevelHazards {
     this.warnCd = Math.max(0, this.warnCd - dt);
     this.loopMsgCd = Math.max(0, this.loopMsgCd - dt);
     this.quetsyCd = Math.max(0, this.quetsyCd - dt);
+    this.giggleCd = Math.max(0, this.giggleCd - dt);
     const cam = ctx.camera;
     cam.updateMatrixWorld();
     this.m4.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
@@ -734,6 +736,7 @@ class BackroomsHazards implements LevelHazards {
           d.plat.position.y = -100; // no collision any more
           d.light.color.setHex(0x34d399);
           soundManager.playCheckpoint();
+          soundManager.playDoorCreak();
           ctx.notify('¡La llave abrió la puerta! Sigue adelante…');
         } else if (d.hintCd <= 0) {
           d.hintCd = 5;
@@ -752,7 +755,7 @@ class BackroomsHazards implements LevelHazards {
         if (this.wareT <= 0) {
           this.wareLit = false;
           this.wareT = 13 + this.rng() * 6 - 4 * this.diff;
-          soundManager.playStalkerWarning();
+          soundManager.playPowerDown();
           ctx.notify('Las luces se apagaron… las Sonrisas vuelan hacia ti');
         }
       } else {
@@ -761,7 +764,7 @@ class BackroomsHazards implements LevelHazards {
         if (this.wareT <= 0) {
           this.wareLit = true;
           this.wareT = 5.5;
-          soundManager.playCheckpoint();
+          soundManager.playPowerUp();
           ctx.notify('¡Volvió la luz! Aprovecha para avanzar');
         }
       }
@@ -783,7 +786,7 @@ class BackroomsHazards implements LevelHazards {
       for (const l of c.levers) {
         if (!l.pulled && Math.hypot(P.x - l.pos.x, P.z - l.pos.z) < 1.3 && Math.abs(P.y - l.pos.y) < 2) {
           this.setLever(l, true);
-          soundManager.playWoodRattle();
+          soundManager.playClank();
           const n = c.levers.filter((x) => x.pulled).length;
           if (n < c.levers.length) ctx.notify(`¡Palanca ${n}/${c.levers.length}! El pasillo tiembla…`);
         }
@@ -802,12 +805,15 @@ class BackroomsHazards implements LevelHazards {
       // Not solved: past the third stretch you're back at the first one (it looks the same)
       if (!this.solved && P.z > c.loopZ0 + 3 * c.seg) {
         this.shiftAll(new THREE.Vector3(0, 0, -3 * c.seg), ctx);
+        soundManager.playStretch();
         if (this.loopMsgCd <= 0) {
           this.loopMsgCd = 12;
           ctx.notify('El pasillo se alarga… nunca llegas a la SALIDA. Busca 3 palancas en los huecos de las paredes');
         }
       }
     }
+
+    soundManager.setTension(ctx.spectating ? 0 : this.tensionFor(P, inWare));
 
     for (const m of this.monsters) {
       let moving = false;
@@ -825,6 +831,7 @@ class BackroomsHazards implements LevelHazards {
           this.mazeStep(m, target, 4.4, dt);
           moving = true;
           if (this.rng() < dt * 1.5 && m.pos.distanceTo(P) < 14) soundManager.playFootstep();
+          if (this.rng() < dt * 0.25 && m.pos.distanceTo(P) < 18) soundManager.playCreak();
         }
       } else if (m.kind === 'gateador') {
         const dd = this.inMaze(P) && !ctx.spectating ? this.cellDist(m.pos, P) : 99;
@@ -861,6 +868,10 @@ class BackroomsHazards implements LevelHazards {
           goal.x += Math.sin(time * 1.3 + m.home.z) * 1.2;
           this.moveTo(m, goal, 3.3 + 1.1 * this.diff, dt, true);
           moving = true;
+          if (this.giggleCd <= 0 && m.pos.distanceTo(P) < 7) {
+            this.giggleCd = 5 + this.rng() * 4;
+            soundManager.playGiggle(0.9);
+          }
         } else {
           this.moveTo(m, m.home, stunned ? 9 : 5, dt, true);
         }
@@ -874,6 +885,7 @@ class BackroomsHazards implements LevelHazards {
           m.pos.copy(m.home);
           m.model.group.visible = true;
           soundManager.playStalkerWarning();
+          soundManager.playScream(0.7);
           ctx.notify('¡Algo despertó detrás de ti! ¡CORRE! (lanza un orbe de luz para cegarlo)');
         }
         if (m.active) {
@@ -925,6 +937,21 @@ class BackroomsHazards implements LevelHazards {
         if (dx * dx + dz * dz < r * r && Math.abs(dy) < (m.kind === 'sonrisa' ? 1.4 : 1.8)) this.bite(m, ctx);
       }
     }
+  }
+
+  /** How scared the music should be: something close, chasing you, the dark, 1 heart left. */
+  private tensionFor(P: THREE.Vector3, inWare: boolean): number {
+    let t = this.hearts === 1 ? 0.6 : 0;
+    if (inWare && this.darkness > 0.5) t = Math.max(t, 0.3);
+    for (const m of this.monsters) {
+      if (m.stunT > 0) continue;
+      const d = m.pos.distanceTo(P);
+      if (m.kind === 'corredor' && m.active) t = Math.max(t, 0.6, 1 - Math.max(0, d - 4) / 30);
+      else if (m.kind === 'gateador' && m.active) t = Math.max(t, 0.95 - d / 30);
+      else if (m.kind === 'sonrisa' && m.fade > 0.5) t = Math.max(t, 1 - d / 18);
+      else if (m.kind === 'maniqui' && d < 10) t = Math.max(t, 0.6 * (1 - d / 10));
+    }
+    return t;
   }
 
   /** Moves you, the camera and whoever chases you along the corridor by the same amount. */

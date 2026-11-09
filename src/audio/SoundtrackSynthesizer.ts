@@ -1,7 +1,10 @@
 /**
  * Procedural Audio Synthesizer & Generative Ambient Soundtrack
  * 100% Web Audio API - Zero external MP3/audio files (Zero 404s).
+ * The Backrooms and the Skinwalker get a horror soundtrack instead (horrorAudio.ts); you can
+ * swap any of its sounds for your own recordings (customSounds.ts).
  */
+import { HorrorAudio } from './horrorAudio';
 
 export type WeatherType =
   | 'golden_hour'
@@ -39,6 +42,8 @@ class SoundtrackSynthesizer {
   private nightNode: AudioNode | null = null;
   private isRainGenerating: boolean = false;
   private currentWeather: WeatherType = 'golden_hour';
+  /** Horror soundtrack (the Backrooms) */
+  private horror: HorrorAudio | null = null;
 
   // Chords progression (pentatonic / jazz modal cozy: Emaj9, G#m7, C#m9, Aadd9, F#m7, Bsus4)
   // Frequencies in Hz
@@ -81,6 +86,7 @@ class SoundtrackSynthesizer {
       this.sfxGain.gain.setValueAtTime(0.5, this.ctx.currentTime);
       this.sfxGain.connect(this.masterGain);
 
+      this.horror = new HorrorAudio(this.ctx, this.musicGain, this.ambientGain, this.sfxGain, () => this.isMuted);
       this.startAmbientGenerators();
       this.startMusic();
     } catch {
@@ -131,6 +137,44 @@ class SoundtrackSynthesizer {
   public setWeather(weather: WeatherType, duration: number = 3.2) {
     this.currentWeather = weather;
     this.updateAmbientWeatherMix(duration);
+    // The Backrooms (and the Skinwalker's maze) get the horror soundtrack instead of the cozy one
+    this.horror?.setActive(weather === 'backrooms');
+  }
+
+  // --- Horror soundtrack hooks (no-ops outside the Backrooms) ---
+  /** 0 = calm … 1 = something is right behind you (heartbeat and trembling strings) */
+  public setTension(t: number) {
+    this.horror?.setTension(t);
+  }
+  public playPowerDown() {
+    this.horror?.powerDown();
+  }
+  public playPowerUp() {
+    this.horror?.powerUp();
+  }
+  public playWhisper(volume = 1) {
+    this.horror?.whisper(volume);
+  }
+  public playGiggle(volume = 1) {
+    this.horror?.giggle(volume);
+  }
+  public playBoneCrack(volume = 1) {
+    this.horror?.boneCrack(volume);
+  }
+  public playDoorCreak() {
+    this.horror?.doorCreak();
+  }
+  public playClank() {
+    this.horror?.clank();
+  }
+  public playStretch() {
+    this.horror?.stretch();
+  }
+  public playCreak() {
+    this.horror?.creak((Math.random() * 2 - 1) * 0.6);
+  }
+  public playHeartbeat(volume = 1) {
+    this.horror?.heartbeat(volume);
   }
 
   // --- Generative Ambient Soundtrack ---
@@ -141,6 +185,8 @@ class SoundtrackSynthesizer {
     // Trigger chords and arpeggios every 4.2 seconds
     const tick = () => {
       if (!this.ctx || this.ctx.state === 'suspended') return;
+      // In the Backrooms the horror soundtrack plays instead
+      if (this.horror?.isActive) return;
       this.playChord(this.chords[this.chordIndex]);
       this.chordIndex = (this.chordIndex + 1) % this.chords.length;
 
@@ -761,11 +807,13 @@ class SoundtrackSynthesizer {
 
   /** Cloth (or wallpaper) tearing. */
   public playRip(volume = 1) {
+    if (this.horror?.tryFile('rasgar', volume)) return;
     this.noiseBurst(0.9, 'bandpass', 900, 3800, 1.4, 0.35 * Math.max(0.05, Math.min(1, volume)), 0.6);
   }
 
   /** Walls grinding as they move: a deep rumble. */
   public playRumble(volume = 1) {
+    if (this.horror?.tryFile('pared_mueve', volume)) return;
     this.noiseBurst(1.8, 'lowpass', 160, 60, 0.8, 0.5 * Math.max(0.05, Math.min(1, volume)));
   }
 
@@ -775,6 +823,7 @@ class SoundtrackSynthesizer {
     const now = this.ctx.currentTime;
     const v = Math.max(0, Math.min(1, volume));
     if (v < 0.02) return;
+    if (this.horror?.tryFile('grito_skinwalker', v)) return;
     for (const [f0, type, g0] of [
       [920, 'sawtooth', 0.05],
       [1380, 'square', 0.025],

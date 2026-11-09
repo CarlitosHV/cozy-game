@@ -1,0 +1,34 @@
+SONIDOS PROPIOS (opcional)
+
+Pon aquí tus archivos de audio (mp3, ogg o wav) y actívalos en
+src/audio/customSounds.ts quitando el "//" de su línea y escribiendo el nombre del archivo.
+
+Si no pones nada, el juego usa los sonidos sintetizados (no hace falta ningún archivo).
+
+Lugares donde puedes poner un sonido (nombre: cuándo suena):
+
+  MÚSICA (se repite sin fin, córtala para que empalme)
+  musica_backrooms     música de fondo de los Backrooms y del Skinwalker
+  musica_persecucion   capa que sube cuando algo te persigue
+
+  FONDO (cada 6-16 s en los Backrooms, desde un lado al azar)
+  pasos_lejanos        pasos en algún cuarto
+  golpe_lejano         toques en una puerta o un portazo lejos
+  susurro              susurros (también cuando una copia vuelve a fingir)
+  rechinido            metal rechinando (también cuando el Maniquí se mueve sin que lo veas)
+  gota                 agua goteando
+  chispa               una lámpara chispeando
+  grito_lejano         un grito muy lejos
+
+  MOMENTOS
+  apagon               se va la luz (almacén, apagones del Skinwalker)
+  luz_vuelve           vuelve la luz
+  latido               un latido (se repite más rápido con el peligro o con 1 corazón)
+  risa                 una Sonrisa se ríe cerca de ti
+  puerta_abre          se abre la puerta con llave del laberinto
+  palanca              jalar una palanca del pasillo rojo
+  pasillo_alarga       el pasillo rojo te regresa (se "alarga")
+  huesos               la copia de un amigo se quiebra en hombre lobo
+  rasgar               el Skinwalker rasga el papel tapiz
+  pared_mueve          las paredes del laberinto se mueven
+  grito_skinwalker     el grito del Skinwalker
