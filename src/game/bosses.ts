@@ -3373,6 +3373,8 @@ interface SkinCopy {
     headGroup: THREE.Object3D;
     feet: THREE.Object3D[];
     claws: THREE.Object3D[];
+    /** Hips that join the body to the legs */
+    pelvis: THREE.Mesh;
   };
   /** Seconds you've been far from it (it turns back into a copy) */
   lostT: number;
@@ -4142,7 +4144,7 @@ class SkinwalkerBoss extends BossController {
     };
     // Legs bent like a dog's (for a drop of 1, scaled to the real height every frame)
     const legs: THREE.Group[] = [];
-    for (const sx of [0.11, -0.11]) {
+    for (const sx of [0.085, -0.085]) {
       const leg = new THREE.Group();
       leg.position.x = sx;
       const hip = new THREE.Vector3(0, 0, 0);
@@ -4166,6 +4168,12 @@ class SkinwalkerBoss extends BossController {
       holder.add(leg);
       legs.push(leg);
     }
+    // Hips (same clothes) so the legs are joined to the body
+    const pelvis = new THREE.Mesh(new THREE.SphereGeometry(0.16, 14, 10), cloth);
+    pelvis.scale.set(1.35, 0.95, 1.1);
+    pelvis.castShadow = true;
+    pelvis.visible = false;
+    holder.add(pelvis);
     // Long snout with teeth and a black nose
     const snout = new THREE.Group();
     snout.position.set(0, -0.06, 0.16);
@@ -4241,7 +4249,7 @@ class SkinwalkerBoss extends BossController {
     fur.visible = false;
     m.group.add(fur);
     const feet = [m.leftFoot.parent ?? m.leftFoot, m.rightFoot.parent ?? m.rightFoot];
-    return { legs, snout, ears, fur, headGroup: m.head.parent ?? m.head, feet, claws };
+    return { legs, snout, ears, fur, headGroup: m.head.parent ?? m.head, feet, claws, pelvis };
   }
 
   /** The copy stops pretending: it twists and stretches. */
@@ -4364,12 +4372,12 @@ class SkinwalkerBoss extends BossController {
       c.holder.scale.setScalar(S);
       // Upper body: pivots at the hips, hunched forward, a bit taller and thinner
       c.pitch.position.set(0, (lift + HIP) * k, 0);
-      c.pitch.rotation.x = 0.75 * k + (running ? Math.sin(stride * 2) * 0.05 : 0);
+      c.pitch.rotation.x = 0.5 * k + (running ? Math.sin(stride * 2) * 0.05 : 0);
       c.pitch.scale.set(1 - 0.12 * k, 1 + 0.3 * k, 1 - 0.05 * k);
       m.group.position.y = -HIP * k;
       // Head held up and forward, looking at you
       const W = c.wolf;
-      const hb = -0.7 * k;
+      const hb = -0.5 * k;
       if (k > 0.001) {
         W.headGroup.rotation.x = hb;
         W.headGroup.position.set(0, 0.95 - 0.95 * Math.cos(hb), -0.95 * Math.sin(hb));
@@ -4383,9 +4391,12 @@ class SkinwalkerBoss extends BossController {
       W.ears.scale.setScalar(k);
       W.fur.scale.setScalar(Math.max(0.01, k));
       for (const f of W.feet) f.visible = k < 0.3;
+      W.pelvis.visible = k > 0.08;
+      W.pelvis.position.set(0, lift + HIP + 0.02, 0.03);
+      W.pelvis.scale.set(1.35 * k, 0.95 * k, 1.1 * k);
       W.legs.forEach((leg, li) => {
         leg.visible = k > 0.08;
-        leg.position.set(li ? -0.11 : 0.11, lift + HIP, -0.02);
+        leg.position.set(li ? -0.085 : 0.085, lift + HIP - 0.02, 0.03);
         leg.scale.setScalar(Math.max(0.01, lift + HIP));
         leg.rotation.x = running ? Math.sin(stride + li * Math.PI) * 0.55 : 0;
       });
