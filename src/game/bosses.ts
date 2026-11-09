@@ -3337,20 +3337,32 @@ class DraculaBoss extends BossController {
 // ===========================================================================
 type SkinState = 'intro' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'scared' | 'hurt' | 'mimic' | 'tear';
 
-/** A copy of a player that the Skinwalker sheds: it twists and stretches into a giant, long-legged dog */
+/**
+ * A copy of a player that the Skinwalker sheds. Close up it twists into a tall, gaunt dog-man (a
+ * werewolf) that still wears the player's clothes and colors; if you get far enough away, it
+ * shrinks back into your friend's shape and tries to fool you again.
+ */
 interface SkinCopy {
   m: PlayerCharacterModel;
   holder: THREE.Group;
-  /** Tips the body forward until it's horizontal */
+  /** Hunches the upper body forward (pivots at the hips) */
   pitch: THREE.Group;
-  /** Four long legs that grow out of it, a tail and a mouth full of teeth */
-  dogLegs: THREE.Group[];
-  tail: THREE.Mesh;
-  maw: THREE.Group;
+  /** The werewolf parts, grown out of the character (same clothes/skin/hair materials) */
+  wolf: {
+    legs: THREE.Group[];
+    snout: THREE.Group;
+    ears: THREE.Group;
+    fur: THREE.Group;
+    headGroup: THREE.Object3D;
+    feet: THREE.Object3D[];
+    claws: THREE.Object3D[];
+  };
+  /** Seconds you've been far from it (it turns back into a copy) */
+  lostT: number;
   pos: THREE.Vector3;
   center: THREE.Vector3;
   yaw: number;
-  phase: 'copy' | 'distort' | 'hunt' | 'die';
+  phase: 'copy' | 'distort' | 'hunt' | 'revert' | 'die';
   t: number;
   hp: number;
   mats: { mat: THREE.MeshStandardMaterial; base: THREE.Color }[];
@@ -3924,52 +3936,6 @@ class SkinwalkerBoss extends BossController {
     holder.add(pitch);
     holder.position.copy(at);
     this.root.add(holder);
-    // The dog parts (hidden while it pretends): long jointed legs, a thin tail, a mouth with teeth
-    const fleshMat = new THREE.MeshStandardMaterial({ color: 0x4a3f37, roughness: 0.9, flatShading: true });
-    const clawMat = new THREE.MeshStandardMaterial({ color: 0x1c1714, roughness: 0.4 });
-    const dogLegs: THREE.Group[] = [];
-    for (const [lx, lz] of [
-      [0.24, 0.42],
-      [-0.24, 0.42],
-      [0.24, -0.48],
-      [-0.24, -0.48],
-    ]) {
-      const leg = new THREE.Group();
-      leg.position.set(lx, 0, lz);
-      const up = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.45, 3, 6), fleshMat);
-      up.position.set(0, -0.27, lz > 0 ? 0.06 : -0.08);
-      up.rotation.x = lz > 0 ? 0.25 : -0.35;
-      const low = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.45, 3, 6), fleshMat);
-      low.position.set(0, -0.78, lz > 0 ? 0.04 : -0.02);
-      low.rotation.x = lz > 0 ? -0.15 : 0.3;
-      const cl = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 4), clawMat);
-      cl.position.set(0, -1.04, 0.07);
-      cl.rotation.x = Math.PI / 2;
-      leg.add(up, low, cl);
-      leg.visible = false;
-      holder.add(leg);
-      dogLegs.push(leg);
-    }
-    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.9, 5), fleshMat);
-    tail.geometry.translate(0, 0.45, 0);
-    tail.position.set(0, 0.05, -0.75);
-    tail.visible = false;
-    holder.add(tail);
-    const maw = new THREE.Group();
-    const gum = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.09, 0.12), new THREE.MeshBasicMaterial({ color: 0x1a0505 }));
-    maw.add(gum);
-    const toothMat = new THREE.MeshStandardMaterial({ color: 0xf2eee3, roughness: 0.5 });
-    for (let k2 = 0; k2 < 7; k2++) {
-      for (const sy of [1, -1]) {
-        const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.06, 4), toothMat);
-        tooth.position.set(-0.12 + k2 * 0.04, 0.035 * sy, 0.05);
-        tooth.rotation.x = sy > 0 ? Math.PI : 0;
-        maw.add(tooth);
-      }
-    }
-    maw.position.set(0, -0.1, 0.2);
-    maw.visible = false;
-    m.head.add(maw);
     const mats: SkinCopy['mats'] = [];
     m.group.traverse((o) => {
       const mesh = o as THREE.Mesh;
@@ -3978,11 +3944,17 @@ class SkinwalkerBoss extends BossController {
       mesh.material = mat;
       mats.push({ mat, base: mat.color.clone() });
     });
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const wolf = this.buildWolf(m, pick.look.hairColor, holder);
+    for (const o of [wolf.snout, wolf.ears, wolf.fur, ...wolf.legs])
+      o.traverse((x) => {
+        const mesh = x as THREE.Mesh;
+        if (mesh.isMesh && mesh.material instanceof THREE.MeshStandardMaterial && !mats.some((q) => q.mat === mesh.material)) mats.push({ mat: mesh.material, base: mesh.material.color.clone() });
+      });
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffe14a });
     const eyes: THREE.Mesh[] = [];
     for (const sgn of [1, -1]) {
       const e = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), eyeMat);
-      e.position.set(0.09 * sgn, 0.02, 0.2);
+      e.position.set(0.085 * sgn, 0.04, 0.2);
       e.visible = false;
       m.head.add(e);
       eyes.push(e);
@@ -3990,7 +3962,134 @@ class SkinwalkerBoss extends BossController {
     // Same name tag as a real friend: you can't tell it apart… until it changes
     const tag = createNameTagSprite(pick.name === 'ti' ? this.c.deps.playerModel().appearance.name || 'Tú' : pick.name);
     m.group.add(tag);
-    this.copies.push({ m, holder, pitch, dogLegs, tail, maw, pos: at, center: at.clone(), yaw: Math.atan2(p.x - at.x, p.z - at.z), phase: 'copy', t: 0, hp: 2, mats, eyes, hitCd: 0, name: pick.name, tag });
+    this.copies.push({ m, holder, pitch, wolf, lostT: 0, pos: at, center: at.clone(), yaw: Math.atan2(p.x - at.x, p.z - at.z), phase: 'copy', t: 0, hp: 2, mats, eyes, hitCd: 0, name: pick.name, tag });
+  }
+
+  /**
+   * Werewolf parts that grow out of a copy, made with the character's own materials: digitigrade
+   * legs (trousers, bare skin, boots for paws), a long snout with teeth, pointed ears and tufts of
+   * fur in the hair color, and claws on the hands.
+   */
+  private buildWolf(m: PlayerCharacterModel, hairColor: string, holder: THREE.Group): SkinCopy['wolf'] {
+    const skin = m.head.material as THREE.MeshStandardMaterial;
+    const cloth = m.body.material as THREE.MeshStandardMaterial;
+    const boot = m.leftFoot.material as THREE.MeshStandardMaterial;
+    const hair = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 0.85 });
+    const claw = new THREE.MeshStandardMaterial({ color: 0x1c1714, roughness: 0.35 });
+    const tooth = new THREE.MeshStandardMaterial({ color: 0xf2eee3, roughness: 0.5 });
+    const gum = new THREE.MeshBasicMaterial({ color: 0x2a0606 });
+    /** A capsule from a to b */
+    const bone = (g: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material) => {
+      const len = a.distanceTo(b);
+      const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.01, len - 2 * r), 4, 8), mat);
+      mesh.position.copy(a).add(b).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      mesh.castShadow = true;
+      g.add(mesh);
+      return mesh;
+    };
+    // Legs bent like a dog's (for a drop of 1, scaled to the real height every frame)
+    const legs: THREE.Group[] = [];
+    for (const sx of [0.11, -0.11]) {
+      const leg = new THREE.Group();
+      leg.position.x = sx;
+      const hip = new THREE.Vector3(0, 0, 0);
+      const knee = new THREE.Vector3(0, -0.42, 0.17);
+      const hock = new THREE.Vector3(0, -0.8, -0.13);
+      const paw = new THREE.Vector3(0, -0.96, 0.02);
+      bone(leg, hip, knee, 0.085, cloth);
+      bone(leg, knee, hock, 0.06, skin);
+      bone(leg, hock, paw, 0.05, skin);
+      const foot = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), boot);
+      foot.scale.set(1, 0.55, 1.5);
+      foot.position.set(0, -0.965, 0.07);
+      leg.add(foot);
+      for (const cx of [-0.035, 0, 0.035]) {
+        const c = new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.07, 4), claw);
+        c.rotation.x = Math.PI / 2;
+        c.position.set(cx, -0.975, 0.18);
+        leg.add(c);
+      }
+      leg.visible = false;
+      holder.add(leg);
+      legs.push(leg);
+    }
+    // Long snout with teeth and a black nose
+    const snout = new THREE.Group();
+    snout.position.set(0, -0.06, 0.16);
+    // Furry muzzle in the hair color, bare skin underneath
+    const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.11, 0.34, 8), hair);
+    muzzle.rotation.x = Math.PI / 2;
+    muzzle.scale.set(1, 1, 0.8);
+    muzzle.position.z = 0.14;
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.05, 0.26), skin);
+    jaw.position.set(0, -0.09, 0.1);
+    jaw.rotation.x = 0.25;
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.04, 0.24), gum);
+    mouth.position.set(0, -0.06, 0.12);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3 }));
+    nose.position.set(0, 0.03, 0.31);
+    snout.add(muzzle, jaw, mouth, nose);
+    // Shaggy cheeks
+    for (const sx of [1, -1])
+      for (let k = 0; k < 3; k++) {
+        const t = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.16, 4), hair);
+        t.position.set(sx * 0.17, -0.04 - k * 0.05, -0.06);
+        t.rotation.z = sx * (1.9 + k * 0.25);
+        snout.add(t);
+      }
+    for (let k = 0; k < 5; k++)
+      for (const sx of [-0.06, 0.06]) {
+        const t = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.05, 4), tooth);
+        t.rotation.x = Math.PI;
+        t.position.set(sx, -0.065, 0.02 + k * 0.05);
+        snout.add(t);
+      }
+    snout.visible = false;
+    m.head.add(snout);
+    // Pointed ears (they poke through hats)
+    const ears = new THREE.Group();
+    for (const sx of [0.12, -0.12]) {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.085, 0.3, 4), hair);
+      ear.position.set(sx, 0.27, -0.03);
+      ear.rotation.z = -sx * 1.6;
+      ears.add(ear);
+    }
+    ears.visible = false;
+    m.head.add(ears);
+    // Tufts of fur along the back and on the shoulders
+    const fur = new THREE.Group();
+    for (let k = 0; k < 7; k++) {
+      const t = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.2, 4), hair);
+      t.position.set((k % 2 ? 1 : -1) * 0.03, 0.4 + k * 0.07, -0.21);
+      t.rotation.x = -2.2;
+      fur.add(t);
+    }
+    for (const sx of [0.22, -0.22])
+      for (let k = 0; k < 3; k++) {
+        const t = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.16, 4), hair);
+        t.position.set(sx, 0.7, -0.05 + k * 0.06);
+        t.rotation.z = -sx * 4;
+        fur.add(t);
+      }
+    // Claws on the hands
+    const claws: THREE.Object3D[] = [];
+    for (const arm of [m.leftArm, m.rightArm]) {
+      const cg = new THREE.Group();
+      for (const cx of [-0.03, 0, 0.03]) {
+        const c = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.08, 4), claw);
+        c.rotation.x = Math.PI;
+        c.position.set(cx, -0.31, 0.03);
+        cg.add(c);
+      }
+      cg.visible = false;
+      arm.add(cg);
+      claws.push(cg);
+    }
+    fur.visible = false;
+    m.group.add(fur);
+    const feet = [m.leftFoot.parent ?? m.leftFoot, m.rightFoot.parent ?? m.rightFoot];
+    return { legs, snout, ears, fur, headGroup: m.head.parent ?? m.head, feet, claws };
   }
 
   /** The copy stops pretending: it twists and stretches. */
@@ -4000,7 +4099,7 @@ class SkinwalkerBoss extends BossController {
     c.t = 0;
     c.m.group.remove(c.tag);
     soundManager.playStalkerWarning();
-    this.c.say(c.name === 'ti' ? '¡Era una copia tuya! ¡Se estira como un perro gigante!' : `¡No era ${c.name}! Se estira como un perro gigante…`, 'skin-reveal', 1.5);
+    this.c.say(c.name === 'ti' ? '¡Era una copia tuya! ¡Se convierte en un hombre lobo!' : `¡No era ${c.name}! Se convierte en un hombre lobo…`, 'skin-reveal', 1.5);
   }
 
   private killCopy(c: SkinCopy) {
@@ -4047,10 +4146,19 @@ class SkinwalkerBoss extends BossController {
         if (near || c.t > 30) this.reveal(c);
       } else if (c.phase === 'distort') {
         k = ease(Math.min(1, c.t / 1.4));
-        c.holder.position.x += Math.sin(time * 50) * 0.01;
         if (c.t > 1.4) {
           c.phase = 'hunt';
           c.t = 0;
+          c.lostT = 0;
+        }
+      } else if (c.phase === 'revert') {
+        // Far from you, it shrinks back into your friend's shape… and comes to fool you again
+        k = 1 - ease(Math.min(1, c.t / 1.2));
+        if (c.t > 1.2) {
+          c.phase = 'copy';
+          c.t = 0;
+          m.group.add(c.tag);
+          for (const f of c.wolf.feet) f.visible = true;
         }
       } else {
         k = 1;
@@ -4072,6 +4180,15 @@ class SkinwalkerBoss extends BossController {
           }
         }
         const d = Math.hypot(p.x - c.pos.x, p.z - c.pos.z);
+        // You got away: if it stays far from you for a moment, it turns back into a copy
+        const far = d > 20 || (this.s.cellDist ? this.s.cellDist(c.pos, p) >= 5 : false);
+        c.lostT = far ? c.lostT + dt : 0;
+        if (c.lostT > 1.5) {
+          c.phase = 'revert';
+          c.t = 0;
+          c.lostT = 0;
+          this.c.say('Te alejaste y la copia volvió a parecer normal… cuidado con quién se te acerque', 'skin-revert', 10);
+        }
         if (this.guarding(c.pos)) {
           this.c.say('¡Quetsy se comió una copia!', 'skin-jade-copy', 2);
           this.killCopy(c);
@@ -4083,35 +4200,58 @@ class SkinwalkerBoss extends BossController {
           continue;
         }
       }
-      // Stretch into a giant dog: the body tips forward and grows long, four long legs grow out of it
-      const S = 1 + 1.1 * k;
-      const legLen = 1.05 * k;
-      const gallop = c.phase === 'hunt' ? time * 13 + i : 0;
-      c.holder.position.set(c.pos.x, c.pos.y + legLen * S, c.pos.z);
-      c.holder.rotation.set(0, c.yaw, k > 0.9 ? Math.sin(time * 12 + i) * 0.05 : 0, 'YXZ');
+      // Turn into a tall, hunched werewolf that still wears the character's clothes
+      const S = 1 + 0.75 * k;
+      const lift = 0.78 * k;
+      const HIP = 0.26;
+      const running = c.phase === 'hunt';
+      const stride = running ? time * 11 + i : 0;
+      const shiver = c.phase === 'distort' || c.phase === 'revert' ? Math.sin(time * 50) * 0.02 * k : 0;
+      c.holder.position.set(c.pos.x + shiver, c.pos.y + (running ? Math.abs(Math.sin(stride)) * 0.06 * S : 0), c.pos.z);
+      c.holder.rotation.set(0, c.yaw, 0, 'YXZ');
       c.holder.scale.setScalar(S);
-      c.pitch.rotation.x = 1.5 * k + (c.phase === 'hunt' ? Math.sin(gallop * 2) * 0.05 : 0);
-      c.pitch.scale.set(1 - 0.2 * k, 1 + 0.75 * k, 1 - 0.1 * k);
-      m.group.position.y = -0.6 * k;
-      c.dogLegs.forEach((l, li) => {
-        l.visible = k > 0.02;
-        l.scale.set(1, Math.max(0.01, k), 1);
-        l.rotation.x = c.phase === 'hunt' ? Math.sin(gallop + (li < 2 ? 0 : Math.PI) + (li % 2) * 0.6) * 0.55 : 0;
+      // Upper body: pivots at the hips, hunched forward, a bit taller and thinner
+      c.pitch.position.set(0, (lift + HIP) * k, 0);
+      c.pitch.rotation.x = 0.75 * k + (running ? Math.sin(stride * 2) * 0.05 : 0);
+      c.pitch.scale.set(1 - 0.12 * k, 1 + 0.3 * k, 1 - 0.05 * k);
+      m.group.position.y = -HIP * k;
+      // Head held up and forward, looking at you
+      const W = c.wolf;
+      const hb = -0.7 * k;
+      if (k > 0.001) {
+        W.headGroup.rotation.x = hb;
+        W.headGroup.position.set(0, 0.95 - 0.95 * Math.cos(hb), -0.95 * Math.sin(hb));
+      } else {
+        W.headGroup.rotation.x = 0;
+      }
+      W.snout.visible = W.ears.visible = W.fur.visible = k > 0.05;
+      for (const cg of W.claws) cg.visible = k > 0.05;
+      W.snout.scale.set(k, k, k * (1 + 0.3 * k));
+      (W.snout.children[1] as THREE.Mesh).rotation.x = running ? 0.25 + Math.max(0, Math.sin(time * 7 + i)) * 0.35 : 0.3;
+      W.ears.scale.setScalar(k);
+      W.fur.scale.setScalar(Math.max(0.01, k));
+      for (const f of W.feet) f.visible = k < 0.3;
+      W.legs.forEach((leg, li) => {
+        leg.visible = k > 0.08;
+        leg.position.set(li ? -0.11 : 0.11, lift + HIP, -0.02);
+        leg.scale.setScalar(Math.max(0.01, lift + HIP));
+        leg.rotation.x = running ? Math.sin(stride + li * Math.PI) * 0.55 : 0;
       });
-      c.tail.visible = k > 0.3;
-      c.tail.scale.setScalar(k);
-      c.tail.rotation.set(-2.0 + Math.sin(time * 9 + i) * 0.25, 0, Math.sin(time * 6 + i) * 0.3);
-      c.maw.visible = k > 0.3;
-      c.maw.scale.set(1, 1 + (c.phase === 'hunt' ? Math.max(0, Math.sin(time * 6 + i)) * 1.6 : 0.6), 1);
-      m.leftArm.rotation.x = m.rightArm.rotation.x = -1.4 * k;
-      m.leftArm.scale.y = m.rightArm.scale.y = 1 + 0.6 * k;
-      m.head.rotation.x = -1.35 * k;
+      // Long arms hanging to the knees, swinging as it runs (as a copy, it walks like your friend)
+      m.leftArm.scale.y = m.rightArm.scale.y = 1 + 2.1 * k;
+      if (k > 0.001) {
+        m.leftArm.rotation.x = -0.25 * k + (running ? Math.sin(stride + Math.PI) * 0.6 : 0);
+        m.rightArm.rotation.x = -0.25 * k + (running ? Math.sin(stride) * 0.6 : 0);
+        m.leftArm.rotation.z = 0.12 + 0.15 * k;
+        m.rightArm.rotation.z = -0.12 - 0.15 * k;
+      }
       for (const e of c.eyes) e.visible = k > 0.3;
+      // Same clothes and colors, just a little grimier
       for (const { mat, base } of c.mats) {
-        mat.color.copy(base).lerp(new THREE.Color(0x3a322c), 0.8 * k);
+        mat.color.copy(base).lerp(new THREE.Color(0x3a322c), 0.15 * k);
         mat.emissive.setHex(0x000000);
       }
-      c.center.set(c.pos.x, c.pos.y + 0.8 + legLen * S * 0.9, c.pos.z);
+      c.center.set(c.pos.x, c.pos.y + (0.75 + lift + HIP * k) * S, c.pos.z);
     }
   }
 
@@ -4284,7 +4424,7 @@ class SkinwalkerBoss extends BossController {
     if (this.state === 'scared') return this.has('daga') ? 'Tienes la daga: espera a que vuelva' : 'Huyó: busca la daga de obsidiana (brillo morado)';
     if (this.state === 'hurt') return '¡Le diste! Ahora huirá un momento';
     if (this.has('daga')) return 'Déjalo acercarse y usa la daga cuando lo tengas enfrente';
-    if (this.copies.some((c) => c.phase === 'hunt')) return '¡Un perro gigante te persigue! Pégale con el bate o piedras';
+    if (this.copies.some((c) => c.phase === 'hunt')) return '¡Un hombre lobo te persigue! Pégale con el bate o piedras… o aléjate y volverá a ser una copia';
     if (this.has('craneo')) return 'Cuando se acerque, usa el cráneo de obsidiana para espantarlo';
     return 'Toma un cráneo de obsidiana (brillo violeta) y escapa de él';
   }
