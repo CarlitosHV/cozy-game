@@ -1811,7 +1811,7 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
       if (gNeighbors(g, i, j).length === 1) deadEnds.push([i, j]);
     }
 
-  // A skull next to every start corner, more around the maze; food to heal
+  // A skull next to every start corner, more around the maze; food to heal (no berries or nuts)
   const items: ItemSpot[] = [];
   corners.slice(0, 4).forEach(([i, j]) => {
     const c = gCenter(g, i, j);
@@ -1820,14 +1820,13 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
   const shuffledCells = setup.searchSpots!.slice().sort(() => rng() - 0.5);
   shuffledCells.slice(0, 4).forEach((c) => items.push({ type: 'craneo', pos: new THREE.Vector3(c.x, Y + 0.95, c.z) }));
   shuffledCells.slice(4, 10).forEach((c, k) => setup.food.push({ pos: new THREE.Vector3(c.x + 1, Y + 1.0, c.z + 1), kind: k % 2 ? 'burger' : 'fries' }));
-  // Magic berries, so your companion's power can be used again (Hombre Polilla's rewind too)
-  shuffledCells.slice(10, 14).forEach((c) => items.push({ type: 'baya', pos: new THREE.Vector3(c.x - 1, Y + 0.95, c.z - 1) }));
 
   // Relics in dead ends (or anywhere if there aren't enough)
   const relicCells = [...deadEnds.sort(() => rng() - 0.5).map(([i, j]) => gCenter(g, i, j)), ...shuffledCells.slice(14)];
   for (let k = 0; k < 8; k++) {
     const c = relicCells[k];
-    kit.addCollectible(`swc${k}`, k % 3 === 0 ? 'golden_acorn' : 'sun_crystal', c.x - 1.2, Y + 1.2, c.z + 1.2);
+    // Only crystals here (no acorns: in this fight they looked like useless nuts)
+    kit.addCollectible(`swc${k}`, 'sun_crystal', c.x - 1.2, Y + 1.2, c.z + 1.2);
   }
 
   const world = kit.finish(setup.portalPos.clone(), enemies, items, new THREE.Vector3(spawn.x + 2, Y + 3, spawn.z - 3));
