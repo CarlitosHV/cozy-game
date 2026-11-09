@@ -55,7 +55,7 @@ import {
 } from './bossModels';
 import { createPlayerCharacter, PlayerCharacterModel } from './models';
 import { createNameTagSprite } from './RemotePlayersManager';
-import { makeNetWrap, makeStone } from './toolModels';
+import { createToolModel, makeNetWrap, makeStone } from './toolModels';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const ease = (k: number) => k * k * (3 - 2 * k);
@@ -72,6 +72,23 @@ function disposeGroup(root: THREE.Object3D, obj: THREE.Object3D) {
     const m = o as THREE.Mesh;
     if (m.isMesh) m.geometry?.dispose();
   });
+}
+
+/** Soft round glow (made once) for the floating obsidian skull */
+let _skullGlow: THREE.CanvasTexture | null = null;
+function skullGlowTex(): THREE.CanvasTexture {
+  if (_skullGlow) return _skullGlow;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d')!;
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.35, 'rgba(216,180,254,0.6)');
+  gr.addColorStop(1, 'rgba(168,85,247,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, 64, 64);
+  _skullGlow = new THREE.CanvasTexture(c);
+  return _skullGlow;
 }
 
 export abstract class BossController {
@@ -3388,6 +3405,15 @@ class SkinwalkerBoss extends BossController {
   private center = V();
   private beam: THREE.Mesh;
   private daggerAt: THREE.Vector3 | null = null;
+  /** One dagger for the whole party: the n-th one lies in the same place for everybody */
+  private daggerN = 0;
+  /** Who carries it ('me', a friend's userId, or nobody) */
+  private daggerHeldBy: string | null = null;
+  private hadDagger = false;
+  /** Seconds until the next dagger shows up after one was used */
+  private daggerDelay = 0;
+  /** Obsidian skulls floating over someone's head before the flash */
+  private skulls: { g: THREE.Group; glow: THREE.Sprite; flash: THREE.Mesh | null; t: number; at: () => THREE.Vector3 | null; mine: boolean; flashed: boolean }[] = [];
   private copy: PlayerCharacterModel | null = null;
   /** Nubi's fog: it lost your trail */
   private fogT = 0;
@@ -3489,17 +3515,140 @@ class SkinwalkerBoss extends BossController {
     this.pos.z = THREE.MathUtils.clamp(this.pos.z, -h, h);
   }
 
-  /** The dagger lies somewhere far from you (one at a time, only if you don't carry one). */
+  /**
+   * The dagger lies somewhere in the maze: only one for the whole party at a time (nobody gets
+   * a new one until it's used). The n-th dagger is in the same place for everybody.
+   */
   private ensureDagger() {
     const items = this.c.deps.items;
-    if (this.has('daga') || items.isLyingAround('daga')) return;
+    if (this.has('daga') || items.isLyingAround('daga') || this.daggerDelay > 0) return;
+    if (this.daggerHeldBy && this.daggerHeldBy !== 'me') {
+      // A friend carries it… unless they left the party
+      if (this.c.deps.remotes().some((r) => r.userId === this.daggerHeldBy)) return;
+      this.daggerHeldBy = null;
+    }
     const spots = this.s.searchSpots ?? [];
     if (!spots.length) return;
-    const p = this.c.playerPos;
-    const far = spots.filter((s) => Math.hypot(s.x - p.x, s.z - p.z) > 12);
-    const at = (far.length ? far : spots)[Math.floor(Math.random() * (far.length || spots.length))];
+    const h = Math.abs(Math.sin((this.s.level * 31 + this.daggerN * 7919) * 12.9898) * 43758.5453) % 1;
+    const at = spots[Math.floor(h * spots.length)];
     items.spawnDrop('daga', V(at.x, this.s.floorY + 0.95, at.z));
     this.daggerAt = at.clone();
+  }
+
+  /** Keeps the one dagger in sync with the party (who took it, when it was used). */
+  private trackDagger(dt: number) {
+    const hasD = this.has('daga');
+    if (hasD && !this.hadDagger) {
+      this.daggerHeldBy = 'me';
+      this.daggerAt = null;
+      this.c.deps.send('dagtake', this.daggerN);
+    } else if (!hasD && this.hadDagger && this.daggerHeldBy === 'me') {
+      // Lost it without using it (it'll show up again where it was)
+      this.daggerHeldBy = null;
+      this.c.deps.send('dagfree', this.daggerN);
+    }
+    this.hadDagger = hasD;
+    if (this.daggerDelay > 0) {
+      this.daggerDelay -= dt;
+      if (this.daggerDelay <= 0) {
+        this.daggerDelay = 0;
+        this.ensureDagger();
+        if (this.c.deps.items.isLyingAround('daga')) this.c.say('Apareció otra daga de obsidiana en el laberinto (brillo morado)', 'skin-new-dagger', 2);
+      }
+    }
+  }
+
+  onEvent(kind: string, i: number, _v: number, from: string) {
+    const who = this.c.deps.remotes().find((r) => r.userId === from);
+    if (kind === 'dagtake') {
+      this.daggerHeldBy = from;
+      this.c.deps.items.takeLying('daga', this.daggerAt ?? this.c.playerPos, this.daggerAt ? 3 : 999);
+      this.daggerAt = null;
+      this.c.say(`${who?.username ?? 'Un amigo'} encontró la daga de obsidiana`, 'skin-dag-taken', 2);
+    } else if (kind === 'dagused') {
+      this.daggerN = Math.max(this.daggerN, i);
+      this.daggerHeldBy = null;
+      this.daggerDelay = 4;
+    } else if (kind === 'dagfree') {
+      if (this.daggerHeldBy === from) this.daggerHeldBy = null;
+    } else if (kind === 'skull' && who) {
+      // A friend's skull flashes over there (it scares whatever is near them)
+      this.startSkull(() => this.c.deps.remotes().find((r) => r.userId === from)?.pos ?? null, false);
+    }
+  }
+
+  /** The obsidian skull floats up over the head, spinning, and bursts into a flash that fills the room. */
+  private startSkull(at: () => THREE.Vector3 | null, mine: boolean) {
+    const p0 = at();
+    if (!p0) return;
+    const g = new THREE.Group();
+    const skull = createToolModel('craneo');
+    skull.scale.setScalar(1.7);
+    g.add(skull);
+    const glow = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: skullGlowTex(), color: 0xc084fc, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    glow.scale.setScalar(1.6);
+    g.add(glow);
+    g.position.copy(p0).add(V(0, 1.6, 0));
+    this.root.add(g);
+    this.skulls.push({ g, glow, flash: null, t: 0, at, mine, flashed: false });
+    soundManager.playUpdraft();
+    if (mine) this.c.say('¡El cráneo de obsidiana flota sobre tu cabeza…!', 'skin-skull-up', 1);
+  }
+
+  private updateSkulls(dt: number, time: number) {
+    for (let i = this.skulls.length - 1; i >= 0; i--) {
+      const s = this.skulls[i];
+      s.t += dt;
+      const p = s.at();
+      const rise = Math.min(1, s.t / 0.9);
+      if (p && !s.flashed) s.g.position.set(p.x, p.y + 1.6 + rise * 1.1 + Math.sin(time * 6) * 0.05, p.z);
+      s.g.children[0].rotation.y += dt * (3 + rise * 9);
+      s.glow.scale.setScalar(1.6 + rise * 2.2 + Math.sin(time * 20) * 0.2);
+      (s.glow.material as THREE.SpriteMaterial).opacity = 0.5 + rise * 0.45;
+      if (!s.flashed && s.t >= 0.9) {
+        s.flashed = true;
+        // FLASH: a burst of violet-white light that fills the whole room
+        const flash = new THREE.Mesh(
+          new THREE.SphereGeometry(1, 24, 16),
+          new THREE.MeshBasicMaterial({ color: 0xf3e8ff, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending })
+        );
+        flash.position.copy(s.g.position);
+        this.root.add(flash);
+        s.flash = flash;
+        soundManager.playTimeBonus();
+        soundManager.playWindGust();
+        this.skullBlast(s.g.position.clone().setY(this.s.floorY), s.mine);
+      }
+      if (s.flash) {
+        const k = Math.min(1, (s.t - 0.9) / 0.55);
+        s.flash.scale.setScalar(1 + k * 16);
+        (s.flash.material as THREE.MeshBasicMaterial).opacity = 0.95 * (1 - k);
+        s.g.scale.setScalar(Math.max(0.01, 1 - k));
+      }
+      if (s.t > 1.5) {
+        if (s.flash) disposeGroup(this.root, s.flash);
+        disposeGroup(this.root, s.g);
+        this.skulls.splice(i, 1);
+      }
+    }
+  }
+
+  /** What the flash does: undoes the copies around and sends the Skinwalker running. */
+  private skullBlast(at: THREE.Vector3, mine: boolean) {
+    let n = 0;
+    for (const c of this.copies)
+      if (c.phase !== 'die' && Math.hypot(c.pos.x - at.x, c.pos.z - at.z) < 14) {
+        this.killCopy(c);
+        n++;
+      }
+    const near = Math.hypot(this.pos.x - at.x, this.pos.z - at.z) < 13 && this.state !== 'intro' && this.state !== 'scared' && !this.dead;
+    if (near) this.scare(true);
+    if (mine) {
+      if (near) this.c.say(n ? '¡El destello lo espantó y deshizo a las copias! Busca la daga (brillo morado)' : '¡El destello lo espantó! Busca la daga (brillo morado)', 'skin-scared', 1);
+      else if (n) this.c.say(n === 1 ? '¡El destello deshizo a la copia!' : `¡El destello deshizo ${n} copias!`, 'skin-scared', 1);
+    }
   }
 
   private startMimic() {
@@ -3562,6 +3711,8 @@ class SkinwalkerBoss extends BossController {
     }
 
     this.updateRips(dt);
+    this.updateSkulls(dt, time);
+    this.trackDagger(dt);
     if (this.dead) {
       this.deadT += dt;
       this.c.darknessTarget = 0;
@@ -3926,7 +4077,8 @@ class SkinwalkerBoss extends BossController {
     const looks: { name: string; look: ReturnType<CombatSystem['deps']['appearance']> }[] = [{ name: 'ti', look: this.c.deps.appearance() }];
     for (const r of this.c.deps.remotes()) if (r.look) looks.push({ name: r.username, look: r.look });
     // In a party it prefers to look like one of your friends (they're lost somewhere else in the maze)
-    const pick = looks.length > 1 && Math.random() < 0.8 ? looks[1 + Math.floor(Math.random() * (looks.length - 1))] : looks[Math.floor(Math.random() * looks.length)];
+    // In a party you only see copies of your friends (so you never know who's who); alone, of you
+    const pick = looks.length > 1 ? looks[1 + Math.floor(Math.random() * (looks.length - 1))] : looks[0];
     const m = createPlayerCharacter(this.c.deps.textures, pick.look);
     m.companionSprite.visible = false;
     m.shadow.visible = false;
@@ -4259,18 +4411,17 @@ class SkinwalkerBoss extends BossController {
     const d = this.dist();
     if (this.dead) return 'none';
     if (type === 'craneo') {
-      if (this.state === 'scared' || this.state === 'intro') {
-        this.c.say('Ya está lejos: guarda el cráneo para cuando vuelva', 'skin-skull-wait', 2);
+      // Works when the Skinwalker or any of its copies is close
+      const p = this.c.playerPos;
+      const nearCopy = this.copies.some((c) => c.phase !== 'die' && c.pos.distanceTo(p) < 14);
+      const nearBoss = d <= 13 && this.state !== 'scared' && this.state !== 'intro';
+      if (!nearCopy && !nearBoss) {
+        this.c.say('No hay nada cerca: úsalo cuando el Skinwalker o una copia se acerquen', 'skin-skull-far', 2);
         return 'none';
       }
-      if (d > 13) {
-        this.c.say('Está muy lejos: úsalo cuando se acerque', 'skin-skull-far', 2);
-        return 'none';
-      }
-      this.c.addEffect(puffEffect(this.root, this.c.playerPos.clone().add(V(0, 1.4, 0)), 'rgba(168,85,247,0.9)', 5, 0.6));
-      for (const c of this.copies) if (c.pos.distanceTo(this.c.playerPos) < 14) this.killCopy(c);
-      this.scare(true);
-      this.c.say('¡El cráneo lo espantó! Busca la daga (brillo morado)', 'skin-scared', 1);
+      if (this.skulls.some((s) => s.mine && !s.flashed)) return 'none';
+      this.startSkull(() => this.c.playerPos, true);
+      this.c.deps.send('skull');
       return 'wear';
     }
     if (type === 'daga') {
@@ -4284,7 +4435,12 @@ class SkinwalkerBoss extends BossController {
       this.state = 'hurt';
       this.t = 1.1;
       this.lungeDir.set(this.c.playerPos.x - this.pos.x, 0, this.c.playerPos.z - this.pos.z).normalize();
-      this.c.say('¡Lo heriste! La daga se quedó en su piel…', 'skin-stab', 1);
+      this.c.say('¡Lo heriste! La daga se quedó en su piel… pronto aparecerá otra', 'skin-stab', 1);
+      // The dagger is gone: the next one shows up in a while (the same one for the whole party)
+      this.daggerHeldBy = null;
+      this.daggerN++;
+      this.daggerDelay = 4;
+      this.c.deps.send('dagused', this.daggerN);
       return 'wear';
     }
     return 'none';
@@ -4387,7 +4543,12 @@ class SkinwalkerBoss extends BossController {
           target: me,
           run: () => {
             this.gift('craneo');
-            if (!this.has('daga') && !this.c.deps.items.isLyingAround('daga')) this.gift('daga');
+            // …and brings you the dagger if it's lying somewhere (or makes one, if nobody has it)
+            if (!this.has('daga') && (!this.daggerHeldBy || this.daggerHeldBy === 'me') && this.daggerDelay <= 0) {
+              if (this.daggerAt) this.c.deps.items.takeLying('daga', this.daggerAt, 3);
+              this.daggerAt = null;
+              this.gift('daga');
+            }
           },
         };
       case 'serpiente':
