@@ -159,3 +159,46 @@ export function makeLabel(text: string, bg = 'rgba(220,38,38,0.92)'): THREE.Spri
   s.renderOrder = 15;
   return s;
 }
+
+/** A white speech bubble (up to three lines) that floats over someone's head. Walls hide it. */
+export function speechBubble(text: string): THREE.Sprite {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 176;
+  const ctx = c.getContext('2d')!;
+  ctx.font = 'bold 30px sans-serif';
+  // Wrap the words into lines that fit
+  const lines: string[] = [];
+  let line = '';
+  for (const w of text.split(/\s+/)) {
+    const next = line ? line + ' ' + w : w;
+    if (ctx.measureText(next).width > 460 && line) {
+      lines.push(line);
+      line = w;
+    } else line = next;
+  }
+  if (line) lines.push(line);
+  const shown = lines.slice(0, 3);
+  const h = 24 + shown.length * 38;
+  const top = c.height - h - 22;
+  ctx.fillStyle = 'rgba(255,253,245,0.95)';
+  ctx.strokeStyle = 'rgba(40,32,20,0.55)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.roundRect(8, top, 496, h, 22);
+  ctx.moveTo(240, top + h);
+  ctx.lineTo(256, c.height - 4);
+  ctx.lineTo(272, top + h);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#2b2418';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  shown.forEach((l, i) => ctx.fillText(l, 256, top + 12 + 19 + i * 38));
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false }));
+  s.scale.set(1.9, 0.65, 1);
+  s.renderOrder = 12;
+  return s;
+}

@@ -45,6 +45,9 @@ import {
 } from '../services/multiplayerClient';
 import { apiClient } from '../services/apiClient';
 
+/** First number of a waiting-room message on the party's snapshot channel */
+const LOBBY_MARK = -7778;
+
 export { LEVELS };
 
 /** Per-theme atmosphere: base weather and the sky shown on victory. */
@@ -299,6 +302,8 @@ export class GameEngine {
   private spectateSnaps = new Map<string, { d: number[]; t: number }>();
   private snapSendT = 0;
   private bossSyncT = 0;
+  /** Waiting room: what each friend last told us (ready? still in the room?) */
+  private lobbyPeers = new Map<string, { ready: boolean; inLobby: boolean; at: number }>();
 
   // Spectator Mode in Party Rooms
   public isSpectating: boolean = false;
@@ -621,6 +626,11 @@ export class GameEngine {
 
     multiplayerClient.addSpectateSnapListener((payload) => {
       if (payload.levelId !== this.currentLevel) return;
+      // Waiting room: who is still reading the brief and who is ready
+      if (payload.d?.[0] === LOBBY_MARK) {
+        this.lobbyPeers.set(payload.userId, { ready: payload.d[1] === 1, inLobby: payload.d[2] === 1, at: performance.now() });
+        return;
+      }
       // Not a spectator snapshot: the party host's boss (everybody sees the same Skinwalker)
       if (payload.d?.[0] === BOSS_SYNC_MARK) {
         this.combat?.applyBossSync(payload.userId, payload.d);
@@ -1227,6 +1237,41 @@ export class GameEngine {
     if (this.stalker) out.push({ obj: this.stalker.group, pos: this.stalker.position });
     if (this.world.hazards) out.push(...this.world.hazards.syncObjects());
     return out;
+  }
+
+  /** Waiting room: tell the party if we're ready (the HUD calls this twice a second while it's open). */
+  public announceLobby(ready: boolean, inLobby: boolean) {
+    if (!this.partyRoomId) return;
+    multiplayerClient.sendSpectateSnap(this.currentLevel, [LOBBY_MARK, ready ? 1 : 0, inLobby ? 1 : 0]);
+  }
+
+  /**
+   * Waiting room: everyone else in the party and what they're doing — ready, still reading,
+   * already playing this level, or still loading (on another screen or level).
+   */
+  public getLobbyRoster(): { userId: string; name: string; status: 'ready' | 'waiting' | 'playing' | 'loading' }[] {
+    if (!this.partyRoomId) return [];
+    const me = apiClient.getCurrentUser()?._id;
+    const here = new Set((this.remotePlayers?.getPlayersInfo() ?? []).map((r) => r.userId));
+    const now = performance.now();
+    const out: { userId: string; name: string; status: 'ready' | 'waiting' | 'playing' | 'loading' }[] = [];
+    for (const p of multiplayerClient.getPartyPlayers()) {
+      const id = p.userId || p.id;
+      if (!id || id === me) continue;
+      const name = p.displayName || p.username || 'Explorador';
+      const peer = this.lobbyPeers.get(id);
+      const fresh = peer && now - peer.at < 2500;
+      const status = fresh && peer!.inLobby ? (peer!.ready ? 'ready' : 'waiting') : here.has(id) ? 'playing' : 'loading';
+      out.push({ userId: id, name, status });
+    }
+    return out;
+  }
+
+  /** Waiting room look: the Skinwalker's, the Backrooms' or the cozy one. */
+  public getLobbyStyle(): 'skinwalker' | 'backrooms' | 'cozy' {
+    if (this.combat?.setup.kind === 'skinwalker') return 'skinwalker';
+    if (this.levelWeather() === 'backrooms') return 'backrooms';
+    return 'cozy';
   }
 
   /** Party host in a boss fight: stream the boss (where it is, what it's doing) ten times a second. */

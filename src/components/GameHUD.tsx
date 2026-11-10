@@ -91,6 +91,7 @@ import { LeaderboardModal } from './LeaderboardModal';
 import { SettingsModal } from './SettingsModal';
 import { ActionFeedbackBanner } from './ActionFeedback';
 import { ConfirmDialog, ConfirmRequest } from './ConfirmDialog';
+import { WaitingRoom } from './WaitingRoom';
 import { IconAction } from './IconAction';
 import { EmptyState, HelpTip, TIPS } from './HelpTip';
 import { RecentChips, SuggestionList } from './RecentChips';
@@ -551,6 +552,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showLevelBrief, setShowLevelBrief] = useState(false);
+  /** Waiting room before each level (the party starts together) */
+  const [showLobby, setShowLobby] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showPartyModal, setShowPartyModal] = useState(false);
   const [showLeaderboardModal, setShowLeaderboardModal] = useState(false);
@@ -620,12 +623,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const lvl = engine.currentLevel;
     if (briefLevelRef.current === lvl) return;
     briefLevelRef.current = lvl;
-    setShowLevelBrief(true);
+    setShowLevelBrief(false);
+    setShowLobby(true);
   }, [gameState, engine, engine?.currentLevel]);
 
   useEffect(() => {
     if (gameState === 'title') {
       briefLevelRef.current = null;
+      setShowLobby(false);
       multiplayerClient.leaveRoom();
       engine?.remotePlayers?.clearAll();
     }
@@ -1090,6 +1095,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const blocks =
       showHelpModal ||
       showLevelBrief ||
+      showLobby ||
       showSettingsModal ||
       showAuthModal ||
       showLeaderboardModal ||
@@ -1106,6 +1112,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     engine,
     showHelpModal,
     showLevelBrief,
+    showLobby,
     showSettingsModal,
     showAuthModal,
     showLeaderboardModal,
@@ -1119,6 +1126,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const isAnyModalOpen =
     showHelpModal ||
     showLevelBrief ||
+    showLobby ||
     showSettingsModal ||
     showEasterEgg ||
     showBackpack ||
@@ -1361,6 +1369,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const handleKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target) || confirmRequest) return;
 
+      // The waiting room handles its own keys (Enter = ready)
+      if (showLobby) return;
+
       if (e.code === 'Escape') {
         if (incomingInvite) {
           multiplayerClient.respondInvite(incomingInvite.inviteId, false, 'declined');
@@ -1568,6 +1579,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     toggleFullscreen,
     showHelpModal,
     showLevelBrief,
+    showLobby,
     showLeaderboardModal,
     showAuthModal,
     showBackpack,
@@ -3723,7 +3735,21 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* ======================================================== */}
       {/* LEVEL OBJECTIVE BRIEF                                    */}
       {/* ======================================================== */}
-      {showLevelBrief && (gameState === 'playing' || gameState === 'paused') && (
+      {showLobby && (gameState === 'playing' || gameState === 'paused') && (
+        <WaitingRoom
+          engine={engine}
+          title={currentHowTo.title}
+          goal={currentHowTo.goal}
+          steps={currentHowTo.steps}
+          onStart={() => setShowLobby(false)}
+          onExit={() => {
+            setShowLobby(false);
+            handleReturnToTitle();
+          }}
+        />
+      )}
+
+      {showLevelBrief && !showLobby && (gameState === 'playing' || gameState === 'paused') && (
         <div className="absolute inset-0 z-[55] pointer-events-auto flex items-center justify-center p-4 pt-safe pb-safe cozy-scrim">
           <div className="w-full max-w-sm rounded-[1.75rem] cozy-panel p-6 flex flex-col gap-5 animate-in fade-in zoom-in-95">
             <div className="flex items-start justify-between gap-3">

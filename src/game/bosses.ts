@@ -20,7 +20,8 @@ import type { AimTarget, CombatSystem, CompanionAction, HitKind } from './combat
 import type { CompanionStyle } from './character';
 import type { BossSetup } from './bossArena';
 import type { ItemType, ToolResult } from './items';
-import { burstEffect, makeTelegraph, puffEffect, Telegraph } from './combatFx';
+import { burstEffect, makeTelegraph, puffEffect, speechBubble, Telegraph } from './combatFx';
+import { apiClient } from '../services/apiClient';
 import {
   BirdModel,
   CandelabraModel,
@@ -3364,6 +3365,8 @@ type SkinState = 'intro' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'scared' | 
 const SKIN_STATES: SkinState[] = ['intro', 'hunt', 'windup', 'lunge', 'recover', 'scared', 'hurt', 'mimic', 'tear'];
 /** First number of a boss snapshot from the party host (the rest of that channel is for spectators) */
 export const BOSS_SYNC_MARK = -7777;
+/** What the AI director (xAI, on the server) can tell a copy to do */
+type CopyAct = 'follow' | 'lure' | 'stare' | 'hide' | 'whisper' | 'strike';
 
 /**
  * A copy of a player that the Skinwalker sheds. Close up it twists into a tall, gaunt dog-man (a
@@ -3391,6 +3394,13 @@ interface SkinCopy {
   lostT: number;
   /** Seconds it has been tagging along with you, pretending (it turns at the worst moment) */
   tailT: number;
+  /** Number the AI director knows it by */
+  id: number;
+  /** What the AI director told it to do (null: the game's own rules) */
+  order: { act: CopyAct; t: number; spot: THREE.Vector3 | null } | null;
+  /** What it's saying, over its head */
+  bubble: THREE.Sprite | null;
+  bubbleT: number;
   pos: THREE.Vector3;
   center: THREE.Vector3;
   yaw: number;
@@ -3474,6 +3484,17 @@ class SkinwalkerBoss extends BossController {
   /** How fast you walk, so a copy can tag along like a friend */
   private prevP = V();
   private pSpeed = 0;
+  // ---- AI director (xAI): decides what each copy does, to make you paranoid ----
+  private copyN = 0;
+  private aiCd = 4;
+  private aiBusy = false;
+  /** No AI on this server (or you're not logged in): the game's own rules only */
+  private aiOff = false;
+  /** When the AI last answered (performance.now) */
+  private aiLive = -1e9;
+  /** What happened lately (the AI reads it) */
+  private recent: { t: number; what: string }[] = [];
+  private lastHp = -1;
 
   constructor(c: CombatSystem) {
     super(c, 100 + 40 * c.setup.diff);
@@ -3708,6 +3729,7 @@ class SkinwalkerBoss extends BossController {
           soundManager.playRumble(1);
           this.scream(0.8);
           this.c.say('¡Las paredes se mueven! El laberinto cambió de forma', 'skin-shift', 1);
+          this.note('las paredes del laberinto se movieron');
         }
       }
     }
@@ -3943,6 +3965,9 @@ class SkinwalkerBoss extends BossController {
 
     // It sheds copies of the players that stretch into long, crawling animals
     this.updateCopies(dt, time);
+    this.askDirector(dt);
+    if (this.lastHp >= 0 && this.c.hp < this.lastHp - 0.5) this.note('el jugador recibió daño');
+    this.lastHp = this.c.hp;
     if (this.state !== 'intro') {
       this.spawnT -= dt;
       if (this.spawnT <= 0) {
@@ -4228,6 +4253,7 @@ class SkinwalkerBoss extends BossController {
         soundManager.playRumble(1);
         this.scream(0.8);
         this.c.say('¡Las paredes se mueven! El laberinto cambió de forma', 'skin-shift', 1);
+        this.note('las paredes del laberinto se movieron');
       }
     }
     // Blackouts below 40 % life
@@ -4249,6 +4275,7 @@ class SkinwalkerBoss extends BossController {
       if (off) soundManager.playPowerDown();
       else soundManager.playPowerUp();
     }
+    if (off !== this.lightsOff) this.note(off ? 'se fue la luz' : 'volvió la luz');
     this.lightsOff = off;
     this.s.setLights?.(off ? 0 : 1);
     if (off) {
@@ -4338,7 +4365,7 @@ class SkinwalkerBoss extends BossController {
     // Same name tag as a real friend: you can't tell it apart… until it changes
     const tag = createNameTagSprite(pick.name === 'ti' ? this.c.deps.playerModel().appearance.name || 'Tú' : pick.name);
     m.group.add(tag);
-    this.copies.push({ m, holder, pitch, wolf, lostT: 0, pos: at, center: at.clone(), yaw: Math.atan2(p.x - at.x, p.z - at.z), phase: 'copy', t: 0, hp: 2, mats, eyes, hitCd: 0, name: pick.name, tag, tailT: 0 });
+    this.copies.push({ m, holder, pitch, wolf, lostT: 0, pos: at, center: at.clone(), yaw: Math.atan2(p.x - at.x, p.z - at.z), phase: 'copy', t: 0, hp: 2, mats, eyes, hitCd: 0, name: pick.name, tag, tailT: 0, id: ++this.copyN, order: null, bubble: null, bubbleT: 0 });
   }
 
   /**
@@ -4475,11 +4502,14 @@ class SkinwalkerBoss extends BossController {
   }
 
   /** The copy stops pretending: it twists and stretches. */
-  private reveal(c: SkinCopy, why: 'hit' | 'dark' | 'hurt' | 'boss' | 'trap' | 'late' = 'hit') {
+  private reveal(c: SkinCopy, why: 'hit' | 'dark' | 'hurt' | 'boss' | 'trap' | 'late' | 'ai' = 'hit') {
     if (c.phase !== 'copy') return;
     c.phase = 'distort';
     c.t = 0;
+    c.order = null;
     c.m.group.remove(c.tag);
+    this.dropBubble(c);
+    this.note(`la copia de ${c.name === 'ti' ? 'el jugador' : c.name} se transformó`);
     soundManager.playStalkerWarning();
     soundManager.playBoneCrack(1 - Math.min(0.8, c.pos.distanceTo(this.c.playerPos) / 40));
     const who = c.name === 'ti' ? 'tu copia' : c.name;
@@ -4493,7 +4523,11 @@ class SkinwalkerBoss extends BossController {
             ? `Te siguió hasta un callejón sin salida… ${c.name === 'ti' ? 'tu copia' : c.name} se convierte en un hombre lobo`
             : why === 'hurt'
               ? `Te vio débil… ¡${c.name === 'ti' ? 'tu copia' : c.name} no era quien creías!`
-              : base;
+              : why === 'ai'
+                ? c.name === 'ti'
+                  ? 'Tu copia sonríe… y se retuerce en un hombre lobo'
+                  : `${c.name} se te queda viendo… no era tu amigo. ¡Se convierte en un hombre lobo!`
+                : base;
     this.c.say(msg, 'skin-reveal', 1.5);
   }
 
@@ -4526,9 +4560,122 @@ class SkinwalkerBoss extends BossController {
 
   private killCopy(c: SkinCopy) {
     if (c.phase === 'die') return;
+    this.dropBubble(c);
+    this.note('una copia fue destruida');
     c.phase = 'die';
     c.t = 0;
     this.c.addEffect(puffEffect(this.root, c.center.clone(), 'rgba(40,32,26,0.9)', 2.4, 0.5));
+  }
+
+  /** Remembers something that happened, for the AI director. */
+  private note(what: string) {
+    const now = performance.now();
+    this.recent = this.recent.filter((r) => now - r.t < 30000).slice(-4);
+    this.recent.push({ t: now, what });
+  }
+
+  /** The AI answered lately: it decides when the copies turn (the game's rules are only a backup) */
+  private get aiActive(): boolean {
+    return performance.now() - this.aiLive < 20000;
+  }
+
+  /**
+   * Every few seconds, asks the AI director (xAI, through our server: the key never reaches the
+   * browser) what each copy should do. If there's no AI, the copies follow the game's own rules.
+   */
+  private askDirector(dt: number) {
+    if (this.aiOff || this.aiBusy || this.dead) return;
+    this.aiCd -= dt;
+    if (this.aiCd > 0 || !this.copies.some((c) => c.phase === 'copy')) return;
+    if (!apiClient.getAccessToken()) {
+      this.aiOff = true;
+      return;
+    }
+    this.aiCd = 6;
+    this.aiBusy = true;
+    const p = this.c.playerPos;
+    const yaw = this.c.deps.playerModel().group.rotation.y;
+    const fwd = V(Math.sin(yaw), 0, Math.cos(yaw));
+    const now = performance.now();
+    const state = {
+      hp: Math.round(this.c.hp),
+      lightsOff: this.lightsOff,
+      deadEnd: (this.s.exits?.(p) ?? 2) <= 1,
+      hasDagger: this.has('daga'),
+      hasSkull: this.has('craneo'),
+      speed: Math.round(this.pSpeed * 10) / 10,
+      friends: this.c.deps.remotes().length,
+      boss: { state: this.state, dist: Math.round(this.dist()), rage: Math.round(this.rage * 100) / 100 },
+      copies: this.copies
+        .filter((c) => c.phase !== 'die')
+        .map((c) => {
+          const to = V(c.pos.x - p.x, 0, c.pos.z - p.z);
+          const d = to.length();
+          return { id: c.id, as: c.name, phase: c.phase, dist: Math.round(d * 10) / 10, tail: Math.round(c.tailT), seen: d > 0.1 && to.dot(fwd) / d > 0.5 };
+        }),
+      recent: this.recent.filter((r) => now - r.t < 30000).map((r) => r.what),
+    };
+    apiClient
+      .aiSkinwalker(state)
+      .then((res) => {
+        if (this.dead) return;
+        this.aiLive = performance.now();
+        for (const o of res.copies ?? []) {
+          const c = this.copies.find((q) => q.id === o.id && q.phase === 'copy');
+          if (c) this.applyOrder(c, o.act, o.say);
+        }
+      })
+      .catch((err: { status?: number }) => {
+        // No AI on this server, or not allowed: don't ask again in this fight
+        if (err?.status === 503 || err?.status === 401 || err?.status === 403 || err?.status === 404) this.aiOff = true;
+        else this.aiCd = err?.status === 429 ? 5 : 15;
+      })
+      .finally(() => {
+        this.aiBusy = false;
+      });
+  }
+
+  /** The AI director's order for one copy. */
+  private applyOrder(c: SkinCopy, act: CopyAct, say?: string) {
+    c.order = { act, t: 0, spot: null };
+    if (act === 'lure') c.order.spot = this.pickSpot(1, 3, true);
+    if (act === 'hide') c.order.spot = this.pickSpot(3, 6, false);
+    if (act === 'whisper') soundManager.playWhisper(Math.max(0.25, 1 - c.pos.distanceTo(this.c.playerPos) / 25));
+    if (say) this.copySays(c, say);
+  }
+
+  /** A room some rooms away from you (dead ends first, to trap you there). */
+  private pickSpot(minCells: number, maxCells: number, deadEnds: boolean): THREE.Vector3 | null {
+    const p = this.c.playerPos;
+    const cd = this.s.cellDist;
+    let spots = (this.s.searchSpots ?? []).filter((q) => {
+      const r = cd ? cd(q, p) : Math.hypot(q.x - p.x, q.z - p.z) / 6.5;
+      return r >= minCells && r <= maxCells;
+    });
+    if (deadEnds && this.s.exits) {
+      const ends = spots.filter((q) => this.s.exits!(q) === 1);
+      if (ends.length) spots = ends;
+    }
+    if (!spots.length) return null;
+    return spots[Math.floor(Math.random() * spots.length)].clone().setY(this.s.floorY);
+  }
+
+  /** The copy talks with your friend's voice: a bubble over its head, and the line on screen. */
+  private copySays(c: SkinCopy, text: string) {
+    this.dropBubble(c);
+    c.bubble = speechBubble(text);
+    c.bubble.position.y = 2.0;
+    c.m.group.add(c.bubble);
+    c.bubbleT = 4.5;
+    if (c.pos.distanceTo(this.c.playerPos) < 26) this.c.say(`${c.name === 'ti' ? '¿Tú?' : c.name}: "${text}"`, 'skin-cs-' + c.id, 2);
+  }
+
+  private dropBubble(c: SkinCopy) {
+    if (!c.bubble) return;
+    c.m.group.remove(c.bubble);
+    (c.bubble.material as THREE.SpriteMaterial).map?.dispose();
+    (c.bubble.material as THREE.SpriteMaterial).dispose();
+    c.bubble = null;
   }
 
   private updateCopies(dt: number, time: number) {
@@ -4550,6 +4697,7 @@ class SkinwalkerBoss extends BossController {
         }
         continue;
       }
+      if (c.bubble && (c.bubbleT -= dt) <= 0) this.dropBubble(c);
       const toYaw = Math.atan2(p.x - c.pos.x, p.z - c.pos.z);
       // How twisted it is: 0 = looks just like the player, 1 = a long crawling thing
       let k = 0;
@@ -4559,9 +4707,33 @@ class SkinwalkerBoss extends BossController {
         const d = Math.hypot(p.x - c.pos.x, p.z - c.pos.z);
         const close = d < 5 && (!this.s.cellDist || this.s.cellDist(c.pos, p) <= 1);
         if (close) c.tailT += dt;
-        const speed = !close ? 3.8 : d > 2.6 ? THREE.MathUtils.clamp(this.pSpeed + (d - 2.6) * 1.2, 1.5, 7) : 0;
+        // The AI director's order (follow / lure / stare / hide / whisper / strike), if any
+        const o = c.order;
+        if (o) {
+          o.t += dt;
+          const limit = o.act === 'stare' ? 7 : o.act === 'lure' ? 14 : o.act === 'hide' ? 12 : o.act === 'strike' ? 20 : 1e9;
+          if (o.t > limit || ((o.act === 'lure' || o.act === 'hide') && !o.spot)) c.order = null;
+        }
+        const act: CopyAct = c.order?.act ?? 'follow';
+        // Where it walks and how fast
+        let goal: THREE.Vector3 = p;
+        let speed = !close ? 3.8 : d > 2.6 ? THREE.MathUtils.clamp(this.pSpeed + (d - 2.6) * 1.2, 1.5, 7) : 0;
+        if (act === 'stare') speed = 0;
+        else if ((act === 'lure' || act === 'hide') && c.order?.spot) {
+          goal = c.order.spot;
+          const dg = Math.hypot(goal.x - c.pos.x, goal.z - c.pos.z);
+          speed = dg > 0.6 ? (act === 'hide' ? 4.6 : 4) : 0;
+          // You followed it there: it goes back to tagging along
+          if (act === 'lure' && Math.hypot(goal.x - p.x, goal.z - p.z) < 2.5) c.order = null;
+        } else if (act === 'strike') {
+          speed = d > 2 ? 5 : 0;
+          if (close && d < 6) {
+            this.reveal(c, this.lightsOff ? 'dark' : 'ai');
+            continue;
+          }
+        }
         if (speed > 0) {
-          const wp = this.s.navStep ? this.s.navStep(c.pos, p) : p;
+          const wp = this.s.navStep ? this.s.navStep(c.pos, goal) : goal;
           const wy = Math.atan2(wp.x - c.pos.x, wp.z - c.pos.z);
           c.yaw = turnTo(c.yaw, wy, 6, dt);
           c.pos.x += Math.sin(c.yaw) * speed * dt;
@@ -4569,12 +4741,20 @@ class SkinwalkerBoss extends BossController {
           this.pushOut(c.pos);
           m.updateAnimation(speed, true, dt, time);
         } else {
-          c.yaw = turnTo(c.yaw, toYaw, 6, dt);
+          c.yaw = turnTo(c.yaw, toYaw, act === 'stare' ? 2 : 6, dt);
           m.updateAnimation(0, true, dt, time);
+          // Waiting where it lured you: it waves at you to come
+          if (act === 'lure') {
+            m.rightArm.rotation.z = -2.5 + Math.sin(time * 7) * 0.35;
+            m.rightArm.rotation.x = 0;
+          }
         }
-        // …until the worst possible moment
+        // Staring: the head tilts slowly to one side
+        const head = c.wolf.headGroup;
+        head.rotation.z = act === 'stare' ? Math.min(0.45, (c.order?.t ?? 0) * 0.12) : THREE.MathUtils.damp(head.rotation.z, 0, 6, dt);
+        // …until the worst possible moment (the AI picks it; the game's rules are the backup)
         const why = close ? this.worstMoment(c) : null;
-        if (why) this.reveal(c, why);
+        if (why && (!this.aiActive || (why === 'late' && c.tailT > 70))) this.reveal(c, why);
       } else if (c.phase === 'distort') {
         k = ease(Math.min(1, c.t / 1.4));
         if (c.t > 1.4) {
@@ -4589,6 +4769,7 @@ class SkinwalkerBoss extends BossController {
           c.phase = 'copy';
           c.t = 0;
           c.tailT = 0;
+          c.order = null;
           m.group.add(c.tag);
           for (const f of c.wolf.feet) f.visible = true;
         }
@@ -4697,6 +4878,7 @@ class SkinwalkerBoss extends BossController {
       }
       if (this.skulls.some((s) => s.mine && !s.flashed)) return 'none';
       this.startSkull(() => this.c.playerPos, true);
+      this.note('el jugador usó el cráneo de obsidiana');
       this.c.deps.send('skull');
       return 'wear';
     }

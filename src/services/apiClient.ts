@@ -934,6 +934,19 @@ class ApiClient {
     return res.data;
   }
 
+  /**
+   * POST /api/v1/ai/skinwalker — the AI director (xAI on the server) decides what each copy of the
+   * Skinwalker does next. Throws when the AI is off or busy; the game then uses its own rules.
+   */
+  public async aiSkinwalker(state: unknown): Promise<{ copies: { id: number; act: 'follow' | 'lure' | 'stare' | 'hide' | 'whisper' | 'strike'; say?: string }[] }> {
+    const res = await this.request<{ status: string; data: { copies: { id: number; act: 'follow' | 'lure' | 'stare' | 'hide' | 'whisper' | 'strike'; say?: string }[] } }>(
+      '/ai/skinwalker',
+      { method: 'POST', body: JSON.stringify(state) },
+      true
+    );
+    return res.data;
+  }
+
   /** GET /api/v1/rooms */
   public async listRooms(): Promise<RoomDetail[]> {
     const res = await this.request<{
