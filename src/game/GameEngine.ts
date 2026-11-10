@@ -232,6 +232,8 @@ export class GameEngine {
   public combat: CombatSystem | null = null;
   private lookRaise = 0;
   private lookBack = 0;
+  /** How dark the level is right now (blackouts): the Backrooms mist creeps in with it */
+  private levelDarkness = 0;
   private darkBase: { dir: number; hemi: number; fogDensity: number; fogColor: THREE.Color; exposure: number } | null = null;
 
   // Levels
@@ -1117,6 +1119,36 @@ export class GameEngine {
   }
 
   private camRay = new THREE.Raycaster();
+  private eyeW = [new THREE.Vector3(), new THREE.Vector3()];
+  private eyeRay = new THREE.Raycaster();
+
+  /**
+   * (HUD) The Skinwalker's eyeshine on screen, in CSS pixels, so it can be drawn over the darkness.
+   * Null when there's nothing to show, it's behind you, or a wall is in the way.
+   */
+  public getEyeShine(): { pts: { x: number; y: number }[]; op: number; red: boolean; size: number } | null {
+    if (!this.combat || this.isUIModalOpen) return null;
+    const s = this.combat.eyeShine(this.eyeW);
+    if (!s) return null;
+    const cam = this.camera.position;
+    const mid = this.eyeW[0].clone().add(this.eyeW[1]).multiplyScalar(0.5);
+    const dist = mid.distanceTo(cam);
+    const colliders = this.world.cameraColliders;
+    if (colliders?.length) {
+      this.eyeRay.set(cam, mid.clone().sub(cam).normalize());
+      this.eyeRay.far = Math.max(0.1, dist - 0.35);
+      if (this.eyeRay.intersectObjects(colliders, false).length) return null;
+    }
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    const pts: { x: number; y: number }[] = [];
+    for (const p of this.eyeW) {
+      const v = p.clone().project(this.camera);
+      if (v.z > 1 || Math.abs(v.x) > 1.2 || Math.abs(v.y) > 1.2) return null;
+      pts.push({ x: ((v.x + 1) / 2) * w, y: ((1 - v.y) / 2) * h });
+    }
+    return { pts, op: s.op, red: s.red, size: THREE.MathUtils.clamp((h * 0.4) / Math.max(dist, 1), 3, 8) };
+  }
   /** Where this run started (to know if the player already walked away from the spawn) */
   private spawnedAt = new THREE.Vector3();
   /** Pulls the camera in front of the first wall/ceiling between it and the player. */
@@ -2858,7 +2890,8 @@ export class GameEngine {
 
     // 7. Update Weather & Background Clouds
     this.weatherSystem.update(dt, this.physics.position, time);
-    this.applyDarkness(Math.max(this.combat?.darkness ?? 0, this.world.hazards?.darkness ?? 0));
+    this.levelDarkness = Math.max(this.combat?.darkness ?? 0, this.world.hazards?.darkness ?? 0);
+    this.applyDarkness(this.levelDarkness);
 
     // 7b. Mobile / Touchscreen: Camera smoothly follows behind character.
     // Only for the on-screen joystick: with the keyboard (WASD) the camera is yours (mouse or Q/E),
@@ -3007,7 +3040,7 @@ export class GameEngine {
     this.updateTreeOcclusion(dt);
     this.updatePlatformCulling();
 
-    this.ambience.update(dt, time, followPos, this.camera.position);
+    this.ambience.update(dt, time, followPos, this.camera.position, this.levelDarkness);
 
     // Follow light with player or spectated friend
     this.dirLight.position.set(followPos.x + 25, followPos.y + 45, followPos.z + 20);

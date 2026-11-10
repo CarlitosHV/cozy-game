@@ -4,6 +4,7 @@
  * and Ergonomic Mobile Touch Controls (360° Analog Joystick + Jump/Sprint Buttons).
  */
 import React, { useState, useEffect, useRef } from 'react';
+import EyeShine from './EyeShine';
 import {
   Bug,
   Lightbulb,
@@ -2515,6 +2516,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           }}
         />
       )}
+      {/* The Skinwalker's eyes, shining over the darkness from far away */}
+      {gameState === 'playing' && combat && <EyeShine engine={engine} />}
       {gameState === 'playing' && (hurtFlash || levelHurt) && (
         <div
           className="absolute inset-0 pointer-events-none"

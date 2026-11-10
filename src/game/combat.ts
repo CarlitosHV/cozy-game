@@ -290,6 +290,12 @@ export class CombatSystem {
   get focus(): THREE.Vector3 | null {
     return this.defeated ? null : this.boss.focusPoint();
   }
+  /** (HUD) The boss's eyes shining in the dark from afar (only the Skinwalker has them) */
+  eyeShine(out: THREE.Vector3[]): { op: number; red: boolean } | null {
+    const b = this.boss as unknown as { eyeShine?: (o: THREE.Vector3[]) => { op: number; red: boolean } | null };
+    return b.eyeShine ? b.eyeShine(out) : null;
+  }
+
   get bossHp(): number {
     return this.boss.hp;
   }

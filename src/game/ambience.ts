@@ -6,7 +6,7 @@
  *  - Alta: lots of particles, several flocks, a full ring of far islands with waterfalls and
  *    drifting cloud puffs, lots of ground decor on every floor, and far scenery painted around
  *    the horizon of each world (planets and a black hole in space, glass towers over a meadow in
- *    Aero… see backdrops.ts). In the Backrooms, a low yellowish mist drifts through the halls.
+ *    Aero… see backdrops.ts). In the Backrooms, when the lights go out, a low mist creeps in.
  *
  * The ground decor depends on the world: flowers and grass in the meadow, cloud tufts and
  * crystals in the sky, glowing crystals and mushrooms in space, reeds and moss in the swamp,
@@ -217,6 +217,15 @@ function mistTexture(): THREE.CanvasTexture {
     g.fillStyle = grad;
     g.fillRect(0, 0, 128, 64);
   }
+  // Fade out the bottom and the sides, so it doesn't show a hard edge where it meets the floor or a wall
+  g.globalCompositeOperation = 'destination-in';
+  const fadeY = g.createLinearGradient(0, 0, 0, 64);
+  fadeY.addColorStop(0, 'rgba(0,0,0,0)');
+  fadeY.addColorStop(0.3, 'rgba(0,0,0,1)');
+  fadeY.addColorStop(0.62, 'rgba(0,0,0,1)');
+  fadeY.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = fadeY;
+  g.fillRect(0, 0, 128, 64);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -273,14 +282,13 @@ export class AmbientDecor {
   private dot: THREE.CanvasTexture | null = null;
   private backdrop: Backdrop | null = null;
   private center = new THREE.Vector3();
-  /** Backrooms mist (Alta only): wisps around you, plus thicker fog while it's on */
+  /** Backrooms mist (Alta only): wisps around you that creep in when the lights go out */
   private mist: MistWisp[] = [];
   private mistTex: THREE.CanvasTexture | null = null;
   private mistY = 0;
-  private white = new THREE.Color(0xffffff);
-  private fogBase: number | null = null;
+  /** 0 = lights on (no mist), 1 = blackout (full mist) */
+  private mistK = 0;
   private static readonly MIST_SPAN = 13;
-  private static readonly MIST_FOG = 0.05;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -353,32 +361,34 @@ export class AmbientDecor {
     this.mistTex ??= mistTexture();
     const S = AmbientDecor.MIST_SPAN;
     for (let i = 0; i < 64; i++) {
-      const mat = new THREE.SpriteMaterial({ map: this.mistTex, transparent: true, depthWrite: false, opacity: 0, color: 0xe9dca2 });
+      const mat = new THREE.SpriteMaterial({ map: this.mistTex, transparent: true, depthWrite: false, opacity: 0, color: 0xcfcdd9 });
       const s = new THREE.Sprite(mat);
-      const w = 3.2 + rng() * 3.4;
+      const w = 2.6 + rng() * 2.8;
       s.scale.set(w, w * (0.42 + rng() * 0.2), 1);
       s.renderOrder = 2;
+      s.visible = false;
       this.group.add(s);
       this.mist.push({
         s,
-        base: new THREE.Vector3((rng() - 0.5) * S * 2, rng() < 0.7 ? 0.25 + rng() * 0.9 : 1.2 + rng() * 1.4, (rng() - 0.5) * S * 2),
+        // (height of its middle: the sprite's lower half is see-through, so it never cuts into the floor)
+        base: new THREE.Vector3((rng() - 0.5) * S * 2, s.scale.y * 0.5 + (rng() < 0.7 ? rng() * 0.5 : 0.6 + rng() * 1.0), (rng() - 0.5) * S * 2),
         phase: rng() * Math.PI * 2,
         drift: 0.25 + rng() * 0.35,
-        op: 0.5 + rng() * 0.3,
+        op: 0.55 + rng() * 0.35,
       });
     }
-    // The haze also gets thicker in the distance
-    const fog = this.scene.fog as THREE.FogExp2 | null;
-    if (fog && 'density' in fog) {
-      this.fogBase = fog.density;
-      fog.density = Math.max(fog.density, AmbientDecor.MIST_FOG);
-    }
+    this.mistK = 0;
   }
 
-  private updateMist(dt: number, time: number, focus: THREE.Vector3, cam?: THREE.Vector3) {
-    const fog = this.scene.fog as THREE.FogExp2 | null;
-    // (the Skinwalker's blackout darkens the fog: the mist goes dark with it)
-    if (fog && 'density' in fog && fog.density < AmbientDecor.MIST_FOG) fog.density = AmbientDecor.MIST_FOG;
+  /** `dark`: how dark the level is (0 lit … ~0.82 the warehouse's blackout, ~0.93 the Skinwalker's). */
+  private updateMist(dt: number, time: number, focus: THREE.Vector3, cam: THREE.Vector3 | undefined, dark: number) {
+    // It creeps in slowly when the lights go out, and thins away when they come back
+    const want = THREE.MathUtils.smoothstep(dark, 0.62, 0.8);
+    this.mistK = THREE.MathUtils.damp(this.mistK, want, want > this.mistK ? 0.6 : 1.4, dt);
+    if (this.mistK < 0.01) {
+      for (const m of this.mist) m.s.visible = false;
+      return;
+    }
     // Stays on the floor while you jump
     this.mistY = Math.abs(focus.y - this.mistY) > 3 ? focus.y : THREE.MathUtils.damp(this.mistY, focus.y, 1.2, dt);
     const S = AmbientDecor.MIST_SPAN;
@@ -393,10 +403,9 @@ export class AmbientDecor {
       const edge = Math.min(S - Math.abs(x - focus.x), S - Math.abs(z - focus.z));
       let a = THREE.MathUtils.smoothstep(edge, 0, 3.5);
       if (cam) a *= THREE.MathUtils.smoothstep(m.s.position.distanceTo(cam), 1.2, 4);
-      const mat = m.s.material;
-      mat.opacity = m.op * a * (0.8 + 0.2 * Math.sin(time * 0.7 + m.phase));
-      // A paler version of the haze (goes dark with it in a blackout)
-      if (fog) mat.color.copy(fog.color).lerp(this.white, 0.45 * Math.min(1, fog.color.r * 1.6));
+      m.s.visible = true;
+      // Dim grey wisps against the dark (they're only lit by whatever glows)
+      m.s.material.opacity = m.op * a * this.mistK * (0.8 + 0.2 * Math.sin(time * 0.7 + m.phase));
     }
   }
 
@@ -681,9 +690,9 @@ export class AmbientDecor {
     }
   }
 
-  update(dt: number, time: number, focus: THREE.Vector3, cam?: THREE.Vector3) {
+  update(dt: number, time: number, focus: THREE.Vector3, cam?: THREE.Vector3, dark = 0) {
     if (this.quality === 'low') return;
-    if (this.mist.length) this.updateMist(dt, time, focus, cam);
+    if (this.mist.length) this.updateMist(dt, time, focus, cam, dark);
     // The far scenery travels with you, like the sky
     if (this.backdrop) {
       this.backdrop.group.position.copy(focus);
@@ -752,11 +761,6 @@ export class AmbientDecor {
       }
     });
     this.group.clear();
-    // Back to the level's own fog
-    const fog = this.scene.fog as THREE.FogExp2 | null;
-    // (only if it's still ours: the next level's weather may have already set its own)
-    if (this.fogBase !== null && fog && 'density' in fog && Math.abs(fog.density - AmbientDecor.MIST_FOG) < 1e-6) fog.density = this.fogBase;
-    this.fogBase = null;
     this.mist = [];
     this.particles = null;
     this.particleBase = null;

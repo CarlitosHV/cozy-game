@@ -3623,11 +3623,25 @@ class SkinwalkerBoss extends BossController {
   private gatherAt: THREE.Vector3 | null = null;
   private gatherCd = 40;
   private gatherT = 0;
+  /** Where its eyes are, how strongly they shine from afar (0-1+) and whether they're red */
+  private shineAt: THREE.Object3D[] = [];
+  private shineOp = 0;
+  private shineRed = false;
+  /** Counts down to its next blink (below 0: eyes shut) */
+  private blinkT = 3;
 
   constructor(c: CombatSystem) {
     super(c, 100 + 40 * c.setup.diff);
     this.m = createSkinwalker();
     this.group.add(this.m.group);
+    // Eyeshine: two points of light you can see from far down a hall, like an animal's eyes in the
+    // dark. The HUD draws them over the darkness (see eyeShine()); these just mark where the eyes are
+    for (const sx of [1, -1]) {
+      const mark = new THREE.Object3D();
+      mark.position.set(0.08 * sx, 0.08, 0.19);
+      this.m.head.add(mark);
+      this.shineAt.push(mark);
+    }
     this.pos = this.s.home.clone();
     this.group.position.copy(this.pos);
     // Faint violet beam over the dagger, so you can find it in the dim rooms
@@ -4188,6 +4202,12 @@ class SkinwalkerBoss extends BossController {
     m.eyes.color.setHex(angry ? 0xff2020 : 0xf5f5f5);
     m.eyeGlow.color.setHex(angry ? 0xff3030 : 0xfff1d6);
     m.eyeGlow.opacity = angry ? 0.75 : 0.35 + Math.sin(time * 3) * 0.1;
+    // Its eyes shine from far away (stronger the darker it is), blinking now and then
+    this.blinkT -= dt;
+    if (this.blinkT < -0.14) this.blinkT = 2 + Math.random() * 5;
+    const far = THREE.MathUtils.smoothstep(d, 4.5, 12);
+    this.shineRed = angry;
+    this.shineOp = this.blinkT < 0 ? 0 : far * (0.45 + 0.55 * THREE.MathUtils.clamp(this.c.darkness, 0, 1)) * (this.state === 'peek' ? 1.2 : 1);
     this.m.group.position.y = ck * -0.05;
 
     // Voices: it calls you with a friend's voice (everybody hears their own)
@@ -4712,7 +4732,7 @@ class SkinwalkerBoss extends BossController {
     this.s.setLights?.(off ? 0 : 1);
     if (off) {
       soundManager.playStalkerWarning();
-      this.c.say('Se fue la luz… solo ves sus ojos', 'skin-dark', 4);
+      this.c.say('Se fue la luz… entra una neblina y a lo lejos solo brillan sus ojos', 'skin-dark', 4);
     }
   }
 
@@ -4840,6 +4860,16 @@ class SkinwalkerBoss extends BossController {
     const p = this.c.playerPos;
     const d = Math.hypot(at.x - p.x, at.z - p.z);
     if (d < 16) this.c.say('¡Se abrió un portal cerca de ti… algo está saliendo de ahí!', 'skin-arrive', 2);
+  }
+
+  /**
+   * (for the HUD) Its eyes' world positions in `out`, and how strongly they shine from afar: drawn
+   * on top of the darkness, so in a blackout two little lights stare at you from down the hall.
+   */
+  eyeShine(out: THREE.Vector3[]): { op: number; red: boolean } | null {
+    if (this.dead || this.shineOp < 0.02 || !this.group.visible || !this.m.group.visible || this.state === 'gone') return null;
+    this.shineAt.forEach((m, i) => m.getWorldPosition(out[i]));
+    return { op: this.shineOp, red: this.shineRed };
   }
 
   /** Somewhere away from everybody, to climb out of a portal. */
