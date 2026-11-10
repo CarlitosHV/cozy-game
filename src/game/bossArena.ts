@@ -63,6 +63,14 @@ export interface BossSetup {
   wallNear?: (p: THREE.Vector3) => { pos: THREE.Vector3; normal: THREE.Vector3 } | null;
   /** Skinwalker: ceiling lamps on (1) or a blackout (0) */
   setLights?: (on: number) => void;
+  /** How many openings the room at p has (1 = a dead end) */
+  exits?: (p: THREE.Vector3) => number;
+  /** A free spot right next to p for the victory portal (instead of far away in the middle) */
+  portalSpotNear?: (p: THREE.Vector3, yaw: number) => THREE.Vector3 | null;
+  /** Which moving walls are up (bits), so the whole party sees the same maze */
+  mazeMask?: () => number[];
+  /** Raise/lower the moving walls to match the host's maze; returns how many changed */
+  applyMazeMask?: (mask: number[]) => number;
 }
 
 function mulberry32(seed: number) {

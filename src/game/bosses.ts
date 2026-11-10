@@ -132,6 +132,14 @@ export abstract class BossController {
 
   onEvent(_kind: string, _i: number, _v: number, _from: string) {}
 
+  /** Party sync: what the host sends a few times a second (marker -7777 first), or null. */
+  syncPayload(): number[] | null {
+    return null;
+  }
+
+  /** Party sync: the host's snapshot of this boss. */
+  applySync(_from: string, _d: number[]) {}
+
   /** The special move each companion has against this boss (see the table in each boss). */
   companionAction(_c: CompanionStyle): CompanionAction | null {
     return null;
@@ -3353,6 +3361,9 @@ class DraculaBoss extends BossController {
 // come close and stab it. Sometimes it takes YOUR shape and walks toward you…
 // ===========================================================================
 type SkinState = 'intro' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'scared' | 'hurt' | 'mimic' | 'tear';
+const SKIN_STATES: SkinState[] = ['intro', 'hunt', 'windup', 'lunge', 'recover', 'scared', 'hurt', 'mimic', 'tear'];
+/** First number of a boss snapshot from the party host (the rest of that channel is for spectators) */
+export const BOSS_SYNC_MARK = -7777;
 
 /**
  * A copy of a player that the Skinwalker sheds. Close up it twists into a tall, gaunt dog-man (a
@@ -3378,6 +3389,8 @@ interface SkinCopy {
   };
   /** Seconds you've been far from it (it turns back into a copy) */
   lostT: number;
+  /** Seconds it has been tagging along with you, pretending (it turns at the worst moment) */
+  tailT: number;
   pos: THREE.Vector3;
   center: THREE.Vector3;
   yaw: number;
@@ -3444,6 +3457,23 @@ class SkinwalkerBoss extends BossController {
   /** Blackouts when it has little life left */
   private lightT = 10;
   private lightsOff = false;
+  // ---- Party: the host runs the Skinwalker and streams it, so everybody sees the same one ----
+  /** When the last snapshot from the host arrived (performance.now) */
+  private lastSync = -1e9;
+  private syncPos = V();
+  private syncYaw = 0;
+  private syncCrawl = 0;
+  /** A stab we did ourselves shows right away, until the host's answer arrives */
+  private holdT = 0;
+  private maskKey = '';
+  /** Who it's after (host): null = the host's own player, else a friend's userId */
+  private tgtId: string | null = null;
+  private retargetT = 0;
+  /** Friends hidden in Nubi's fog (host) */
+  private fogBy = new Map<string, number>();
+  /** How fast you walk, so a copy can tag along like a friend */
+  private prevP = V();
+  private pSpeed = 0;
 
   constructor(c: CombatSystem) {
     super(c, 100 + 40 * c.setup.diff);
@@ -3478,6 +3508,43 @@ class SkinwalkerBoss extends BossController {
   private dist(): number {
     const p = this.c.playerPos;
     return Math.hypot(p.x - this.pos.x, p.z - this.pos.z);
+  }
+
+  private get inParty(): boolean {
+    return this.c.deps.remotes().length > 0;
+  }
+
+  /** Somebody else in the party runs the Skinwalker: we only show what the host sends */
+  private get following(): boolean {
+    return this.inParty && !this.c.deps.isHost() && performance.now() - this.lastSync < 1500;
+  }
+
+  /** Who it hunts (host or alone): the nearest player that is up and not hidden in Nubi's fog. */
+  private target(dt: number): { id: string | null; pos: THREE.Vector3; down: boolean; fog: number } {
+    const cands: { id: string | null; pos: THREE.Vector3; down: boolean; fog: number }[] = [{ id: null, pos: this.c.playerPos, down: this.c.isDown, fog: this.fogT }];
+    for (const r of this.c.deps.remotes()) cands.push({ id: r.userId, pos: r.pos, down: r.down, fog: this.fogBy.get(r.userId) ?? 0 });
+    let cur = cands.find((c) => c.id === this.tgtId);
+    this.retargetT -= dt;
+    if (!cur || this.retargetT <= 0 || cur.down) {
+      this.retargetT = 1.2;
+      let best = cands[0];
+      let bestScore = Infinity;
+      for (const c of cands) {
+        const e = Math.hypot(c.pos.x - this.pos.x, c.pos.z - this.pos.z);
+        let sc = this.s.cellDist ? this.s.cellDist(this.pos, c.pos) + e * 0.01 : e / 6;
+        if (c.down) sc += 1000;
+        if (c.fog > 0) sc += 500;
+        // sticks to who it's chasing unless someone else is clearly closer
+        if (c.id === this.tgtId) sc -= 0.6;
+        if (sc < bestScore) {
+          bestScore = sc;
+          best = c;
+        }
+      }
+      this.tgtId = best.id;
+      cur = best;
+    }
+    return cur;
   }
 
   /** Walk through the maze (room by room), sliding along the walls. */
@@ -3576,7 +3643,127 @@ class SkinwalkerBoss extends BossController {
     } else if (kind === 'skull' && who) {
       // A friend's skull flashes over there (it scares whatever is near them)
       this.startSkull(() => this.c.deps.remotes().find((r) => r.userId === from)?.pos ?? null, false);
+    } else if (this.dead || this.following) {
+      return;
+    } else if (kind === 'skhit') {
+      // (host) A friend stabbed it with the dagger
+      if (this.state === 'mimic') this.endMimic(false);
+      this.state = 'hurt';
+      this.t = 1.1;
+      const at = who?.pos ?? this.c.playerPos;
+      this.lungeDir.set(at.x - this.pos.x, 0, at.z - this.pos.z).normalize();
+    } else if (kind === 'skscare') {
+      // (host) Quetsy bit it or Estrella flashed it, next to a friend
+      if (this.state !== 'intro') this.scare(_v === 1, who?.pos);
+    } else if (kind === 'skfog') {
+      // (host) A friend hid in Nubi's fog: it loses their trail
+      this.fogBy.set(from, 8);
+      if (this.tgtId === from && (this.state === 'windup' || this.state === 'lunge')) {
+        this.state = 'recover';
+        this.t = 0.9;
+      }
+      this.retargetT = 0;
     }
+  }
+
+  /** (host) Where it is and what it's doing, plus the lights and the maze walls. */
+  syncPayload(): number[] | null {
+    if (this.dead || this.following) return null;
+    const r = (n: number) => Math.round(n * 100) / 100;
+    const w = this.tearAt;
+    return [
+      BOSS_SYNC_MARK,
+      r(this.pos.x),
+      r(this.pos.z),
+      r(Math.atan2(Math.sin(this.yaw), Math.cos(this.yaw))),
+      SKIN_STATES.indexOf(this.state),
+      r(THREE.MathUtils.clamp(this.t, 0, 99)),
+      this.crawlK > 0.5 ? 1 : 0,
+      this.lightsOff ? 1 : 0,
+      w ? r(w.pos.x) : 0,
+      w ? r(w.pos.z) : 0,
+      w ? r(w.normal.x) : 0,
+      w ? r(w.normal.z) : 0,
+      ...(this.s.mazeMask?.() ?? []),
+    ];
+  }
+
+  /** (everybody else) The host's Skinwalker: same place, same moves, same maze and lights. */
+  applySync(_from: string, d: number[]) {
+    if (this.dead || this.c.deps.isHost() || d.length < 12) return;
+    this.lastSync = performance.now();
+    this.syncPos.set(d[1], this.s.floorY, d[2]);
+    this.syncYaw = d[3];
+    this.syncCrawl = d[6];
+    const off = d[7] === 1;
+    if (off !== this.lightsOff) this.setBlackout(off);
+    const mask = d.slice(12);
+    if (mask.length && this.s.applyMazeMask) {
+      const key = mask.join(',');
+      if (key !== this.maskKey) {
+        const first = this.maskKey === '';
+        this.maskKey = key;
+        const n = this.s.applyMazeMask(mask);
+        if (n && !first) {
+          soundManager.playRumble(1);
+          this.scream(0.8);
+          this.c.say('¡Las paredes se mueven! El laberinto cambió de forma', 'skin-shift', 1);
+        }
+      }
+    }
+    const st = SKIN_STATES[d[4]] ?? 'hunt';
+    // Our own stab shows until the host's answer gets here
+    if (this.holdT > 0 && st !== 'hurt' && st !== 'scared') return;
+    this.enterSynced(st, d);
+    this.t = d[5];
+  }
+
+  /** Plays the moment the host's Skinwalker changed what it's doing. */
+  private enterSynced(st: SkinState, d: number[]) {
+    const prev = this.state;
+    if (st === prev) return;
+    if (prev === 'mimic' && this.copy) this.endMimic(false);
+    if (prev === 'tear' && this.tearAt) {
+      this.pos.copy(this.tearAt.pos).addScaledVector(this.tearAt.normal, 0.8);
+      this.syncPos.copy(this.pos);
+      this.m.group.visible = true;
+      if (st !== 'scared') this.burstOut(this.tearAt);
+    }
+    if (st === 'tear') {
+      this.startTear({ pos: V(d[8], this.s.floorY, d[9]), normal: V(d[10], 0, d[11]) });
+      return;
+    }
+    this.state = st;
+    if (st === 'windup' && prev !== 'tear') this.scream(0.55);
+    if (st === 'lunge') {
+      this.lungeHit = false;
+      soundManager.playWindGust();
+    }
+    if (st === 'scared') {
+      this.scream(0.9);
+      this.ensureDagger();
+    }
+    if (prev === 'intro' && st === 'hunt') this.c.say('El Skinwalker te huele… toma un cráneo de obsidiana', 'skin-start', 3);
+  }
+
+  /** (everybody else) Glide to where the host has it. */
+  private followHost(dt: number) {
+    if (this.pos.distanceTo(this.syncPos) > 6) this.pos.copy(this.syncPos);
+    else {
+      this.pos.x = THREE.MathUtils.damp(this.pos.x, this.syncPos.x, 12, dt);
+      this.pos.z = THREE.MathUtils.damp(this.pos.z, this.syncPos.z, 12, dt);
+    }
+    this.yaw = turnTo(this.yaw, this.syncYaw, 14, dt);
+    if (this.state !== 'tear' && this.state !== 'mimic') this.m.group.visible = true;
+  }
+
+  /** It bursts out of the wall, screaming. */
+  private burstOut(w: { pos: THREE.Vector3; normal: THREE.Vector3 }) {
+    this.m.group.visible = true;
+    this.scream(1.1);
+    soundManager.playRip(1);
+    this.c.addEffect(burstEffect(this.root, w.pos.clone().add(V(0, 1.6, 0)), new THREE.MeshStandardMaterial({ color: 0xd4c27a }), 14, 0.18, 5, 1));
+    if (this.dist() < 16) this.c.say('¡Salió de la pared! ¡CORRE!', 'skin-tear', 1);
   }
 
   /** The obsidian skull floats up over the head, spinning, and bursts into a flash that fills the room. */
@@ -3646,7 +3833,7 @@ class SkinwalkerBoss extends BossController {
         n++;
       }
     const near = Math.hypot(this.pos.x - at.x, this.pos.z - at.z) < 13 && this.state !== 'intro' && this.state !== 'scared' && !this.dead;
-    if (near) this.scare(true);
+    if (near) this.scare(true, at, false);
     if (mine) {
       if (near) this.c.say(n ? '¡El destello lo espantó y deshizo a las copias! Busca la daga (brillo morado)' : '¡El destello lo espantó! Busca la daga (brillo morado)', 'skin-scared', 1);
       else if (n) this.c.say(n === 1 ? '¡El destello deshizo a la copia!' : `¡El destello deshizo ${n} copias!`, 'skin-scared', 1);
@@ -3734,9 +3921,19 @@ class SkinwalkerBoss extends BossController {
 
     const d = this.dist();
     this.t -= dt;
+    this.holdT = Math.max(0, this.holdT - dt);
+    for (const [id, f] of this.fogBy) {
+      if (f - dt <= 0) this.fogBy.delete(id);
+      else this.fogBy.set(id, f - dt);
+    }
+    // In a party only the host thinks for it (it chases whoever is closest); the rest copy it
+    const follow = this.following;
+    const T = follow ? null : this.target(dt);
+    const tp = T ? T.pos : p;
+    const dT = Math.hypot(tp.x - this.pos.x, tp.z - this.pos.z);
     // Dim rooms; darker when it's close; pitch black in a blackout
     this.c.darknessTarget = this.lightsOff ? 0.93 : this.state === 'scared' ? 0.35 : d < 9 ? 0.55 + Math.max(0, Math.sin(time * 17)) * 0.15 : 0.45;
-    this.updateRage(dt);
+    if (!follow) this.updateRage(dt);
     // Music: heartbeat and strings the closer it (or a werewolf copy) is
     let tension = this.lightsOff ? 0.6 : 0;
     if (this.state === 'windup' || this.state === 'lunge' || this.state === 'tear') tension = 1;
@@ -3756,7 +3953,7 @@ class SkinwalkerBoss extends BossController {
 
     // Animation: twitchy, sometimes on all fours, screaming with the jaw wide open
     const moving = this.state === 'hunt' || this.state === 'scared' || this.state === 'mimic';
-    const crawl = (this.state === 'hunt' && d > 7 && this.fogT <= 0) || this.state === 'scared';
+    const crawl = follow ? this.syncCrawl > 0.5 : (this.state === 'hunt' && dT > 7 && T!.fog <= 0) || this.state === 'scared';
     this.crawlK = THREE.MathUtils.damp(this.crawlK, crawl ? 1 : 0, 5, dt);
     const ck = this.crawlK;
     const rage = this.rage;
@@ -3797,133 +3994,141 @@ class SkinwalkerBoss extends BossController {
     m.eyeGlow.opacity = angry ? 0.75 : 0.35 + Math.sin(time * 3) * 0.1;
     this.m.group.position.y = ck * -0.05;
 
-    switch (this.state) {
-      case 'intro':
-        this.yaw = turnTo(this.yaw, Math.atan2(p.x - this.pos.x, p.z - this.pos.z), 3, dt);
-        if (this.t <= 0) {
-          this.state = 'hunt';
-          this.c.say('El Skinwalker te huele… toma un cráneo de obsidiana', 'skin-start', 3);
-        }
-        break;
-      case 'hunt': {
-        if (this.fogT > 0) {
-          // Lost your trail in Nubi's fog: it wanders
-          this.walk(this.s.home, this.speed * 0.5, dt);
+    // Voices: it calls you with a friend's voice (everybody hears their own)
+    if (this.state === 'hunt') {
+      this.voiceCd -= dt;
+      if (this.voiceCd <= 0 && d > 10) {
+        this.voiceCd = (16 + Math.random() * 10) * (1 - 0.5 * this.rage);
+        if (Math.random() < 0.5 + 0.5 * this.rage) this.scream(1.2);
+        const r = this.c.deps.remotes();
+        const who = r.length ? r[Math.floor(Math.random() * r.length)].username : 'tu compañero';
+        this.c.say(`Escuchas a ${who}: "¿Hola? ¡Ven, ayúdame!"… no es ${r.length ? 'él' : 'real'}`, 'skin-voice', 6);
+      }
+    }
+
+    if (follow) this.followHost(dt);
+    else
+      switch (this.state) {
+        case 'intro':
+          this.yaw = turnTo(this.yaw, Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z), 3, dt);
+          if (this.t <= 0) {
+            this.state = 'hunt';
+            this.c.say('El Skinwalker te huele… toma un cráneo de obsidiana', 'skin-start', 3);
+          }
+          break;
+        case 'hunt': {
+          if (T!.fog > 0) {
+            // Lost the trail in Nubi's fog: it wanders
+            this.walk(this.s.home, this.speed * 0.5, dt);
+            break;
+          }
+          this.walk(tp, this.speed * (1 + 0.25 * this.crawlK), dt);
+          // Erratic: sudden darts to the side (more often the more it's hurt)
+          this.dartCd -= dt;
+          if (this.dartCd <= 0 && this.rage > 0.25) {
+            this.dartCd = (0.6 + Math.random() * 1.6) / (0.4 + this.rage);
+            this.dartT = 0.18 + Math.random() * 0.15;
+            this.dartSide = Math.random() < 0.5 ? -1 : 1;
+            this.twitchT = 0.3;
+          }
+          if (this.dartT > 0) {
+            this.dartT -= dt;
+            this.pos.x += Math.cos(this.yaw) * this.dartSide * 9 * dt;
+            this.pos.z -= Math.sin(this.yaw) * this.dartSide * 9 * dt;
+            this.collide();
+          }
+          // Hurt enough, it stops walking the halls: it rips out of the wall of the room you're in
+          this.tearCd -= dt * (this.lightsOff ? 2 : 1);
+          if (this.tearCd <= 0 && this.rage > 0.25 && dT > 9 && !T!.down && this.s.wallNear) {
+            this.tearCd = THREE.MathUtils.lerp(24, 9, this.rage) * (0.8 + Math.random() * 0.4);
+            const w = this.s.wallNear(tp);
+            if (w) {
+              this.startTear(w);
+              break;
+            }
+          }
+          if (dT < 4.4 && Math.abs(tp.y - this.pos.y) < 2.5 && !T!.down && (!this.s.cellDist || this.s.cellDist(this.pos, tp) <= 1)) this.startWindup();
+          // Taking your shape only works alone (in a party its copies already look like your friends)
+          this.mimicCd -= dt;
+          if (this.mimicCd <= 0 && dT > 14 && !this.inParty) {
+            this.mimicCd = 26 + Math.random() * 12;
+            this.startMimic();
+          }
           break;
         }
-        this.walk(p, this.speed * (1 + 0.25 * this.crawlK), dt);
-        // Erratic: sudden darts to the side (more often the more it's hurt)
-        this.dartCd -= dt;
-        if (this.dartCd <= 0 && this.rage > 0.25) {
-          this.dartCd = (0.6 + Math.random() * 1.6) / (0.4 + this.rage);
-          this.dartT = 0.18 + Math.random() * 0.15;
-          this.dartSide = Math.random() < 0.5 ? -1 : 1;
-          this.twitchT = 0.3;
-        }
-        if (this.dartT > 0) {
-          this.dartT -= dt;
-          this.pos.x += Math.cos(this.yaw) * this.dartSide * 9 * dt;
-          this.pos.z -= Math.sin(this.yaw) * this.dartSide * 9 * dt;
+        case 'mimic':
+          this.walk(tp, 2.6, dt);
+          if (this.copy) this.copy.updateAnimation(2.6, true, dt, time);
+          if (dT < 4.5) this.endMimic(true);
+          else if (this.t <= 0) this.endMimic(false);
+          break;
+        case 'windup':
+          this.yaw = turnTo(this.yaw, Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z), 10, dt);
+          if (this.t <= 0) {
+            this.state = 'lunge';
+            this.t = 0.42;
+            this.lungeHit = false;
+            this.lungeDir.set(tp.x - this.pos.x, 0, tp.z - this.pos.z).normalize();
+            soundManager.playWindGust();
+          }
+          break;
+        case 'lunge':
+          this.pos.addScaledVector(this.lungeDir, 15 * dt);
           this.collide();
-        }
-        // Hurt enough, it stops walking the halls: it rips out of the wall of your room
-        this.tearCd -= dt * (this.lightsOff ? 2 : 1);
-        if (this.tearCd <= 0 && this.rage > 0.25 && d > 9 && !this.c.isDown && this.s.wallNear) {
-          this.tearCd = THREE.MathUtils.lerp(24, 9, this.rage) * (0.8 + Math.random() * 0.4);
-          const w = this.s.wallNear(p);
-          if (w) {
-            this.startTear(w);
-            break;
+          if (this.t <= 0) {
+            this.state = 'recover';
+            this.t = 0.9;
           }
-        }
-        if (d < 4.4 && Math.abs(p.y - this.pos.y) < 2.5 && !this.c.isDown && this.sameArea(this.pos)) this.startWindup();
-        // Voices: it calls you with a friend's voice
-        this.voiceCd -= dt;
-        if (this.voiceCd <= 0 && d > 10) {
-          this.voiceCd = (16 + Math.random() * 10) * (1 - 0.5 * this.rage);
-          if (Math.random() < 0.5 + 0.5 * this.rage) this.scream(1.2);
-          const r = this.c.deps.remotes();
-          const who = r.length ? r[Math.floor(Math.random() * r.length)].username : 'tu compañero';
-          this.c.say(`Escuchas a ${who}: "¿Hola? ¡Ven, ayúdame!"… no es ${r.length ? 'él' : 'real'}`, 'skin-voice', 6);
-        }
-        this.mimicCd -= dt;
-        if (this.mimicCd <= 0 && d > 14) {
-          this.mimicCd = 26 + Math.random() * 12;
-          this.startMimic();
-        }
-        break;
-      }
-      case 'mimic':
-        this.walk(p, 2.6, dt);
-        if (this.copy) this.copy.updateAnimation(2.6, true, dt, time);
-        if (d < 4.5) this.endMimic(true);
-        else if (this.t <= 0) this.endMimic(false);
-        break;
-      case 'windup':
-        this.yaw = turnTo(this.yaw, Math.atan2(p.x - this.pos.x, p.z - this.pos.z), 10, dt);
-        if (this.t <= 0) {
-          this.state = 'lunge';
-          this.t = 0.42;
-          this.lungeHit = false;
-          this.lungeDir.set(p.x - this.pos.x, 0, p.z - this.pos.z).normalize();
-          soundManager.playWindGust();
-        }
-        break;
-      case 'lunge':
-        this.pos.addScaledVector(this.lungeDir, 15 * dt);
-        this.collide();
-        if (!this.lungeHit && d < 1.6 && Math.abs(p.y - this.pos.y) < 2.2) {
-          this.lungeHit = true;
-          if (this.guarding(this.pos)) {
-            this.c.say('¡Quetsy lo mordió! Retrocede', 'skin-jade', 2);
-            this.scare(false);
-            break;
+          break;
+        case 'recover':
+          if (this.t <= 0) this.state = 'hunt';
+          break;
+        case 'tear': {
+          if (this.t <= 0) {
+            // …and it bursts out, screaming, right at whoever is in that room
+            const w = this.tearAt!;
+            this.pos.copy(w.pos).addScaledVector(w.normal, 0.8);
+            this.yaw = Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z);
+            this.burstOut(w);
+            this.startWindup(0.3);
           }
-          this.c.damagePlayer(18 + 8 * this.s.diff, this.pos, 12, 5, 'claw');
+          break;
         }
-        if (this.t <= 0) {
-          this.state = 'recover';
-          this.t = 0.9;
-        }
-        break;
-      case 'recover':
-        if (this.t <= 0) this.state = 'hunt';
-        break;
-      case 'tear': {
-        // Inside the wall: the wallpaper bulges and rips open like cloth…
-        const w = this.tearAt!;
-        const rip = this.rips[this.rips.length - 1];
-        if (rip) {
-          const k = THREE.MathUtils.clamp(1 - this.t / 1.3, 0, 1);
-          rip.slit.scale.set(0.2 + k * 0.9, 0.15 + k * 1.0, 1);
-          rip.flaps.forEach((f, i) => (f.rotation.y = (i % 2 ? 1 : -1) * k * 1.3 + Math.sin(time * 40 + i) * 0.05 * k));
-          rip.g.position.copy(w.pos).addScaledVector(w.normal, 0.02 + Math.sin(time * 30) * 0.015 * k);
-        }
-        if (this.t <= 0) {
-          // …and it bursts out, screaming, right at you
-          this.pos.copy(w.pos).addScaledVector(w.normal, 0.8);
-          this.yaw = Math.atan2(p.x - this.pos.x, p.z - this.pos.z);
-          this.m.group.visible = true;
-          this.scream(1.1);
-          soundManager.playRip(1);
-          this.c.addEffect(burstEffect(this.root, w.pos.clone().add(V(0, 1.6, 0)), new THREE.MeshStandardMaterial({ color: 0xd4c27a }), 14, 0.18, 5, 1));
-          this.c.say('¡Salió de la pared! ¡CORRE!', 'skin-tear', 1);
-          this.startWindup(0.3);
-        }
-        break;
+        case 'scared':
+          this.walk(this.fleeTo, this.speed * 1.4, dt);
+          if (this.t <= 0) {
+            this.state = 'hunt';
+            this.c.say(this.has('daga') ? '¡Ya viene! Déjalo acercarse y usa la daga cuando lo tengas enfrente' : 'Volvió… y aún no tienes la daga', 'skin-back', 2);
+          }
+          break;
+        case 'hurt':
+          this.pos.addScaledVector(this.lungeDir, -4 * dt * Math.max(0, this.t));
+          this.collide();
+          if (this.t <= 0) this.scare(false);
+          break;
       }
-      case 'scared':
-        this.walk(this.fleeTo, this.speed * 1.4, dt);
-        if (this.t <= 0) {
-          this.state = 'hunt';
-          this.c.say(this.has('daga') ? '¡Ya viene! Déjalo acercarse y usa la daga cuando lo tengas enfrente' : 'Volvió… y aún no tienes la daga', 'skin-back', 2);
-        }
-        break;
-      case 'hurt':
-        this.pos.addScaledVector(this.lungeDir, -4 * dt * Math.max(0, this.t));
-        this.collide();
-        if (this.t <= 0) this.scare(false);
-        break;
+
+    // Inside the wall: the wallpaper bulges and rips open like cloth… (everybody sees it)
+    if (this.state === 'tear' && this.tearAt) {
+      const w = this.tearAt;
+      const rip = this.rips[this.rips.length - 1];
+      if (rip) {
+        const k = THREE.MathUtils.clamp(1 - this.t / 1.3, 0, 1);
+        rip.slit.scale.set(0.2 + k * 0.9, 0.15 + k * 1.0, 1);
+        rip.flaps.forEach((f, i) => (f.rotation.y = (i % 2 ? 1 : -1) * k * 1.3 + Math.sin(time * 40 + i) * 0.05 * k));
+        rip.g.position.copy(w.pos).addScaledVector(w.normal, 0.02 + Math.sin(time * 30) * 0.015 * k);
+      }
+    }
+
+    // Its claws: everybody checks their own player (it may be lunging at a friend next to you)
+    if (this.state === 'lunge' && !this.lungeHit && this.dist() < 1.6 && Math.abs(p.y - this.pos.y) < 2.2 && !this.c.isDown) {
+      this.lungeHit = true;
+      if (this.guarding(this.pos)) {
+        this.c.say('¡Quetsy lo mordió! Retrocede', 'skin-jade', 2);
+        this.scare(false);
+      } else {
+        this.c.damagePlayer(18 + 8 * this.s.diff, this.pos, 12, 5, 'claw');
+      }
     }
 
     this.group.position.copy(this.pos);
@@ -3991,7 +4196,7 @@ class SkinwalkerBoss extends BossController {
     this.rips.push({ g, slit, flaps, t: 0 });
     soundManager.playRip(0.6);
     soundManager.playStalkerWarning();
-    this.c.say('Algo rasga el papel tapiz de las paredes…', 'skin-tear-warn', 3);
+    if (w.pos.distanceTo(this.c.playerPos) < 18) this.c.say('Algo rasga el papel tapiz de las paredes…', 'skin-tear-warn', 3);
   }
 
   /** Old rips fade away after a while. */
@@ -4053,8 +4258,14 @@ class SkinwalkerBoss extends BossController {
   }
 
   /** It screams and runs to the far side of the hall for a while. */
-  private scare(fromSkull: boolean) {
-    const p = this.c.playerPos;
+  private scare(fromSkull: boolean, away?: THREE.Vector3, tellHost = true) {
+    if (this.following) {
+      // The host runs it: ask it to flee (its snapshot shows it to us in a moment)
+      if (tellHost) this.c.deps.send('skscare', 0, fromSkull ? 1 : 0);
+      this.ensureDagger();
+      return;
+    }
+    const p = away ?? this.c.playerPos;
     if (this.state === 'tear' && this.tearAt) {
       // Caught inside the wall: it comes out where it was going to, and runs away
       this.pos.copy(this.tearAt.pos).addScaledVector(this.tearAt.normal, 0.8);
@@ -4127,7 +4338,7 @@ class SkinwalkerBoss extends BossController {
     // Same name tag as a real friend: you can't tell it apart… until it changes
     const tag = createNameTagSprite(pick.name === 'ti' ? this.c.deps.playerModel().appearance.name || 'Tú' : pick.name);
     m.group.add(tag);
-    this.copies.push({ m, holder, pitch, wolf, lostT: 0, pos: at, center: at.clone(), yaw: Math.atan2(p.x - at.x, p.z - at.z), phase: 'copy', t: 0, hp: 2, mats, eyes, hitCd: 0, name: pick.name, tag });
+    this.copies.push({ m, holder, pitch, wolf, lostT: 0, pos: at, center: at.clone(), yaw: Math.atan2(p.x - at.x, p.z - at.z), phase: 'copy', t: 0, hp: 2, mats, eyes, hitCd: 0, name: pick.name, tag, tailT: 0 });
   }
 
   /**
@@ -4264,14 +4475,53 @@ class SkinwalkerBoss extends BossController {
   }
 
   /** The copy stops pretending: it twists and stretches. */
-  private reveal(c: SkinCopy) {
+  private reveal(c: SkinCopy, why: 'hit' | 'dark' | 'hurt' | 'boss' | 'trap' | 'late' = 'hit') {
     if (c.phase !== 'copy') return;
     c.phase = 'distort';
     c.t = 0;
     c.m.group.remove(c.tag);
     soundManager.playStalkerWarning();
     soundManager.playBoneCrack(1 - Math.min(0.8, c.pos.distanceTo(this.c.playerPos) / 40));
-    this.c.say(c.name === 'ti' ? '¡Era una copia tuya! ¡Se convierte en un hombre lobo!' : `¡No era ${c.name}! Se convierte en un hombre lobo…`, 'skin-reveal', 1.5);
+    const who = c.name === 'ti' ? 'tu copia' : c.name;
+    const base = c.name === 'ti' ? '¡Era una copia tuya! ¡Se convierte en un hombre lobo!' : `¡No era ${c.name}! Se convierte en un hombre lobo…`;
+    const msg =
+      why === 'dark'
+        ? `Se fue la luz… y ${who} empezó a crujir a tu lado. ¡No era ${c.name === 'ti' ? 'real' : 'tu amigo'}!`
+        : why === 'boss'
+          ? `¡Justo ahora! ${c.name === 'ti' ? 'Tu copia' : c.name} se retuerce mientras el Skinwalker se acerca… ¡era una copia!`
+          : why === 'trap'
+            ? `Te siguió hasta un callejón sin salida… ${c.name === 'ti' ? 'tu copia' : c.name} se convierte en un hombre lobo`
+            : why === 'hurt'
+              ? `Te vio débil… ¡${c.name === 'ti' ? 'tu copia' : c.name} no era quien creías!`
+              : base;
+    this.c.say(msg, 'skin-reveal', 1.5);
+  }
+
+  /**
+   * A copy tags along like a friend and waits for the worst moment to turn: the lights go out,
+   * the Skinwalker is coming, you're low on life, or it followed you into a dead end.
+   */
+  private worstMoment(c: SkinCopy): 'dark' | 'hurt' | 'boss' | 'trap' | 'late' | null {
+    if (this.c.isDown || c.tailT < 9) return null;
+    if (this.lightsOff) return 'dark';
+    if (this.c.hp <= this.c.maxHp * 0.4) return 'hurt';
+    if (this.state === 'windup' || this.state === 'lunge' || this.state === 'tear' || (this.state === 'hunt' && this.dist() < 16)) return 'boss';
+    if (c.tailT > 12 && this.s.exits && this.s.exits(this.c.playerPos) <= 1) return 'trap';
+    if (c.tailT > 45) return 'late';
+    return null;
+  }
+
+  /** Keeps a copy out of the walls. */
+  private pushOut(q: THREE.Vector3) {
+    for (const o of this.s.obstacles ?? []) {
+      const cx = THREE.MathUtils.clamp(q.x, o.x - o.hx, o.x + o.hx);
+      const cz = THREE.MathUtils.clamp(q.z, o.z - o.hz, o.z + o.hz);
+      const e = Math.hypot(q.x - cx, q.z - cz);
+      if (e < 0.5 && e > 1e-4) {
+        q.x = cx + ((q.x - cx) / e) * 0.5;
+        q.z = cz + ((q.z - cz) / e) * 0.5;
+      }
+    }
   }
 
   private killCopy(c: SkinCopy) {
@@ -4283,6 +4533,10 @@ class SkinwalkerBoss extends BossController {
 
   private updateCopies(dt: number, time: number) {
     const p = this.c.playerPos;
+    // How fast you're walking (a copy keeps your pace, like a friend would)
+    const ps = Math.hypot(p.x - this.prevP.x, p.z - this.prevP.z) / Math.max(dt, 1e-3);
+    this.pSpeed = THREE.MathUtils.damp(this.pSpeed, ps > 30 ? 0 : ps, 6, dt);
+    this.prevP.copy(p);
     for (let i = this.copies.length - 1; i >= 0; i--) {
       const c = this.copies[i];
       c.t += dt;
@@ -4300,22 +4554,27 @@ class SkinwalkerBoss extends BossController {
       // How twisted it is: 0 = looks just like the player, 1 = a long crawling thing
       let k = 0;
       if (c.phase === 'copy') {
-        // Walks to you calmly, like your friend would…
+        // Walks to you calmly, like your friend would… and then tags along a couple of steps
+        // behind you, stopping when you stop, as if it were helping you look for the dagger
         const d = Math.hypot(p.x - c.pos.x, p.z - c.pos.z);
-        const near = d < 3.8 && (!this.s.cellDist || this.s.cellDist(c.pos, p) <= 1);
-        if (!near) {
+        const close = d < 5 && (!this.s.cellDist || this.s.cellDist(c.pos, p) <= 1);
+        if (close) c.tailT += dt;
+        const speed = !close ? 3.8 : d > 2.6 ? THREE.MathUtils.clamp(this.pSpeed + (d - 2.6) * 1.2, 1.5, 7) : 0;
+        if (speed > 0) {
           const wp = this.s.navStep ? this.s.navStep(c.pos, p) : p;
           const wy = Math.atan2(wp.x - c.pos.x, wp.z - c.pos.z);
           c.yaw = turnTo(c.yaw, wy, 6, dt);
-          c.pos.x += Math.sin(c.yaw) * 3.6 * dt;
-          c.pos.z += Math.cos(c.yaw) * 3.6 * dt;
-          m.updateAnimation(3.6, true, dt, time);
+          c.pos.x += Math.sin(c.yaw) * speed * dt;
+          c.pos.z += Math.cos(c.yaw) * speed * dt;
+          this.pushOut(c.pos);
+          m.updateAnimation(speed, true, dt, time);
         } else {
           c.yaw = turnTo(c.yaw, toYaw, 6, dt);
           m.updateAnimation(0, true, dt, time);
         }
-        // …until it's right next to you (or gets tired of pretending)
-        if (near || c.t > 30) this.reveal(c);
+        // …until the worst possible moment
+        const why = close ? this.worstMoment(c) : null;
+        if (why) this.reveal(c, why);
       } else if (c.phase === 'distort') {
         k = ease(Math.min(1, c.t / 1.4));
         if (c.t > 1.4) {
@@ -4329,6 +4588,7 @@ class SkinwalkerBoss extends BossController {
         if (c.t > 1.2) {
           c.phase = 'copy';
           c.t = 0;
+          c.tailT = 0;
           m.group.add(c.tag);
           for (const f of c.wolf.feet) f.visible = true;
         }
@@ -4342,15 +4602,7 @@ class SkinwalkerBoss extends BossController {
         c.pos.x += Math.sin(c.yaw) * sp * dt;
         c.pos.z += Math.cos(c.yaw) * sp * dt;
         // around the pillars
-        for (const o of this.s.obstacles ?? []) {
-          const cx = THREE.MathUtils.clamp(c.pos.x, o.x - o.hx, o.x + o.hx);
-          const cz = THREE.MathUtils.clamp(c.pos.z, o.z - o.hz, o.z + o.hz);
-          const e = Math.hypot(c.pos.x - cx, c.pos.z - cz);
-          if (e < 0.5 && e > 1e-4) {
-            c.pos.x = cx + ((c.pos.x - cx) / e) * 0.5;
-            c.pos.z = cz + ((c.pos.z - cz) / e) * 0.5;
-          }
-        }
+        this.pushOut(c.pos);
         const d = Math.hypot(p.x - c.pos.x, p.z - c.pos.z);
         // You got away: if it stays far from you for a moment, it turns back into a copy
         const far = d > 20 || (this.s.cellDist ? this.s.cellDist(c.pos, p) >= 5 : false);
@@ -4459,6 +4711,10 @@ class SkinwalkerBoss extends BossController {
       this.state = 'hurt';
       this.t = 1.1;
       this.lungeDir.set(this.c.playerPos.x - this.pos.x, 0, this.c.playerPos.z - this.pos.z).normalize();
+      if (this.following) {
+        this.holdT = 0.8;
+        this.c.deps.send('skhit');
+      }
       this.c.say('¡Lo heriste! La daga se quedó en su piel… pronto aparecerá otra', 'skin-stab', 1);
       // The dagger is gone: the next one shows up in a while (the same one for the whole party)
       this.daggerHeldBy = null;
@@ -4516,7 +4772,12 @@ class SkinwalkerBoss extends BossController {
           target: me,
           run: () => {
             this.fogT = 8;
-            if (this.state === 'windup' || this.state === 'lunge') this.state = 'recover';
+            if (this.following) this.c.deps.send('skfog');
+            else if ((this.state === 'windup' || this.state === 'lunge') && this.tgtId === null) {
+              this.state = 'recover';
+              this.t = 0.9;
+            }
+            this.retargetT = 0;
           },
         };
       case 'estrella':

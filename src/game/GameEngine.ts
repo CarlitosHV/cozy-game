@@ -28,7 +28,7 @@ const DEV_THEMES: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero', 'garden', 'cas
 import { buildBackroomsWorld, buildSkinwalkerArena } from './levelBackrooms';
 import { generateLevel } from './levelGen';
 import { generateBossArena } from './bossArena';
-import { CombatStatus, CombatSystem } from './combat';
+import { BOSS_SYNC_MARK, CombatStatus, CombatSystem } from './combat';
 import { PuzzleSystem } from './puzzles';
 import { DungeonContext, DungeonSystem } from './dungeon';
 import { AmbientDecor, Quality } from './ambience';
@@ -298,6 +298,7 @@ export class GameEngine {
   /** Spectator mode: latest enemy snapshot of every friend still playing */
   private spectateSnaps = new Map<string, { d: number[]; t: number }>();
   private snapSendT = 0;
+  private bossSyncT = 0;
 
   // Spectator Mode in Party Rooms
   public isSpectating: boolean = false;
@@ -620,6 +621,11 @@ export class GameEngine {
 
     multiplayerClient.addSpectateSnapListener((payload) => {
       if (payload.levelId !== this.currentLevel) return;
+      // Not a spectator snapshot: the party host's boss (everybody sees the same Skinwalker)
+      if (payload.d?.[0] === BOSS_SYNC_MARK) {
+        this.combat?.applyBossSync(payload.userId, payload.d);
+        return;
+      }
       this.spectateSnaps.set(payload.userId, { d: payload.d, t: performance.now() });
     });
 
@@ -1221,6 +1227,17 @@ export class GameEngine {
     if (this.stalker) out.push({ obj: this.stalker.group, pos: this.stalker.position });
     if (this.world.hazards) out.push(...this.world.hazards.syncObjects());
     return out;
+  }
+
+  /** Party host in a boss fight: stream the boss (where it is, what it's doing) ten times a second. */
+  private sendBossSync(dt: number) {
+    if (!this.partyRoomId || !this.combat || this.gameState !== 'playing') return;
+    this.bossSyncT -= dt;
+    if (this.bossSyncT > 0) return;
+    this.bossSyncT = 0.1;
+    if (!this.isPartyHost() || !this.remotePlayers?.getPlayersInfo().length) return;
+    const d = this.combat.bossSyncPayload();
+    if (d) multiplayerClient.sendSpectateSnap(this.currentLevel, d);
   }
 
   /** While friends watch us (they already finished), stream what we see a few times a second. */
@@ -2754,6 +2771,7 @@ export class GameEngine {
     // 6c. Boss fight (life, tools, the boss) — after physics so it can hold a grabbed player
     if (this.combat && this.gameState === 'playing') {
       this.combat.update(dt, time, this.currentInput);
+      this.sendBossSync(dt);
     }
 
     if (this.physics.collectedCount !== prevCollectibles) {

@@ -39,6 +39,9 @@ interface RemotePlayerEntity {
   /** Boss fights: fainted, lying on the floor waiting for CPR */
   down: boolean;
   downLabel?: THREE.Sprite;
+  /** Where and when they fell: if they walk away (the "get up" message got lost) they're up again */
+  downPos?: THREE.Vector3;
+  downAt?: number;
 }
 
 // Texture cache for billboard name tags to avoid per-player canvas redrawing
@@ -465,6 +468,10 @@ export class RemotePlayersManager {
     const e = this.players.get(userId);
     if (!e) return;
     e.down = on;
+    if (on) {
+      e.downPos = e.targetPos.clone();
+      e.downAt = performance.now();
+    }
     if (on && !e.downLabel) {
       e.downLabel = makeLabel('¡Hazme RCP!');
       this.scene.add(e.downLabel);
@@ -532,6 +539,19 @@ export class RemotePlayersManager {
       );
       entity.currentYaw += dyaw * lerpFactor;
       entity.model.group.rotation.y = entity.currentYaw;
+
+      // Safety net: the "get up" message can get lost (lag, a dropped packet, a rejoin). A friend
+      // who is moving around again, or has been lying longer than any faint lasts, is clearly up.
+      if (
+        entity.down &&
+        ((entity.downPos && entity.targetPos.distanceTo(entity.downPos) > 1.2) ||
+          (entity.downAt !== undefined && performance.now() - entity.downAt > 32000) ||
+          entity.anim === 'walk' ||
+          entity.anim === 'run' ||
+          entity.anim === 'jump')
+      ) {
+        this.setDown(entity.userId, false);
+      }
 
       if (entity.down) {
         entity.model.group.rotation.order = 'YXZ';

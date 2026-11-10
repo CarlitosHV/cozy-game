@@ -1801,6 +1801,62 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
     setLights: (on) => {
       lights = on;
     },
+    exits: (p) => {
+      const [i, j] = gCell(g, p);
+      return gNeighbors(g, i, j).length;
+    },
+    portalSpotNear: (p, yaw) => {
+      const gap = (q: THREE.Vector3) => {
+        let m = 1e9;
+        for (const o of obstacles) {
+          const cx = THREE.MathUtils.clamp(q.x, o.x - o.hx, o.x + o.hx);
+          const cz = THREE.MathUtils.clamp(q.z, o.z - o.hz, o.z + o.hz);
+          m = Math.min(m, Math.hypot(q.x - cx, q.z - cz));
+        }
+        return m;
+      };
+      let best: THREE.Vector3 | null = null;
+      let bestScore = -1e9;
+      for (const r of [2.6, 2.2, 3.2, 1.9])
+        for (let k = 0; k < 16; k++) {
+          const a = yaw + (k * Math.PI) / 8;
+          const q = new THREE.Vector3(p.x + Math.sin(a) * r, Y, p.z + Math.cos(a) * r);
+          if (gap(q) < 1.2) continue;
+          // no wall between you and it
+          let blocked = false;
+          for (let s = 0.5; s < r && !blocked; s += 0.5) blocked = gap(new THREE.Vector3(p.x + Math.sin(a) * s, Y, p.z + Math.cos(a) * s)) < 0.15;
+          if (blocked) continue;
+          // in front of you (where the camera looks), a little to the side
+          const score = Math.cos((k * Math.PI) / 8 - 0.5) - Math.abs(r - 2.6) * 0.4;
+          if (score > bestScore) {
+            bestScore = score;
+            best = q;
+          }
+        }
+      if (best) return best;
+      const [i, j] = gCell(g, p);
+      return gCenter(g, i, j).setY(Y);
+    },
+    mazeMask: () => {
+      const out: number[] = [];
+      moving.forEach((w, k) => {
+        if (k % 16 === 0) out.push(0);
+        if (w.target > 0.5) out[out.length - 1] |= 1 << k % 16;
+      });
+      return out;
+    },
+    applyMazeMask: (mask) => {
+      let changed = 0;
+      moving.forEach((w, k) => {
+        const t = ((mask[Math.floor(k / 16)] ?? 0) >> k % 16) & 1;
+        if (t === w.target) return;
+        changed++;
+        w.target = t;
+        setOpen(w, t === 0);
+        placeWall(w);
+      });
+      return changed;
+    },
   };
   const isCorner = (i: number, j: number) => corners.slice(0, 4).some(([a, b]) => a === i && b === j);
   const deadEnds: [number, number][] = [];

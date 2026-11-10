@@ -29,6 +29,7 @@ import { COMPANION_POWERS } from './companionPowers';
 import { makeGlowTexture } from './levelKit';
 import { makeBat, makeBomb, makeBurger, makeFlame, makeFries, makeLightOrb, makeNetProjectile, makeNetWrap, makeStone } from './toolModels';
 import { BossController, createBossController } from './bosses';
+export { BOSS_SYNC_MARK } from './bosses';
 
 export type ShotKind = 'piedra' | 'red' | 'bomba' | 'luz';
 export type HitKind = ShotKind | 'bate' | 'stomp';
@@ -545,9 +546,19 @@ export class CombatSystem {
   private openPortal() {
     if (this.portalOpen) return;
     this.portalOpen = true;
+    // Big mazes: the portal opens right next to you instead of far away in the middle
+    const yaw = this.deps.playerModel().group.rotation.y;
+    const spot = this.setup.portalSpotNear?.(this.playerPos.clone(), yaw) ?? null;
+    if (spot) {
+      const portal = this.setup.portal;
+      this.setup.portalPos.copy(spot);
+      portal.position.copy(spot);
+      portal.group.position.copy(spot);
+      portal.group.rotation.y = Math.atan2(this.playerPos.x - spot.x, this.playerPos.z - spot.z);
+    }
     this.setup.portal.group.visible = true;
     this.deps.openPortal();
-    this.deps.notify('¡Se abrió el portal en el centro de la arena!');
+    this.deps.notify(spot ? '¡Se abrió el portal justo a tu lado!' : '¡Se abrió el portal en el centro de la arena!');
     this.addEffect(puffEffect(this.deps.root, this.setup.portalPos.clone().add(new THREE.Vector3(0, 1.5, 0)), 'rgba(125,211,252,0.9)', 7, 1.2));
   }
 
@@ -691,6 +702,16 @@ export class CombatSystem {
   }
 
   // ------------------------------------------------------------------ events (party)
+  /** What the host streams about its boss (null: nothing to share) */
+  bossSyncPayload(): number[] | null {
+    return this.defeated ? null : this.boss.syncPayload();
+  }
+
+  /** The host's boss snapshot arrived */
+  applyBossSync(from: string, d: number[]) {
+    if (!this.defeated) this.boss.applySync(from, d);
+  }
+
   onEvent(kind: string, i: number, v: number, target: string | undefined, from: string, replay: boolean) {
     if (kind === 'dmg') {
       this.applyBossDelta(-v, replay);
