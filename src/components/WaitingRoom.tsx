@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Clock, Loader2, Play, Users } from 'lucide-react';
+import { Check, Clock, Loader2, Mail, Play, UserPlus, Users } from 'lucide-react';
 import type { GameEngine } from '../game/GameEngine';
+import { apiClient, FriendUser } from '../services/apiClient';
 import { BTN, UI } from '../ui/labels';
 
 type Roster = ReturnType<GameEngine['getLobbyRoster']>;
@@ -14,6 +15,12 @@ interface WaitingRoomProps {
   onStart: () => void;
   /** Leave to the main menu */
   onExit: () => void;
+  /** Friends invited from here who haven't answered yet */
+  invited: { id: string; name: string }[];
+  /** Send an invite to this level */
+  onInvite: (friend: FriendUser) => void;
+  /** Not logged in: open the login window (to invite friends) */
+  onLogin: () => void;
 }
 
 /** Seconds of 3-2-1 once everybody is ready */
@@ -37,7 +44,7 @@ const STATUS_LABEL: Record<Roster[number]['status'], string> = {
  * ready. In a party it waits until everybody is ready and then counts 3-2-1 for everyone; alone
  * it's just the brief and a button. The Skinwalker's level plays its own clip in the background.
  */
-export function WaitingRoom({ engine, title, goal, steps, onStart, onExit }: WaitingRoomProps) {
+export function WaitingRoom({ engine, title, goal, steps, onStart, onExit, invited, onInvite, onLogin }: WaitingRoomProps) {
   const [ready, setReady] = useState(false);
   const [roster, setRoster] = useState<Roster>([]);
   const [count, setCount] = useState<number | null>(null);
@@ -48,7 +55,34 @@ export function WaitingRoom({ engine, title, goal, steps, onStart, onExit }: Wai
   const done = useRef(false);
   const style = engine?.getLobbyStyle() ?? 'cozy';
   const inParty = Boolean(engine?.partyRoomId);
-  const alone = !inParty || roster.length === 0;
+  // Alone (nobody in the party, nobody invited): the button just starts the level
+  const alone = (!inParty || roster.length === 0) && invited.length === 0;
+  const invitedRef = useRef(invited);
+  invitedRef.current = invited;
+  // The friends list, to invite them from here
+  const [showFriends, setShowFriends] = useState(false);
+  const [friends, setFriends] = useState<FriendUser[] | null>(null);
+  const [friendsError, setFriendsError] = useState(false);
+  const loggedIn = Boolean(apiClient.getAccessToken());
+  useEffect(() => {
+    if (!showFriends || !loggedIn) return;
+    let gone = false;
+    const load = () =>
+      apiClient
+        .listFriends()
+        .then((list) => {
+          if (gone) return;
+          setFriendsError(false);
+          setFriends(list.slice().sort((a, b) => Number(Boolean(b.online)) - Number(Boolean(a.online))));
+        })
+        .catch(() => !gone && setFriendsError(true));
+    load();
+    const id = window.setInterval(load, 8000);
+    return () => {
+      gone = true;
+      window.clearInterval(id);
+    };
+  }, [showFriends, loggedIn]);
 
   const finish = () => {
     if (done.current) return;
@@ -70,7 +104,7 @@ export function WaitingRoom({ engine, title, goal, steps, onStart, onExit }: Wai
       const list = engine.getLobbyRoster();
       setRoster(list);
       const elapsed = performance.now() - openedAt.current;
-      const blockers = list.filter((r) => r.status === 'waiting' || (r.status === 'loading' && elapsed < LOADING_WAIT_MS));
+      const blockers = [...list.filter((r) => r.status === 'waiting' || (r.status === 'loading' && elapsed < LOADING_WAIT_MS)), ...invitedRef.current];
       setCanSkip(readyRef.current && blockers.length > 0 && elapsed > SKIP_AFTER_MS);
       if (readyRef.current && list.length > 0 && blockers.length === 0) {
         if (countFrom.current === null) countFrom.current = performance.now();
@@ -166,15 +200,16 @@ export function WaitingRoom({ engine, title, goal, steps, onStart, onExit }: Wai
           </ul>
         </div>
 
-        {!alone && (
-          <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1.5">
             <span className={`text-[11px] font-bold uppercase tracking-wider ${muted}`}>Equipo</span>
             <div className={`flex items-center justify-between rounded-xl px-3 py-2 ${horror ? 'bg-black/30' : 'bg-cozy-panel-deep'}`}>
               <span className="text-sm font-semibold">Tú</span>
-              <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${chip(ready ? 'me' : 'waiting')}`}>
-                {ready ? <Check className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                {ready ? 'Listo' : 'Leyendo…'}
-              </span>
+              {!alone && (
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${chip(ready ? 'me' : 'waiting')}`}>
+                  {ready ? <Check className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                  {ready ? 'Listo' : 'Leyendo…'}
+                </span>
+              )}
             </div>
             {roster.map((r) => (
               <div key={r.userId} className={`flex items-center justify-between rounded-xl px-3 py-2 ${horror ? 'bg-black/30' : 'bg-cozy-panel-deep'}`}>
@@ -185,11 +220,62 @@ export function WaitingRoom({ engine, title, goal, steps, onStart, onExit }: Wai
                 </span>
               </div>
             ))}
-            <span className={`text-[11px] ${muted}`}>
-              {count !== null ? 'Todos listos.' : 'El nivel empieza cuando todos estén listos.'}
-            </span>
+            {invited
+              .filter((f) => !roster.some((r) => r.userId === f.id))
+              .map((f) => (
+                <div key={f.id} className={`flex items-center justify-between rounded-xl px-3 py-2 ${horror ? 'bg-black/30' : 'bg-cozy-panel-deep'}`}>
+                  <span className="text-sm font-semibold truncate pr-2">{f.name}</span>
+                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0 ${chip('loading')}`}>
+                    <Mail className="w-3 h-3" />
+                    Invitado…
+                  </span>
+                </div>
+              ))}
+            {!alone && (
+              <span className={`text-[11px] ${muted}`}>
+                {count !== null ? 'Todos listos.' : 'El nivel empieza cuando todos estén listos.'}
+              </span>
+            )}
           </div>
-        )}
+
+        {/* Invite friends from here: they come to this level and the room waits for them */}
+        <div className="flex flex-col gap-1.5">
+          <button
+            type="button"
+            onClick={() => (loggedIn ? setShowFriends((v) => !v) : onLogin())}
+            className={horror ? `w-full py-2 rounded-2xl text-xs font-bold cursor-pointer border border-[#6b5a2a]/70 hover:bg-white/5 inline-flex items-center justify-center gap-1.5` : `${BTN.secondary} inline-flex items-center justify-center gap-1.5`}
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            {loggedIn ? (showFriends ? 'Ocultar amigos' : 'Invitar amigos') : 'Inicia sesión para invitar amigos'}
+          </button>
+          {showFriends && loggedIn && (
+            <div className={`flex flex-col gap-1 max-h-40 overflow-y-auto rounded-xl p-1.5 ${horror ? 'bg-black/30' : 'bg-cozy-panel-deep'}`}>
+              {friends === null && !friendsError && <span className={`text-xs p-2 ${muted}`}>Cargando amigos…</span>}
+              {friendsError && <span className={`text-xs p-2 ${muted}`}>No se pudo cargar la lista. Reintentando…</span>}
+              {friends && friends.length === 0 && <span className={`text-xs p-2 ${muted}`}>Aún no tienes amigos agregados (agrégalos desde el menú de amigos).</span>}
+              {friends?.map((f) => {
+                const here = roster.some((r) => r.userId === f._id);
+                const sent = invited.some((x) => x.id === f._id);
+                return (
+                  <div key={f._id} className="flex items-center justify-between gap-2 px-2 py-1.5">
+                    <span className="text-sm font-semibold truncate flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${f.online ? 'bg-emerald-400' : 'bg-stone-400'}`} />
+                      {f.displayName || f.username}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={!f.online || here || sent}
+                      onClick={() => onInvite(f)}
+                      className={`text-[11px] font-bold px-2.5 py-1 rounded-full shrink-0 cursor-pointer disabled:cursor-default disabled:opacity-50 ${horror ? 'bg-[#d8c06a] text-[#1a1608]' : 'bg-cozy-accent text-white'}`}
+                    >
+                      {here ? 'En la sala' : sent ? 'Invitado' : f.online ? 'Invitar' : 'Desconectado'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         <button
           type="button"

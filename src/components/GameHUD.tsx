@@ -554,6 +554,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [showLevelBrief, setShowLevelBrief] = useState(false);
   /** Waiting room before each level (the party starts together) */
   const [showLobby, setShowLobby] = useState(false);
+  /** Friends invited (from the waiting room or the friends list) who haven't answered yet */
+  const [pendingInvites, setPendingInvites] = useState<{ id: string; name: string; inviteId?: string }[]>([]);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showPartyModal, setShowPartyModal] = useState(false);
   const [showLeaderboardModal, setShowLeaderboardModal] = useState(false);
@@ -788,6 +790,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     multiplayerClient.connect();
     const currentRoom = multiplayerClient.getCurrentRoomId();
     multiplayerClient.sendInvite(friend._id, levelId, currentRoom || undefined);
+    const name = friend.displayName || friend.username;
+    setPendingInvites((cur) => [...cur.filter((x) => x.id !== friend._id), { id: friend._id, name }]);
+    // Invites expire after a minute: stop waiting for that friend
+    window.setTimeout(() => setPendingInvites((cur) => cur.filter((x) => x.id !== friend._id)), 65000);
     showToast(
       `Invitando a ${friend.displayName || friend.username} al nivel ${levelId}…`,
       2200,
@@ -845,7 +851,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     );
 
     unsubs.push(
-      multiplayerClient.addInviteSentListener(() => {
+      multiplayerClient.addInviteSentListener((data) => {
+        setPendingInvites((cur) => cur.map((x) => (x.id === data.toUserId ? { ...x, inviteId: data.inviteId } : x)));
         showToast('Invitación enviada. Esperando respuesta (60 s)…', 2800, 'success');
       })
     );
@@ -853,6 +860,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     unsubs.push(
       multiplayerClient.addInviteResultListener((data) => {
         setIncomingInvite((cur) => (cur?.inviteId === data.inviteId ? null : cur));
+        setPendingInvites((cur) => cur.filter((x) => x.inviteId !== data.inviteId && x.id !== data.toUserId));
         if (data.accepted && data.roomId) {
           const me = apiClient.getCurrentUser()?._id;
           const iInvited = Boolean(me && data.fromUserId === me);
@@ -3735,12 +3743,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* ======================================================== */}
       {/* LEVEL OBJECTIVE BRIEF                                    */}
       {/* ======================================================== */}
-      {showLobby && (gameState === 'playing' || gameState === 'paused') && (
+      {showLobby && !showAuthModal && (gameState === 'playing' || gameState === 'paused') && (
         <WaitingRoom
           engine={engine}
           title={currentHowTo.title}
           goal={currentHowTo.goal}
           steps={currentHowTo.steps}
+          invited={pendingInvites}
+          onInvite={handleInviteToPlay}
+          onLogin={() => setShowAuthModal(true)}
           onStart={() => setShowLobby(false)}
           onExit={() => {
             setShowLobby(false);

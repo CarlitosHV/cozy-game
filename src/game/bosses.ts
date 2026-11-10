@@ -20,7 +20,7 @@ import type { AimTarget, CombatSystem, CompanionAction, HitKind } from './combat
 import type { CompanionStyle } from './character';
 import type { BossSetup } from './bossArena';
 import type { ItemType, ToolResult } from './items';
-import { burstEffect, makeTelegraph, puffEffect, speechBubble, Telegraph } from './combatFx';
+import { burstEffect, makeTelegraph, puffEffect, Telegraph } from './combatFx';
 import { apiClient } from '../services/apiClient';
 import {
   BirdModel,
@@ -3435,10 +3435,6 @@ interface SkinCopy {
   tag: THREE.Sprite;
 }
 
-/** What a copy says when it finds you, to sound like your friend (or, alone, like you) */
-const COPY_HELLO = ['¿Ya encontraste la daga? Yo busqué por allá', 'Por fin te encuentro… vamos juntos', 'Esos cuartos ya los revisé, no hay nada', '¿Escuchaste eso? Mejor no te separes de mí', 'Creo que vi el brillo morado por aquí'];
-const COPY_HELLO_YOU = ['Yo también busco la daga…', 'Shh… sígueme, sé dónde está', '¿Tú también eres yo?'];
-
 /** El Nahual: what several copies become when they fuse (tall, pale, long arms) */
 interface Nahual {
   m: NahualModel;
@@ -4928,7 +4924,7 @@ class SkinwalkerBoss extends BossController {
         this.aiLive = performance.now();
         for (const o of res.copies ?? []) {
           const c = this.copies.find((q) => q.id === o.id && q.phase === 'copy' && q.mode === 'engaged');
-          if (c) this.applyOrder(c, o.act, o.say);
+          if (c) this.applyOrder(c, o.act);
         }
       })
       .catch((err: { status?: number }) => {
@@ -4942,10 +4938,10 @@ class SkinwalkerBoss extends BossController {
   }
 
   /** The AI director's order for one copy. */
-  private applyOrder(c: SkinCopy, act: CopyAct, say?: string) {
+  private applyOrder(c: SkinCopy, act: CopyAct) {
+    // (the copies never talk: they only act)
     if (act === 'gather') {
       // It leaves you "to look for the others"… to fuse with them
-      if (say) this.copySays(c, say);
       if (this.gatherAt) c.mode = 'gather';
       else {
         const others = this.copies.filter((q) => q !== c && q.phase === 'copy' && q.mode === 'roam');
@@ -4957,7 +4953,6 @@ class SkinwalkerBoss extends BossController {
     if (act === 'lure') c.order.spot = this.pickSpot(1, 3, true);
     if (act === 'hide') c.order.spot = this.pickSpot(3, 6, false);
     if (act === 'whisper') soundManager.playWhisper(Math.max(0.25, 1 - c.pos.distanceTo(this.c.playerPos) / 25));
-    if (say) this.copySays(c, say);
   }
 
   /** A room some rooms away from you (dead ends first, to trap you there). */
@@ -4974,16 +4969,6 @@ class SkinwalkerBoss extends BossController {
     }
     if (!spots.length) return null;
     return spots[Math.floor(Math.random() * spots.length)].clone().setY(this.s.floorY);
-  }
-
-  /** The copy talks with your friend's voice: a bubble over its head, and the line on screen. */
-  private copySays(c: SkinCopy, text: string) {
-    this.dropBubble(c);
-    c.bubble = speechBubble(text);
-    c.bubble.position.y = 2.0;
-    c.m.group.add(c.bubble);
-    c.bubbleT = 4.5;
-    if (c.pos.distanceTo(this.c.playerPos) < 26) this.c.say(`${c.name === 'ti' ? '¿Tú?' : c.name}: "${text}"`, 'skin-cs-' + c.id, 2);
   }
 
   private dropBubble(c: SkinCopy) {
@@ -5028,8 +5013,6 @@ class SkinwalkerBoss extends BossController {
           c.tailT = 0;
           c.lostT = 0;
           c.searchT = 0;
-          const lines = c.name === 'ti' ? COPY_HELLO_YOU : COPY_HELLO;
-          if (!c.bubble && Math.random() < 0.75) this.copySays(c, lines[Math.floor(Math.random() * lines.length)]);
         } else this.roamCopy(c, dt, time);
       } else if (c.phase === 'copy') {
         // Walks to you calmly, like your friend would… and then tags along a couple of steps

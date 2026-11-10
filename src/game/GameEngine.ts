@@ -504,7 +504,8 @@ export class GameEngine {
       tool: (type: ItemType) => {
         if (this.combat) return this.combat.tool(type);
         const r = this.world.hazards?.useItem?.(type) ?? 'none';
-        if (r !== 'none') return r;
+        // (in the Backrooms the bat, the slingshot and the light orbs work: they say why if not)
+        if (r !== 'none' || (this.world.hazards?.useItem && (type === 'bate' || type === 'resortera' || type === 'luz'))) return r;
         this.itemSystem.notify(`${ITEM_INFO[type].name}: sirve en las luchas contra jefes`);
         return 'none';
       },
@@ -1149,6 +1150,16 @@ export class GameEngine {
       if (hit) safe = Math.min(safe, hit.distance - 0.4);
     }
     cam.copy(pivot).addScaledVector(dir, Math.max(0.3, safe));
+    // A wall right behind you (a corner, your back to the wall): instead of sliding into your head
+    // (all you saw was the inside of the cap), the camera rises over you and looks down
+    if (safe < 1.6) {
+      this.camRay.set(pivot, new THREE.Vector3(0, 1, 0));
+      this.camRay.far = 4;
+      const roof = this.camRay.intersectObjects(colliders, false)[0];
+      const room = roof ? roof.distance - 0.45 : 4;
+      const lift = Math.max(0, Math.min(room, (1.6 - Math.max(0, safe)) * 1.3 + 0.35));
+      cam.y += lift;
+    }
     // Still too close to a wall or the ceiling (e.g. sliding along a wall)? Push it away a little
     const MARGIN = 0.38;
     const horiz = new THREE.Vector3(dir.x, 0, dir.z).normalize();
@@ -1158,6 +1169,21 @@ export class GameEngine {
       this.camRay.far = MARGIN;
       const hit = this.camRay.intersectObjects(colliders, false)[0];
       if (hit) cam.addScaledVector(d, -(MARGIN - hit.distance));
+    }
+    // No room at all (low ceiling and walls all around): hide your character while the camera is
+    // that close, so it never shows the inside of the head
+    this.hidePlayerForCamera(!this.isSpectating && cam.distanceTo(pivot) < 0.8);
+  }
+
+  private camHidPlayer = false;
+  private hidePlayerForCamera(hide: boolean) {
+    const g = this.physics.playerModel.group;
+    if (hide && !this.camHidPlayer) {
+      g.visible = false;
+      this.camHidPlayer = true;
+    } else if (!hide && this.camHidPlayer) {
+      g.visible = true;
+      this.camHidPlayer = false;
     }
   }
 
@@ -1615,7 +1641,7 @@ export class GameEngine {
     if (this.gameState !== 'playing') return;
     const slot = this.itemSystem.slotOf('bate');
     if (slot === -1) {
-      this.itemSystem.notify(this.combat ? 'No tienes bate: búscalo en la arena' : 'El bate sirve en las luchas contra jefes');
+      this.itemSystem.notify(this.combat || this.world.hazards ? 'No tienes bate: búscalo en el nivel' : 'El bate sirve en las luchas contra jefes');
       return;
     }
     this.itemSystem.use(slot, this.itemCtx);
@@ -2787,6 +2813,7 @@ export class GameEngine {
     if (this.world.hazards && this.gameState === 'playing') {
       this.world.hazards.update(dt, time, {
         position: this.physics.position,
+        yaw: this.physics.playerModel.group.rotation.y,
         camera: this.camera,
         lure: this.companionPowers.lureTarget,
         spectating: this.isSpectating,
@@ -2969,9 +2996,12 @@ export class GameEngine {
 
     // Closed rooms (the Backrooms): keep the camera on this side of walls and ceilings
     if (this.world.cameraColliders?.length) this.keepCameraInside(followPos);
+    else this.hidePlayerForCamera(false);
 
     this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(this.targetLookAt);
+    // (squeezed right onto the point it looks at: look ahead instead of spinning around)
+    if (this.camera.position.distanceTo(this.targetLookAt) < 0.5) this.camera.lookAt(this.targetLookAt.x + Math.sin(this.cameraYaw) * 2, this.targetLookAt.y - 0.3, this.targetLookAt.z + Math.cos(this.cameraYaw) * 2);
+    else this.camera.lookAt(this.targetLookAt);
 
     // Fade out foliage or trees that block the camera view of the player
     this.updateTreeOcclusion(dt);

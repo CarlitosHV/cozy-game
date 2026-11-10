@@ -99,6 +99,8 @@ export interface LevelHazardContext {
   shift?: (offset: THREE.Vector3) => void;
   /** Quetsy (the feathered serpent) is guarding you: monsters that come close are scared off */
   guarding?: boolean;
+  /** Where the player faces (radians, like the model's rotation.y) */
+  yaw?: number;
 }
 
 /** Extra HUD info of a level with its own rules (the Backrooms: hearts, the key, the levers) */

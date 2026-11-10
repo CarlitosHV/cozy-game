@@ -28,6 +28,7 @@ import type { ItemSpot, ItemType, ToolResult } from './items';
 import type { BossSetup } from './bossArena';
 import type { VictoryPortalModel } from './models';
 import { BOSS_INFO } from './progress';
+import { makeBat, makeStone } from './toolModels';
 
 function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -626,6 +627,8 @@ function bfs(m: Maze, a: [number, number], b: [number, number]): { next: [number
 
 type MonsterKind = 'maniqui' | 'gateador' | 'sonrisa' | 'arana';
 const NAMES: Record<MonsterKind, string> = { maniqui: 'el Maniquí', gateador: 'el Gateador', sonrisa: 'una Sonrisa', arana: 'la Araña' };
+/** "al Maniquí", "a la Araña", "a una Sonrisa" */
+const toWhom = (k: MonsterKind) => NAMES[k].replace(/^el /, 'al ').replace(/^la /, 'a la ').replace(/^una /, 'a una ');
 
 interface Monster {
   kind: MonsterKind;
@@ -816,7 +819,140 @@ class BackroomsHazards implements LevelHazards {
   private keyHeld = false;
 
   /** The light orb is a light grenade here: it blinds every monster around you for a few seconds. */
+  // ---- Bat and slingshot: they don't kill the monsters, but they stun them for a moment ----
+  private bat: THREE.Group | null = null;
+  private batT = -1;
+  private batCd = 0;
+  private hasBat = false;
+  private yaw = 0;
+  private stones: { mesh: THREE.Mesh; pos: THREE.Vector3; target: Monster; life: number }[] = [];
+
+  /** A monster you could hit right now (not hidden, not a sleeping spider) */
+  private hittable(m: Monster) {
+    if (m.kind === 'arana') return m.active && (m.ceil ?? 0) < 0.5;
+    if (m.kind === 'sonrisa') return m.fade > 0.3;
+    return true;
+  }
+
+  /** It reels back, stunned (the maze ones just freeze: pushing them could put them in a wall). */
+  private stun(m: Monster, seconds: number, from: THREE.Vector3, push: number) {
+    m.stunT = Math.max(m.stunT, seconds);
+    if (m.kind === 'sonrisa' || m.kind === 'arana') {
+      const d = new THREE.Vector3(m.pos.x - from.x, 0, m.pos.z - from.z);
+      if (d.lengthSq() > 1e-4) {
+        d.normalize();
+        if (m.kind === 'arana') m.pos.z += Math.sign(d.z || -1) * push;
+        else m.pos.addScaledVector(d, push);
+      }
+    }
+    soundManager.playBoneCrack(0.6);
+    if (m.kind === 'arana') soundManager.playGlitch(1);
+  }
+
+  private swingBat(): ToolResult {
+    if (this.batCd > 0) return 'none';
+    this.batCd = 0.45;
+    this.batT = 0;
+    soundManager.playWindGust();
+    const P = this.lastP;
+    const fx = Math.sin(this.yaw);
+    const fz = Math.cos(this.yaw);
+    let best: Monster | null = null;
+    let bestD = 2.9;
+    for (const m of this.monsters) {
+      if (!this.hittable(m)) continue;
+      const dx = m.pos.x - P.x;
+      const dz = m.pos.z - P.z;
+      const d = Math.hypot(dx, dz);
+      // in reach, and roughly in front (or right on top of you)
+      if (d > bestD || Math.abs(m.pos.y - P.y) > 2.6 || (d > 1 && (dx * fx + dz * fz) / d < 0.1)) continue;
+      bestD = d;
+      best = m;
+    }
+    if (!best) return 'used';
+    this.stun(best, best.kind === 'arana' ? 1.6 : 3, P, best.kind === 'arana' ? 4 : 2.5);
+    this.notify?.(`¡Pum! Aturdiste ${toWhom(best.kind)} un momento: ¡aléjate!`);
+    return 'wear';
+  }
+
+  private shootStone(): ToolResult {
+    const P = this.lastP;
+    const here = cellOf(P);
+    let best: Monster | null = null;
+    let bestD = 22;
+    for (const m of this.monsters) {
+      if (!this.hittable(m)) continue;
+      const d = m.pos.distanceTo(P);
+      if (d > bestD) continue;
+      // in the maze, only what's in your room or the next one (the walls stop the stone)
+      if (here && this.inMaze(m.pos)) {
+        const there = cellOf(m.pos);
+        if (!there || bfs(this.maze, here, there).dist > 1) continue;
+      }
+      bestD = d;
+      best = m;
+    }
+    if (!best) {
+      this.notify?.('No hay ningún monstruo a tiro');
+      return 'none';
+    }
+    const mesh = makeStone(0.13);
+    mesh.position.set(P.x, P.y + 1.2, P.z);
+    this.root.add(mesh);
+    this.stones.push({ mesh, pos: mesh.position, target: best, life: 1.6 });
+    soundManager.playWoodRattle();
+    return 'wear';
+  }
+
+  /** The bat in your hand (and its swing), and the stones in the air. */
+  private updateWeapons(dt: number, P: THREE.Vector3) {
+    this.batCd = Math.max(0, this.batCd - dt);
+    if (this.hasBat || this.batT >= 0) {
+      if (!this.bat) {
+        this.bat = makeBat();
+        this.root.add(this.bat);
+      }
+      const bat = this.bat;
+      bat.visible = true;
+      const side = new THREE.Vector3(-Math.cos(this.yaw), 0, Math.sin(this.yaw));
+      const fwd = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+      if (this.batT >= 0) {
+        this.batT += dt / 0.28;
+        const k = Math.min(1, this.batT);
+        const a = -1.2 + k * 2.6;
+        const dir = side.clone().multiplyScalar(Math.cos(a)).addScaledVector(fwd, Math.sin(a) + 0.4).normalize();
+        bat.position.set(P.x + dir.x * 0.4, P.y + 0.95, P.z + dir.z * 0.4);
+        bat.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().setY(0.15).normalize());
+        if (this.batT >= 1) this.batT = -1;
+      } else {
+        bat.position.set(P.x + side.x * 0.42 - fwd.x * 0.05, P.y + 0.55, P.z + side.z * 0.42 - fwd.z * 0.05);
+        bat.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(fwd.x * 0.3, 1, fwd.z * 0.3).normalize());
+      }
+    } else if (this.bat) this.bat.visible = false;
+    for (let i = this.stones.length - 1; i >= 0; i--) {
+      const s = this.stones[i];
+      s.life -= dt;
+      const to = new THREE.Vector3(s.target.pos.x, s.target.pos.y + 0.9, s.target.pos.z).sub(s.pos);
+      const d = to.length();
+      const step = 30 * dt;
+      if (d <= step + 0.3) {
+        if (this.hittable(s.target)) {
+          this.stun(s.target, s.target.kind === 'arana' ? 1.2 : 2.5, P, s.target.kind === 'arana' ? 2.5 : 1.5);
+          this.notify?.(`¡Le diste ${toWhom(s.target.kind)}! ${s.target.kind === 'arana' || s.target.kind === 'sonrisa' ? 'Quedó aturdida' : 'Quedó aturdido'} un momento`);
+        }
+        s.life = 0;
+      } else s.pos.addScaledVector(to, step / d);
+      if (s.life <= 0) {
+        this.root.remove(s.mesh);
+        s.mesh.geometry.dispose();
+        this.stones.splice(i, 1);
+      }
+    }
+  }
+
   useItem(type: ItemType): ToolResult {
+    if (type === 'bate') return this.swingBat();
+    if (type === 'resortera') return this.shootStone();
     if (type !== 'luz') return 'none';
     const P = this.lastP;
     const flash = new THREE.Mesh(
@@ -946,6 +1082,9 @@ class BackroomsHazards implements LevelHazards {
     this.lastP.copy(P);
     this.notify = ctx.notify;
     this.keyHeld = !!ctx.has?.('llave');
+    this.hasBat = !!ctx.has?.('bate') && !ctx.spectating;
+    if (ctx.yaw !== undefined) this.yaw = ctx.yaw;
+    this.updateWeapons(dt, P);
     this.grace = Math.max(0, this.grace - dt);
     this.warnCd = Math.max(0, this.warnCd - dt);
     this.loopMsgCd = Math.max(0, this.loopMsgCd - dt);
@@ -1971,6 +2110,14 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
     { type: 'luz', pos: new THREE.Vector3(doorX + 2.5, MEZ_Y + 0.95, WZ1 - 4) },
     { type: 'luz', pos: new THREE.Vector3(doorX, CY + 0.95, CZ0 + 4) },
     { type: 'luz', pos: new THREE.Vector3(doorX - 1, CY + 0.95, RZ0 + 6) },
+    // A bat and a slingshot (with stones): they don't kill the monsters, but they stun them
+    { type: 'bate', pos: new THREE.Vector3(3.5, 0.95, -3.5) },
+    { type: 'resortera', pos: new THREE.Vector3(-3.5, 0.95, -3.5) },
+    { type: 'piedra', pos: new THREE.Vector3(0, 0.95, -7.5) },
+    { type: 'piedra', pos: new THREE.Vector3(cellCenter(SI + 1, 2).x, 0.95, cellCenter(SI + 1, 2).z) },
+    { type: 'piedra', pos: new THREE.Vector3(exitX - 1.5, 0.95, WZ0 + 5.5) },
+    { type: 'bate', pos: new THREE.Vector3(doorX - 2.5, MEZ_Y + 0.95, WZ1 - 5) },
+    { type: 'piedra', pos: new THREE.Vector3(doorX + 1, CY + 0.95, CZ0 + 6.5) },
   ];
   const world = kit.finish(summit, enemies, items, new THREE.Vector3(doorX + 1.2, CY + 1.2, REND - 3));
   world.levelName = `Los Backrooms · Nivel ${level}`;
@@ -2460,6 +2607,14 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
   });
   const shuffledCells = setup.searchSpots!.slice().sort(() => rng() - 0.5);
   shuffledCells.slice(0, 4).forEach((c) => items.push({ type: 'craneo', pos: new THREE.Vector3(c.x, Y + 0.95, c.z) }));
+  // Bats and slingshots to beat the copies (and the Nahual): one bat at every start corner
+  corners.slice(0, 4).forEach(([i, j], k) => {
+    const c = gCenter(g, i, j);
+    items.push({ type: 'bate', pos: new THREE.Vector3(c.x - 1.2, Y + 0.95, c.z + 1.2) });
+    if (k % 2 === 0) items.push({ type: 'resortera', pos: new THREE.Vector3(c.x + 1.2, Y + 0.95, c.z + 1.2) });
+    items.push({ type: 'piedra', pos: new THREE.Vector3(c.x - 1.2, Y + 0.95, c.z - 1.2) });
+  });
+  shuffledCells.slice(10, 14).forEach((c) => items.push({ type: 'piedra', pos: new THREE.Vector3(c.x - 1, Y + 0.95, c.z - 1) }));
   shuffledCells.slice(4, 10).forEach((c, k) => setup.food.push({ pos: new THREE.Vector3(c.x + 1, Y + 1.0, c.z + 1), kind: k % 2 ? 'burger' : 'fries' }));
 
   // Relics in dead ends (or anywhere if there aren't enough)

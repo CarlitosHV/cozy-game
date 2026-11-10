@@ -56,7 +56,7 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
   resortera: {
     type: 'resortera',
     name: 'Resortera',
-    desc: 'Dispara una piedra al objetivo marcado (gira la cámara para elegirlo). Necesita piedras.',
+    desc: 'Dispara una piedra al objetivo marcado (gira la cámara para elegirlo). En los Backrooms aturde al monstruo más cercano. Necesita piedras.',
     color: '#b45309',
   },
   piedra: {
@@ -68,7 +68,7 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
   bate: {
     type: 'bate',
     name: 'Bate',
-    desc: 'Golpea lo que tengas enfrente (tecla V). Se rompe tras varios golpes.',
+    desc: 'Golpea lo que tengas enfrente (tecla V). En los Backrooms aturde a los monstruos un momento. Se rompe tras varios golpes.',
     color: '#d97706',
   },
   red: {
