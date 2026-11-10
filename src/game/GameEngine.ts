@@ -3007,7 +3007,7 @@ export class GameEngine {
     this.updateTreeOcclusion(dt);
     this.updatePlatformCulling();
 
-    this.ambience.update(dt, time, followPos);
+    this.ambience.update(dt, time, followPos, this.camera.position);
 
     // Follow light with player or spectated friend
     this.dirLight.position.set(followPos.x + 25, followPos.y + 45, followPos.z + 20);

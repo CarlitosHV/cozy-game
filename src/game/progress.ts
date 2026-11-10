@@ -188,6 +188,8 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
       'Con la daga en la mano, déjalo acercarse y úsala cuando lo tengas enfrente',
       'La daga se rompe al primer golpe: espántalo otra vez y busca otra',
       'Suelta copias de ti y de tus amigos: un golpe de bate las hace transformarse, y luego vacía su barra de vida a batazos',
+      'Si una copia se topa con la persona real que imita, huye a juntarse con otras… y se fusionan en un Nahual',
+      'Cuando lo espantas a veces abre un portal en la pared o el suelo, y sale junto a otro jugador',
       'Si escuchas que alguien te llama… no es tu amigo',
     ],
   },

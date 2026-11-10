@@ -3468,6 +3468,10 @@ interface SkinCopy {
    * your friend next to you (engaged), or walking to meet the other copies (gather)
    */
   mode: 'roam' | 'engaged' | 'gather';
+  /** Found out (the real player showed up): it runs to the others to become a Nahual */
+  panic: boolean;
+  /** (copies of you, alone) it already decided what to do when it first saw you */
+  realChecked: boolean;
   /** Where it's wandering to, and how long it stays there "searching" */
   roamTo: THREE.Vector3 | null;
   searchT: number;
@@ -3610,6 +3614,8 @@ class SkinwalkerBoss extends BossController {
   private portals: { g: THREE.Group; k: number; open: boolean; rings: THREE.Mesh[] }[] = [];
   private curPortal: { g: THREE.Group; k: number; open: boolean; rings: THREE.Mesh[] } | null = null;
   private escapeAway = 0;
+  /** Where whoever scared it off was (it comes back out next to somebody else) */
+  private escapeFrom = V();
   /** How far it has sunk into the floor (portal) */
   private sinkY = 0;
   // ---- Copies that fuse into the Nahual ----
@@ -3885,7 +3891,10 @@ class SkinwalkerBoss extends BossController {
     if (st === 'escape' || st === 'arrive') {
       this.portalAt = { pos: V(d[8], this.s.floorY, d[9]), normal: V(d[10], 0, d[11]) };
       this.openPortal(this.portalAt);
-      if (st === 'arrive') this.pos.copy(this.syncPos);
+      if (st === 'arrive') {
+        this.pos.copy(this.syncPos);
+        this.warnArrival(this.portalAt.pos);
+      }
     }
     if (prev === 'escape' && this.curPortal) this.curPortal.open = false;
     if (prev === 'arrive' && this.curPortal) this.curPortal.open = false;
@@ -4280,15 +4289,29 @@ class SkinwalkerBoss extends BossController {
         }
         case 'gone':
           if (this.t <= 0) {
-            // It climbs out of another portal, far from everybody
-            this.pos.copy(this.arrivalSpot());
-            this.portalAt = { pos: this.pos.clone(), normal: V(0, 0, 0) };
-            this.openPortal(this.portalAt);
+            // It climbs out of another portal (a wall or the floor) next to another player
+            this.portalAt = this.arrivalPortal();
+            const at = this.portalAt;
+            const wall = at.normal.lengthSq() > 0.01;
+            this.pos.set(at.pos.x - (wall ? at.normal.x * 1.1 : 0), this.s.floorY, at.pos.z - (wall ? at.normal.z * 1.1 : 0));
+            if (wall) this.yaw = Math.atan2(at.normal.x, at.normal.z);
+            this.openPortal(at);
             this.state = 'arrive';
             this.t = ARRIVE_T;
+            this.warnArrival(at.pos);
           }
           break;
-        case 'arrive':
+        case 'arrive': {
+          const at = this.portalAt;
+          if (at && at.normal.lengthSq() > 0.01) {
+            // Steps out of the wall
+            const k = ease(Math.min(1, 1 - this.t / ARRIVE_T));
+            this.pos.set(at.pos.x + at.normal.x * (-1.1 + 2.6 * k), this.s.floorY, at.pos.z + at.normal.z * (-1.1 + 2.6 * k));
+            if (k < 0.6) {
+              this.yaw = Math.atan2(at.normal.x, at.normal.z);
+              break;
+            }
+          }
           this.yaw = turnTo(this.yaw, Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z), 3, dt);
           if (this.t <= 0) {
             if (this.curPortal) this.curPortal.open = false;
@@ -4297,6 +4320,7 @@ class SkinwalkerBoss extends BossController {
             this.c.say(this.has('daga') ? 'Volvió por otro lado… tienes la daga: espera a que se acerque' : 'Volvió a salir de un portal… y aún no tienes la daga', 'skin-back', 2);
           }
           break;
+        }
         case 'hunt': {
           // It stopped playing… but if it can't reach you in a while, it goes back to stalking
           if (this.t <= 0 && dT > 6) {
@@ -4431,7 +4455,8 @@ class SkinwalkerBoss extends BossController {
       sink = -3.4;
       this.m.group.visible = false;
     } else if (this.state === 'arrive') {
-      sink = -3.4 * (1 - ease(Math.min(1, 1 - this.t / ARRIVE_T)));
+      const floor = !this.portalAt || this.portalAt.normal.lengthSq() < 0.01;
+      sink = floor ? -3.4 * (1 - ease(Math.min(1, 1 - this.t / ARRIVE_T))) : 0;
       this.m.group.visible = true;
     }
     this.sinkY = sink;
@@ -4715,13 +4740,17 @@ class SkinwalkerBoss extends BossController {
     this.scream(0.9);
     this.ensureDagger();
     // Sometimes it runs away… other times it opens a portal in a wall or the floor and escapes
-    if (Math.random() < 0.5) this.startEscape(this.t + 2);
+    if (Math.random() < 0.5) {
+      this.escapeFrom.copy(p);
+      this.startEscape(this.t + 2);
+    }
   }
 
   /** It tears a portal open (in the nearest wall, or under its feet) and goes through it. */
   private startEscape(away: number) {
     const w = this.s.wallNear?.(this.pos) ?? null;
-    const floor = !w || Math.random() < 0.5 || Math.hypot(w.pos.x - this.pos.x, w.pos.z - this.pos.z) > 4;
+    // Through a wall of the room it's in (most of the time), or straight down through the floor
+    const floor = !w || Math.hypot(w.pos.x - this.pos.x, w.pos.z - this.pos.z) > 4.6 || Math.random() < 0.4;
     this.portalAt = floor ? { pos: V(this.pos.x, this.s.floorY, this.pos.z), normal: V(0, 0, 0) } : { pos: w!.pos.clone(), normal: w!.normal.clone() };
     this.state = 'escape';
     this.t = ESCAPE_T;
@@ -4781,6 +4810,36 @@ class SkinwalkerBoss extends BossController {
         if (this.curPortal === pt) this.curPortal = null;
       }
     }
+  }
+
+  /**
+   * Where it climbs back out: in the room next to another player (not the one who scared it off)
+   * — alone, a couple of rooms from you — through one of that room's walls or its floor.
+   */
+  private arrivalPortal(): { pos: THREE.Vector3; normal: THREE.Vector3 } {
+    const players = [this.c.playerPos, ...this.c.deps.remotes().filter((r) => !r.down).map((r) => r.pos)];
+    const from = this.escapeFrom;
+    const far = (q: THREE.Vector3) => Math.hypot(q.x - from.x, q.z - from.z);
+    // The one furthest from where it got scared: somebody else, if there's anybody else
+    const target = players.slice().sort((a, b) => far(b) - far(a))[0];
+    const alone = players.length < 2 || far(target) < 8;
+    const cd = this.s.cellDist;
+    const want = alone ? 2 : 1;
+    const all = this.s.searchSpots ?? [];
+    const ok = (q: THREE.Vector3, r: number) => (cd ? cd(q, target) === r : Math.abs(Math.hypot(q.x - target.x, q.z - target.z) - r * 6.5) < 3) && players.every((pp) => (cd ? cd(q, pp) >= 1 : Math.hypot(q.x - pp.x, q.z - pp.z) > 5));
+    let spots = all.filter((q) => ok(q, want));
+    if (!spots.length) spots = all.filter((q) => ok(q, want + 1));
+    const pick = spots.length ? spots[Math.floor(Math.random() * spots.length)] : null;
+    const spot = pick ? V(pick.x, this.s.floorY, pick.z) : this.arrivalSpot();
+    const w = Math.random() < 0.6 ? (this.s.wallNear?.(spot) ?? null) : null;
+    return w ? { pos: w.pos.clone().setY(this.s.floorY), normal: w.normal.clone() } : { pos: spot, normal: V(0, 0, 0) };
+  }
+
+  /** A portal opened near you: you'd better know. */
+  private warnArrival(at: THREE.Vector3) {
+    const p = this.c.playerPos;
+    const d = Math.hypot(at.x - p.x, at.z - p.z);
+    if (d < 16) this.c.say('¡Se abrió un portal cerca de ti… algo está saliendo de ahí!', 'skin-arrive', 2);
   }
 
   /** Somewhere away from everybody, to climb out of a portal. */
@@ -4861,6 +4920,8 @@ class SkinwalkerBoss extends BossController {
       yaw: out ? Math.atan2(out.x, out.z) : Math.random() * Math.PI * 2,
       phase: out ? 'emerge' : 'copy',
       mode: 'roam',
+      panic: false,
+      realChecked: false,
       roamTo: null,
       searchT: 0,
       emerge: out ? { base: at.clone(), dir: out.clone(), k: 0, stall: 0, dustT: 0, rip: this.addRip({ pos: at.clone().addScaledVector(out, 0.12), normal: out.clone() }, 1.0, false) } : null,
@@ -5217,6 +5278,8 @@ class SkinwalkerBoss extends BossController {
       }
       if (c.bubble && (c.bubbleT -= dt) <= 0) this.dropBubble(c);
       const toYaw = Math.atan2(p.x - c.pos.x, p.z - c.pos.z);
+      // The real player it pretends to be showed up: it runs off to fuse with the others
+      if (c.phase === 'copy' && !c.panic && !this.c.isDown) this.checkReal(c);
       // How twisted it is: 0 = looks just like the player, 1 = a long crawling thing
       let k = 0;
       if (c.phase === 'copy' && c.mode !== 'engaged') {
@@ -5492,7 +5555,10 @@ class SkinwalkerBoss extends BossController {
    */
   private roamCopy(c: SkinCopy, dt: number, time: number) {
     const m = c.m;
-    if (c.mode === 'gather' && !this.gatherAt) c.mode = 'roam';
+    if (c.mode === 'gather' && !this.gatherAt) {
+      c.mode = 'roam';
+      c.panic = false;
+    }
     const gathering = c.mode === 'gather' && this.gatherAt;
     if (!gathering && c.searchT > 0) {
       c.searchT -= dt;
@@ -5523,7 +5589,8 @@ class SkinwalkerBoss extends BossController {
       } else c.searchT = 1.8 + Math.random() * 2.6;
       return;
     }
-    const speed = gathering ? 4.2 : 3.0;
+    // Found out, it doesn't pretend anymore: it runs
+    const speed = gathering ? (c.panic ? 6.6 : 4.2) : 3.0;
     const wp = this.s.navStep ? this.s.navStep(c.pos, goal) : goal;
     c.yaw = turnTo(c.yaw, Math.atan2(wp.x - c.pos.x, wp.z - c.pos.z), 6, dt);
     c.pos.x += Math.sin(c.yaw) * speed * dt;
@@ -5560,11 +5627,72 @@ class SkinwalkerBoss extends BossController {
       const at = this.gatherAt;
       const there = fakes.filter((c) => c.mode === 'gather' && Math.hypot(c.pos.x - at.x, c.pos.z - at.z) < 3);
       if (there.length >= 3) this.startMerge(there);
-      else if (this.gatherT > 40) {
+      else if (this.gatherT > (fakes.some((c) => c.panic) ? 70 : 40)) {
         this.gatherAt = null;
         this.gatherCd = 30;
       }
     }
+  }
+
+  /**
+   * Did the real one show up? In a party, a copy wearing a friend's face runs the moment that
+   * friend comes near it (two of the same person: one is fake). Alone, a copy of you decides when
+   * it first sees you: tag along like a friend… or run.
+   */
+  private checkReal(c: SkinCopy) {
+    const cd = this.s.cellDist;
+    const near = (q: THREE.Vector3, r: number) => Math.hypot(q.x - c.pos.x, q.z - c.pos.z) < r && (!cd || cd(q, c.pos) <= 1);
+    const p = this.c.playerPos;
+    if (c.name === 'ti') {
+      if (c.realChecked || !near(p, 9)) return;
+      c.realChecked = true;
+      if (Math.random() < 0.5) return;
+      this.panicCopy(c, '¡Te viste a ti mismo… y tu copia salió corriendo! Va a juntarse con las otras');
+      return;
+    }
+    const real = this.c.deps.remotes().find((r) => r.username === c.name && !r.down);
+    if (!real || !near(real.pos, 10)) return;
+    const seen = Math.hypot(p.x - c.pos.x, p.z - c.pos.z) < 22;
+    this.panicCopy(c, seen ? `¡Hay dos ${c.name}! El falso salió corriendo… va a juntarse con las otras copias` : null);
+  }
+
+  /** Found out: it runs to a room away from everybody, and calls the other copies there to fuse into a Nahual. */
+  private panicCopy(c: SkinCopy, msg: string | null) {
+    if (!this.gatherAt) {
+      const players = [this.c.playerPos, ...this.c.deps.remotes().map((r) => r.pos)];
+      const cd = this.s.cellDist;
+      const all = this.s.searchSpots ?? [];
+      let spots = all.filter((q) => players.every((pp) => (cd ? cd(q, pp) >= 3 : Math.hypot(q.x - pp.x, q.z - pp.z) > 18)) && (!cd || cd(q, c.pos) <= 7));
+      if (!spots.length) spots = all.filter((q) => players.every((pp) => (cd ? cd(q, pp) >= 2 : Math.hypot(q.x - pp.x, q.z - pp.z) > 12)));
+      if (!spots.length) return;
+      this.gatherAt = spots[Math.floor(Math.random() * spots.length)].clone().setY(this.s.floorY);
+      this.gatherT = 0;
+      this.gatherCd = THREE.MathUtils.lerp(70, 40, this.rage);
+    }
+    const at = this.gatherAt;
+    const run = (q: SkinCopy) => {
+      q.panic = true;
+      q.mode = 'gather';
+      q.order = null;
+      q.searchT = 0;
+      q.roamTo = null;
+      this.dropBubble(q);
+    };
+    run(c);
+    // The others drop what they're doing and go too (the closest ones first)… and if there
+    // aren't enough of them, more come out of the maze
+    let going = this.copies.filter((q) => q.phase === 'copy' && q.mode === 'gather').length;
+    const dist = (q: SkinCopy) => Math.hypot(q.pos.x - at.x, q.pos.z - at.z);
+    for (const q of this.copies.filter((o) => o.phase === 'copy' && o.mode !== 'gather').sort((a, b) => dist(a) - dist(b))) {
+      if (going >= 3) break;
+      run(q);
+      going++;
+    }
+    for (; going < 3; going++) run(this.spawnCopy());
+    const d = Math.hypot(c.pos.x - this.c.playerPos.x, c.pos.z - this.c.playerPos.z);
+    soundManager.playWhisper(Math.max(0.2, 1 - d / 25));
+    if (msg) this.c.say(msg, 'skin-real', 3);
+    this.note('una copia se topó con el jugador real y huyó a fusionarse');
   }
 
   /** The wandering copies agree to meet in a room a couple of rooms from you. */
