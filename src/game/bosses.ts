@@ -3566,6 +3566,8 @@ class SkinwalkerBoss extends BossController {
   private shiftCd = 30;
   /** Blackouts when it has little life left */
   private lightT = 10;
+  /** It already got to half its life (the blackouts got worse) */
+  private halfDark = false;
   private lightsOff = false;
   // ---- Party: the host runs the Skinwalker and streams it, so everybody sees the same one ----
   /** When the last snapshot from the host arrived (performance.now) */
@@ -4708,8 +4710,16 @@ class SkinwalkerBoss extends BossController {
         this.note('las paredes del laberinto se movieron');
       }
     }
-    // Blackouts below 40 % life
-    if (rage >= 0.6 && this.s.setLights) {
+    // Blackouts: now and then from 75 % life… and from half its life on, much more often and
+    // much longer (the more hurt, the worse)
+    if (rage >= 0.25 && this.s.setLights) {
+      const half = rage >= 0.5;
+      if (half && !this.halfDark) {
+        this.halfDark = true;
+        this.c.say('¡Está herido y furioso! Las luces van a fallar cada vez más', 'skin-half', 2);
+        this.note('el Skinwalker está a media vida: los apagones empeoran');
+        if (!this.lightsOff) this.lightT = Math.min(this.lightT, 2.5);
+      }
       this.lightT -= dt;
       if (!this.lightsOff && this.lightT <= 1 && this.lightT > 0) {
         // flicker before it goes out
@@ -4717,7 +4727,14 @@ class SkinwalkerBoss extends BossController {
       }
       if (this.lightT <= 0) {
         this.setBlackout(!this.lightsOff);
-        this.lightT = this.lightsOff ? 3.5 + Math.random() * 2 : THREE.MathUtils.lerp(14, 7, rage) + Math.random() * 3;
+        const k = half ? (rage - 0.5) / 0.5 : 0;
+        this.lightT = this.lightsOff
+          ? half
+            ? THREE.MathUtils.lerp(7, 11, k) + Math.random() * 3 // long blackouts
+            : 3 + Math.random() * 1.5
+          : half
+            ? THREE.MathUtils.lerp(11, 6, k) + Math.random() * 3 // light comes back only for a while
+            : 24 + Math.random() * 10;
       }
     }
   }
