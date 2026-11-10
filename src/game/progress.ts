@@ -187,7 +187,7 @@ export const BOSS_INFO: Record<BossKind, { name: string; short: string; desc: st
       'Mientras huye, busca la daga de obsidiana (un brillo morado en algún cuarto)',
       'Con la daga en la mano, déjalo acercarse y úsala cuando lo tengas enfrente',
       'La daga se rompe al primer golpe: espántalo otra vez y busca otra',
-      'Suelta copias de ti y de tus amigos que se estiran como animales: rómpelas con el bate o piedras',
+      'Suelta copias de ti y de tus amigos: un golpe de bate las hace transformarse, y luego vacía su barra de vida a batazos',
       'Si escuchas que alguien te llama… no es tu amigo',
     ],
   },

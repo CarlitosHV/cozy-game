@@ -68,7 +68,7 @@ export const ITEM_INFO: Record<ItemType, ItemInfo> = {
   bate: {
     type: 'bate',
     name: 'Bate',
-    desc: 'Golpea lo que tengas enfrente (tecla V). En los Backrooms aturde a los monstruos un momento. Se rompe tras varios golpes.',
+    desc: 'Golpea lo que tengas enfrente (tecla V). En los Backrooms aturde a los monstruos un momento. Se rompe tras 5 golpes.',
     color: '#d97706',
   },
   red: {
@@ -120,7 +120,7 @@ export const ITEM_TYPES: ItemType[] = ['baya', 'nuez', 'llave', 'resortera', 'pi
 /** Items that pile up in one slot (max per slot) */
 export const STACK_MAX: Partial<Record<ItemType, number>> = { piedra: 12, bomba: 3, luz: 3 };
 /** Tools that break: uses when new */
-export const DURABILITY: Partial<Record<ItemType, number>> = { bate: 12, red: 4, antorcha: 2, craneo: 2, daga: 1 };
+export const DURABILITY: Partial<Record<ItemType, number>> = { bate: 5, red: 4, antorcha: 2, craneo: 2, daga: 1 };
 /** How many you get from one pickup */
 const PICKUP_AMOUNT: Partial<Record<ItemType, number>> = { piedra: 6, bomba: 2 };
 /** Only one of these is ever needed in the backpack */

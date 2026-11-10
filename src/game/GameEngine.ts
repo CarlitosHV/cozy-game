@@ -3044,7 +3044,6 @@ export class GameEngine {
 
   private lastCullCheck = 0;
   private _camFwd = new THREE.Vector3();
-  private _toPlatform = new THREE.Vector3();
 
   /**
    * Distance and frustum culling:
@@ -3080,10 +3079,20 @@ export class GameEngine {
         continue;
       }
 
+      // Big floors, walls and ceilings (the Backrooms) have their center far away: measure to the
+      // closest point of the box, not to its center, or the floor vanished in the middle of a jump
+      // (while you're in the air it's no longer "the platform you stand on")
+      const sz = p.size;
+      const rot = p.mesh.rotation.y;
+      const turned = Math.abs(Math.sin(rot * 2)) > 0.01;
+      const hx = sz ? (turned ? Math.hypot(sz.x, sz.z) / 2 : (Math.abs(Math.cos(rot)) > 0.5 ? sz.x : sz.z) / 2) : 0;
+      const hz = sz ? (turned ? hx : (Math.abs(Math.cos(rot)) > 0.5 ? sz.z : sz.x) / 2) : 0;
+      const hy = sz ? sz.y : 0;
+
       // 1. Distance check from player (squared distance for maximum performance)
-      const dx = p.position.x - playerPos.x;
-      const dy = (p.position.y - playerPos.y) * 0.7;
-      const dz = p.position.z - playerPos.z;
+      const dx = Math.max(0, Math.abs(p.position.x - playerPos.x) - hx);
+      const dy = Math.max(0, Math.abs(p.position.y - playerPos.y) - hy) * 0.7;
+      const dz = Math.max(0, Math.abs(p.position.z - playerPos.z) - hz);
       const distSq = dx * dx + dy * dy + dz * dz;
 
       if (distSq > maxDistSq) {
@@ -3092,11 +3101,18 @@ export class GameEngine {
       }
 
       // 2. Behind camera check ("ni hacia atrás")
-      // Only cull if outside the 8-meter safety circle around player/camera
-      this._toPlatform.set(p.position.x - camPos.x, p.position.y - camPos.y, p.position.z - camPos.z);
-      const camDist = this._toPlatform.length();
-      if (camDist > 8.0) {
-        const dot = (this._toPlatform.x * this._camFwd.x + this._toPlatform.y * this._camFwd.y + this._toPlatform.z * this._camFwd.z) / camDist;
+      // Only cull if outside the 8-meter safety circle around player/camera, and only if no part of
+      // the box is in front of the camera
+      const cx = Math.max(0, Math.abs(p.position.x - camPos.x) - hx);
+      const cy = Math.max(0, Math.abs(p.position.y - camPos.y) - hy);
+      const cz = Math.max(0, Math.abs(p.position.z - camPos.z) - hz);
+      if (cx * cx + cy * cy + cz * cz > 64) {
+        // The box's corner furthest along the view direction
+        const fx = p.position.x + Math.sign(this._camFwd.x) * hx - camPos.x;
+        const fy = p.position.y + Math.sign(this._camFwd.y) * hy - camPos.y;
+        const fz = p.position.z + Math.sign(this._camFwd.z) * hz - camPos.z;
+        const fl = Math.hypot(fx, fy, fz) || 1;
+        const dot = (fx * this._camFwd.x + fy * this._camFwd.y + fz * this._camFwd.z) / fl;
         if (dot < -0.15) {
           if (p.mesh.visible) p.mesh.visible = false;
           continue;

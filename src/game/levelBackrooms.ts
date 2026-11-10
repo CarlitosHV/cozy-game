@@ -2110,14 +2110,10 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
     { type: 'luz', pos: new THREE.Vector3(doorX + 2.5, MEZ_Y + 0.95, WZ1 - 4) },
     { type: 'luz', pos: new THREE.Vector3(doorX, CY + 0.95, CZ0 + 4) },
     { type: 'luz', pos: new THREE.Vector3(doorX - 1, CY + 0.95, RZ0 + 6) },
-    // A bat and a slingshot (with stones): they don't kill the monsters, but they stun them
+    // Bats: they don't kill the monsters, but they stun them (and break after a few hits)
     { type: 'bate', pos: new THREE.Vector3(3.5, 0.95, -3.5) },
-    { type: 'resortera', pos: new THREE.Vector3(-3.5, 0.95, -3.5) },
-    { type: 'piedra', pos: new THREE.Vector3(0, 0.95, -7.5) },
-    { type: 'piedra', pos: new THREE.Vector3(cellCenter(SI + 1, 2).x, 0.95, cellCenter(SI + 1, 2).z) },
-    { type: 'piedra', pos: new THREE.Vector3(exitX - 1.5, 0.95, WZ0 + 5.5) },
+    { type: 'bate', pos: new THREE.Vector3(cellCenter(SI + 1, 2).x, 0.95, cellCenter(SI + 1, 2).z) },
     { type: 'bate', pos: new THREE.Vector3(doorX - 2.5, MEZ_Y + 0.95, WZ1 - 5) },
-    { type: 'piedra', pos: new THREE.Vector3(doorX + 1, CY + 0.95, CZ0 + 6.5) },
   ];
   const world = kit.finish(summit, enemies, items, new THREE.Vector3(doorX + 1.2, CY + 1.2, REND - 3));
   world.levelName = `Los Backrooms · Nivel ${level}`;
@@ -2607,14 +2603,12 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
   });
   const shuffledCells = setup.searchSpots!.slice().sort(() => rng() - 0.5);
   shuffledCells.slice(0, 4).forEach((c) => items.push({ type: 'craneo', pos: new THREE.Vector3(c.x, Y + 0.95, c.z) }));
-  // Bats and slingshots to beat the copies (and the Nahual): one bat at every start corner
-  corners.slice(0, 4).forEach(([i, j], k) => {
+  // Bats to beat the copies (and the Nahual): one at every start corner and a few more around the maze
+  corners.slice(0, 4).forEach(([i, j]) => {
     const c = gCenter(g, i, j);
     items.push({ type: 'bate', pos: new THREE.Vector3(c.x - 1.2, Y + 0.95, c.z + 1.2) });
-    if (k % 2 === 0) items.push({ type: 'resortera', pos: new THREE.Vector3(c.x + 1.2, Y + 0.95, c.z + 1.2) });
-    items.push({ type: 'piedra', pos: new THREE.Vector3(c.x - 1.2, Y + 0.95, c.z - 1.2) });
   });
-  shuffledCells.slice(10, 14).forEach((c) => items.push({ type: 'piedra', pos: new THREE.Vector3(c.x - 1, Y + 0.95, c.z - 1) }));
+  shuffledCells.slice(10, 13).forEach((c) => items.push({ type: 'bate', pos: new THREE.Vector3(c.x - 1, Y + 0.95, c.z - 1) }));
   shuffledCells.slice(4, 10).forEach((c, k) => setup.food.push({ pos: new THREE.Vector3(c.x + 1, Y + 1.0, c.z + 1), kind: k % 2 ? 'burger' : 'fries' }));
 
   // Relics in dead ends (or anywhere if there aren't enough)

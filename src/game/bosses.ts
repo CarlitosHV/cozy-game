@@ -94,6 +94,53 @@ function skullGlowTex(): THREE.CanvasTexture {
   return _skullGlow;
 }
 
+/** A small life bar floating over a creature: a canvas sprite, redrawn only when its life changes. */
+interface LifeBar {
+  sprite: THREE.Sprite;
+  g: CanvasRenderingContext2D;
+  tex: THREE.CanvasTexture;
+  shown: number;
+}
+
+function makeLifeBar(root: THREE.Object3D, width: number): LifeBar {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 16;
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sprite.scale.set(width, width / 8, 1);
+  sprite.renderOrder = 30;
+  sprite.visible = false;
+  root.add(sprite);
+  return { sprite, g: cv.getContext('2d')!, tex, shown: -1 };
+}
+
+/** Shows the bar at `at` filled to `frac` (green → yellow → red as it runs out). */
+function setLifeBar(b: LifeBar, at: THREE.Vector3, frac: number) {
+  b.sprite.visible = true;
+  b.sprite.position.copy(at);
+  frac = THREE.MathUtils.clamp(frac, 0, 1);
+  if (Math.abs(frac - b.shown) < 0.001) return;
+  b.shown = frac;
+  const g = b.g;
+  g.clearRect(0, 0, 128, 16);
+  g.fillStyle = 'rgba(12,10,8,0.85)';
+  g.fillRect(0, 0, 128, 16);
+  g.fillStyle = 'rgba(255,255,255,0.12)';
+  g.fillRect(3, 3, 122, 10);
+  g.fillStyle = frac > 0.6 ? '#22c55e' : frac > 0.34 ? '#facc15' : '#ef4444';
+  g.fillRect(3, 3, 122 * frac, 10);
+  b.tex.needsUpdate = true;
+}
+
+function disposeLifeBar(root: THREE.Object3D, b: LifeBar | null) {
+  if (!b) return;
+  root.remove(b.sprite);
+  b.tex.dispose();
+  b.sprite.material.dispose();
+}
+
 export abstract class BossController {
   public hp: number;
   public maxHp: number;
@@ -3429,7 +3476,11 @@ interface SkinCopy {
   /** Fusing: where they all meet */
   mergeAt: THREE.Vector3 | null;
   t: number;
+  /** Life once it shows what it is (the first hit only makes it transform) */
   hp: number;
+  maxHp: number;
+  /** Its life bar (only while it's a monster) */
+  bar: LifeBar | null;
   mats: { mat: THREE.MeshStandardMaterial; base: THREE.Color }[];
   eyes: THREE.Mesh[];
   hitCd: number;
@@ -3437,6 +3488,10 @@ interface SkinCopy {
   name: string;
   tag: THREE.Sprite;
 }
+
+/** A copy's life after it transforms (the bat takes 1 per hit, a bomb 3) */
+const COPY_HP = 3;
+const NAHUAL_HP = 6;
 
 /** El Nahual: what several copies become when they fuse (tall, pale, long arms) */
 interface Nahual {
@@ -3447,6 +3502,8 @@ interface Nahual {
   state: 'rise' | 'stalk' | 'charge' | 'swipe' | 'recover' | 'die';
   t: number;
   hp: number;
+  maxHp: number;
+  bar: LifeBar | null;
   /** It doesn't last: after a while it falls apart */
   life: number;
   hitCd: number;
@@ -4809,7 +4866,9 @@ class SkinwalkerBoss extends BossController {
       emerge: out ? { base: at.clone(), dir: out.clone(), k: 0, stall: 0, dustT: 0, rip: this.addRip({ pos: at.clone().addScaledVector(out, 0.12), normal: out.clone() }, 1.0, false) } : null,
       mergeAt: null,
       t: 0,
-      hp: 2,
+      hp: COPY_HP,
+      maxHp: COPY_HP,
+      bar: null,
       mats,
       eyes,
       hitCd: 0,
@@ -5147,7 +5206,10 @@ class SkinwalkerBoss extends BossController {
       const m = c.m;
       if (c.phase === 'die') {
         c.holder.scale.multiplyScalar(Math.max(0, 1 - dt * 5));
+        if (c.bar) c.bar.sprite.visible = false;
         if (c.t > 0.5) {
+          disposeLifeBar(this.root, c.bar);
+          c.bar = null;
           disposeGroup(this.root, c.holder);
           this.copies.splice(i, 1);
         }
@@ -5382,6 +5444,13 @@ class SkinwalkerBoss extends BossController {
         mat.emissive.setHex(0x000000);
       }
       c.center.set(c.pos.x, c.pos.y + (0.75 + lift + HIP * k) * S, c.pos.z);
+      // Life bar over its head, only while it shows what it is
+      if (c.phase === 'copy' || c.phase === 'merge') {
+        if (c.bar) c.bar.sprite.visible = false;
+      } else {
+        c.bar ??= makeLifeBar(this.root, 1.1);
+        setLifeBar(c.bar, V(c.pos.x, c.pos.y + (2.1 + 0.9 * k) * S, c.pos.z), c.hp / c.maxHp);
+      }
 
       if (c.phase === 'copy' && c.mode === 'roam' && c.searchT > 0) {
         // "Searching": crouching to look at the floor, a hand along the wall
@@ -5567,7 +5636,7 @@ class SkinwalkerBoss extends BossController {
     const m = createNahual(scraps);
     this.root.add(m.group);
     m.group.position.copy(at);
-    const n: Nahual = { m, pos: at.clone(), center: at.clone().add(V(0, 2.4, 0)), yaw: Math.atan2(this.c.playerPos.x - at.x, this.c.playerPos.z - at.z), state: 'rise', t: 0, hp: 6, life: 45, hitCd: 0, swiped: false, stride: 0 };
+    const n: Nahual = { m, pos: at.clone(), center: at.clone().add(V(0, 2.4, 0)), yaw: Math.atan2(this.c.playerPos.x - at.x, this.c.playerPos.z - at.z), state: 'rise', t: 0, hp: NAHUAL_HP, maxHp: NAHUAL_HP, bar: null, life: 45, hitCd: 0, swiped: false, stride: 0 };
     this.nahuales.push(n);
     const d = Math.hypot(at.x - this.c.playerPos.x, at.z - this.c.playerPos.z);
     soundManager.playScream(Math.max(0.3, 1 - d / 40));
@@ -5586,10 +5655,12 @@ class SkinwalkerBoss extends BossController {
       n.hitCd = Math.max(0, n.hitCd - dt);
       if (n.state === 'die') {
         // It falls apart: shrinks and sinks, leaving dust
+        if (n.bar) n.bar.sprite.visible = false;
         M.group.scale.y = Math.max(0.01, M.group.scale.y - dt * 0.9);
         M.torso.rotation.x += dt * 0.8;
         if (n.t > 1.2) {
           this.c.addEffect(puffEffect(this.root, n.pos.clone().add(V(0, 0.6, 0)), 'rgba(220,214,200,0.85)', 3, 0.6));
+          disposeLifeBar(this.root, n.bar);
           disposeGroup(this.root, M.group);
           this.nahuales.splice(i, 1);
         }
@@ -5693,6 +5764,10 @@ class SkinwalkerBoss extends BossController {
       M.group.position.set(n.pos.x, this.s.floorY + (speed > 0 ? Math.abs(Math.sin(st)) * 0.08 : 0), n.pos.z);
       M.group.rotation.y = n.yaw;
       n.center.set(n.pos.x, this.s.floorY + 2.4, n.pos.z);
+      if (n.state !== 'rise') {
+        n.bar ??= makeLifeBar(this.root, 1.6);
+        setLifeBar(n.bar, V(n.pos.x, this.s.floorY + 4.2, n.pos.z), n.hp / n.maxHp);
+      }
     }
   }
 
@@ -5797,10 +5872,14 @@ class SkinwalkerBoss extends BossController {
         hit: (kind) => {
           if (c.hitCd > 0) return;
           c.hitCd = 0.3;
-          this.reveal(c);
-          c.hp -= kind === 'piedra' ? 1 : 2;
+          this.c.addEffect(puffEffect(this.root, c.center.clone(), 'rgba(255,255,255,0.8)', 1.2, 0.3));
+          // The first hit doesn't hurt it: it only drops the disguise and shows what it really is
+          if (c.phase === 'copy') {
+            this.reveal(c);
+            return;
+          }
+          c.hp -= kind === 'bomba' ? 3 : 1;
           if (c.hp <= 0) this.killCopy(c);
-          else this.c.addEffect(puffEffect(this.root, c.center.clone(), 'rgba(255,255,255,0.8)', 1.2, 0.3));
         },
       });
     }
@@ -5920,12 +5999,12 @@ class SkinwalkerBoss extends BossController {
     if (this.state === 'scared') return this.has('daga') ? 'Tienes la daga: espera a que vuelva' : 'Huyó: busca la daga de obsidiana (brillo morado)';
     if (this.state === 'hurt') return '¡Le diste! Ahora huirá un momento';
     if (this.state === 'gone' || this.state === 'escape') return 'Se fue por un portal… volverá por otro lado. Aprovecha para buscar la daga (brillo morado)';
-    if (this.nahuales.some((n) => n.state !== 'die')) return '¡Un Nahual! Pégale con el bate o piedras, usa el cráneo… o huye: no dura mucho';
+    if (this.nahuales.some((n) => n.state !== 'die')) return '¡Un Nahual! Pégale con el bate (mira su barra de vida), usa el cráneo… o huye: no dura mucho';
     if (this.state === 'peek') return 'Te mira desde el fondo del pasillo… si vas hacia él, huye';
     if (this.state === 'feint') return '¡Viene corriendo! A veces solo juega contigo… a veces no';
     if (this.state === 'stalk' && !this.has('daga')) return 'Te está acechando, como un cazador. Busca la daga (brillo morado) y desconfía de quien veas';
     if (this.has('daga')) return 'Déjalo acercarse y usa la daga cuando lo tengas enfrente';
-    if (this.copies.some((c) => c.phase === 'hunt')) return '¡Un hombre lobo te persigue! Pégale con el bate o piedras… o aléjate y volverá a ser una copia';
+    if (this.copies.some((c) => c.phase === 'hunt')) return '¡Un hombre lobo te persigue! Pégale con el bate hasta vaciar su barra… o aléjate y volverá a ser una copia';
     if (this.has('craneo')) return 'Cuando se acerque, usa el cráneo de obsidiana para espantarlo';
     return 'Toma un cráneo de obsidiana (brillo violeta) y escapa de él';
   }
@@ -5947,9 +6026,15 @@ class SkinwalkerBoss extends BossController {
 
   dispose() {
     this.root.remove(this.beam);
-    for (const c of this.copies) disposeGroup(this.root, c.holder);
+    for (const c of this.copies) {
+      disposeLifeBar(this.root, c.bar);
+      disposeGroup(this.root, c.holder);
+    }
     this.copies = [];
-    for (const n of this.nahuales) disposeGroup(this.root, n.m.group);
+    for (const n of this.nahuales) {
+      disposeLifeBar(this.root, n.bar);
+      disposeGroup(this.root, n.m.group);
+    }
     this.nahuales = [];
     for (const pt of this.portals) disposeGroup(this.root, pt.g);
     this.portals = [];
