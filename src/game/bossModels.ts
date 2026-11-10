@@ -1070,3 +1070,143 @@ export function createSkinwalker(): SkinwalkerModel {
   group.scale.setScalar(1.25);
   return { group, torso, neck, head, jaw, arms, forearms, legs, eyes, eyeGlow };
 }
+
+// ---------------------------------------------------------------- El Nahual (Skinwalker copies fused)
+
+export interface NahualModel {
+  group: THREE.Group;
+  /** Upper body (pivots at the hips): hunched forward */
+  torso: THREE.Group;
+  neck: THREE.Group;
+  head: THREE.Group;
+  jaw: THREE.Mesh;
+  /** [left, right]: thigh pivot and knee pivot */
+  legs: { hip: THREE.Group; knee: THREE.Group }[];
+  /** [left, right]: shoulder pivot and elbow pivot (the arms reach down to its shins) */
+  arms: { shoulder: THREE.Group; elbow: THREE.Group }[];
+  eyes: THREE.MeshBasicMaterial;
+}
+
+/**
+ * The thing several copies become when they fuse: a pale, starved figure almost 4 m tall, like the
+ * ones caught on night cameras: long thin legs, a hunched rib-cage, arms that hang down to its
+ * shins with long fingers, and an elongated dog-like head with tall ears and shining eyes.
+ * Rags of the copies' clothes still hang from it (`scraps`).
+ */
+export function createNahual(scraps: THREE.Material[]): NahualModel {
+  const group = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({ color: 0xdcd8ce, roughness: 0.92, emissive: 0x1c1b18, flatShading: true });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x8f8a80, roughness: 0.95 });
+  const eyes = new THREE.MeshBasicMaterial({ color: 0xf2fff0 });
+  const add = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = true;
+    parent.add(m);
+    return m;
+  };
+  /** A capsule from a to b */
+  const bone = (parent: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material = skin) => {
+    const len = a.distanceTo(b);
+    const m = add(parent, new THREE.CapsuleGeometry(r, Math.max(0.01, len - 2 * r), 4, 8), mat);
+    m.position.copy(a).add(b).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    return m;
+  };
+  const HIP = 2.0;
+  // ---- Legs: very long and thin, knobbly knees ----
+  const legs: NahualModel['legs'] = [];
+  for (const sx of [0.17, -0.17]) {
+    const hip = new THREE.Group();
+    hip.position.set(sx, HIP, 0);
+    bone(hip, new THREE.Vector3(), new THREE.Vector3(0, -1.0, 0.1), 0.09);
+    const knee = new THREE.Group();
+    knee.position.set(0, -1.0, 0.1);
+    add(knee, new THREE.SphereGeometry(0.1, 8, 6), skin);
+    bone(knee, new THREE.Vector3(), new THREE.Vector3(0, -0.98, -0.1), 0.065);
+    const foot = add(knee, new THREE.SphereGeometry(0.09, 8, 6), skin);
+    foot.scale.set(0.9, 0.5, 2.0);
+    foot.position.set(0, -0.98, 0.02);
+    hip.add(knee);
+    group.add(hip);
+    legs.push({ hip, knee });
+  }
+  // ---- Hunched upper body ----
+  const torso = new THREE.Group();
+  torso.position.y = HIP;
+  torso.rotation.x = 0.4;
+  group.add(torso);
+  const pelvis = add(torso, new THREE.SphereGeometry(0.2, 10, 8), skin);
+  pelvis.scale.set(1.3, 0.8, 0.9);
+  bone(torso, new THREE.Vector3(0, 0.05, -0.02), new THREE.Vector3(0, 1.0, -0.06), 0.12);
+  const chest = add(torso, new THREE.SphereGeometry(0.3, 12, 10), skin);
+  chest.scale.set(1.05, 1.35, 0.72);
+  chest.position.set(0, 0.78, 0.02);
+  // Ribs showing through the skin
+  for (let k = 0; k < 5; k++) {
+    const rib = add(torso, new THREE.TorusGeometry(0.27 - k * 0.012, 0.012, 4, 14, Math.PI), dark);
+    rib.position.set(0, 0.55 + k * 0.1, 0.06);
+    rib.rotation.set(Math.PI / 2 - 0.15, 0, 0);
+    rib.scale.set(1.05, 0.75, 1);
+  }
+  // Shoulders, bony
+  for (const sx of [1, -1]) {
+    const sh = add(torso, new THREE.SphereGeometry(0.11, 8, 6), skin);
+    sh.position.set(sx * 0.3, 1.05, -0.02);
+  }
+  // ---- Arms: hanging to the shins, long fingers ----
+  const arms: NahualModel['arms'] = [];
+  for (const sx of [1, -1]) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(sx * 0.33, 1.05, -0.02);
+    bone(shoulder, new THREE.Vector3(), new THREE.Vector3(sx * 0.04, -1.05, 0), 0.065);
+    const elbow = new THREE.Group();
+    elbow.position.set(sx * 0.04, -1.05, 0);
+    add(elbow, new THREE.SphereGeometry(0.07, 8, 6), skin);
+    bone(elbow, new THREE.Vector3(), new THREE.Vector3(0, -1.0, 0.05), 0.05);
+    for (let f = 0; f < 4; f++) {
+      const a = (f - 1.5) * 0.18;
+      bone(elbow, new THREE.Vector3(0, -1.0, 0.05), new THREE.Vector3(Math.sin(a) * 0.12, -1.42, 0.05 + Math.cos(a) * 0.08), 0.018);
+    }
+    shoulder.add(elbow);
+    shoulder.rotation.z = sx * 0.08;
+    torso.add(shoulder);
+    arms.push({ shoulder, elbow });
+  }
+  // ---- Neck and the long dog-like head ----
+  const neck = new THREE.Group();
+  neck.position.set(0, 1.1, 0);
+  torso.add(neck);
+  bone(neck, new THREE.Vector3(), new THREE.Vector3(0, 0.3, 0.12), 0.06);
+  const head = new THREE.Group();
+  head.position.set(0, 0.32, 0.14);
+  neck.add(head);
+  const skull = add(head, new THREE.SphereGeometry(0.17, 12, 10), skin);
+  skull.scale.set(0.95, 1, 1.15);
+  const snout = add(head, new THREE.CylinderGeometry(0.05, 0.11, 0.42, 8), skin);
+  snout.rotation.x = Math.PI / 2;
+  snout.position.set(0, -0.04, 0.3);
+  const jaw = add(head, new THREE.BoxGeometry(0.1, 0.035, 0.36), dark);
+  jaw.position.set(0, -0.11, 0.24);
+  const nose = add(head, new THREE.SphereGeometry(0.04, 8, 6), new THREE.MeshStandardMaterial({ color: 0x2a2724, roughness: 0.4 }));
+  nose.position.set(0, -0.03, 0.52);
+  for (const sx of [1, -1]) {
+    const ear = add(head, new THREE.ConeGeometry(0.06, 0.36, 4), skin);
+    ear.position.set(sx * 0.1, 0.27, -0.05);
+    ear.rotation.z = -sx * 0.25;
+    const e = add(head, new THREE.SphereGeometry(0.04, 8, 6), eyes);
+    e.position.set(sx * 0.085, 0.04, 0.15);
+  }
+  // A glow around the eyes (like the eyes of an animal in night vision)
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeGlowTexture('rgba(235,255,235,0.9)'), color: 0xeaffea, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending }));
+  glow.scale.setScalar(0.55);
+  glow.position.set(0, 0.04, 0.2);
+  head.add(glow);
+  // ---- Rags of the copies' clothes still hanging from it ----
+  scraps.slice(0, 6).forEach((mat, k) => {
+    const rag = add(torso, new THREE.BoxGeometry(0.16 + (k % 2) * 0.08, 0.32 + (k % 3) * 0.12, 0.03), mat);
+    const a = (k / 6) * Math.PI * 2;
+    rag.position.set(Math.sin(a) * 0.3, 0.25 + (k % 3) * 0.28, Math.cos(a) * 0.2);
+    rag.rotation.set(0.2 * (k % 2 ? 1 : -1), a, 0.3 * (k % 3 - 1));
+  });
+  return { group, torso, neck, head, jaw, legs, arms, eyes };
+}

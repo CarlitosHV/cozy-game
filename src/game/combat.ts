@@ -747,7 +747,7 @@ export class CombatSystem {
       }
       return;
     }
-    this.boss.onEvent(kind, i, v, from);
+    this.boss.onEvent(kind, i, v, from, target);
   }
 
   // ------------------------------------------------------------------ frame

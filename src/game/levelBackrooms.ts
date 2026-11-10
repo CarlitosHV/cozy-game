@@ -2351,6 +2351,45 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
       const [i, j] = gCell(g, p);
       return gNeighbors(g, i, j).length;
     },
+    cornersNear: (p, reach) => {
+      const [ci, cj] = gCell(g, p);
+      const out: { pos: THREE.Vector3; dir: THREE.Vector3 }[] = [];
+      for (let i = Math.max(0, ci - reach); i <= Math.min(N - 1, ci + reach); i++)
+        for (let j = Math.max(0, cj - reach); j <= Math.min(N - 1, cj + reach); j++) {
+          const openE = i < N - 1 && g.east[i][j];
+          const openW = i > 0 && g.east[i - 1][j];
+          const openN = j < N - 1 && g.north[i][j];
+          const openS = j > 0 && g.north[i][j - 1];
+          const c = gCenter(g, i, j);
+          for (const sx of [1, -1])
+            for (const sz of [1, -1]) {
+              // both walls of this corner are up
+              if ((sx > 0 ? openE : openW) || (sz > 0 ? openN : openS)) continue;
+              out.push({ pos: new THREE.Vector3(c.x + sx * (CELL / 2 - 0.2), Y, c.z + sz * (CELL / 2 - 0.2)), dir: new THREE.Vector3(-sx, 0, -sz).normalize() });
+            }
+        }
+      return out;
+    },
+    sightSpot: (p, minCells, maxCells) => {
+      const [ci, cj] = gCell(g, p);
+      const opts: THREE.Vector3[] = [];
+      for (const [di, dj] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ]) {
+        let i = ci;
+        let j = cj;
+        for (let k = 1; k <= maxCells; k++) {
+          if (!gNeighbors(g, i, j).some(([a, b]) => a === i + di && b === j + dj)) break;
+          i += di;
+          j += dj;
+          if (k >= minCells) opts.push(gCenter(g, i, j).setY(Y));
+        }
+      }
+      return opts.length ? opts[Math.floor(Math.random() * opts.length)] : null;
+    },
     portalSpotNear: (p, yaw) => {
       const gap = (q: THREE.Vector3) => {
         let m = 1e9;

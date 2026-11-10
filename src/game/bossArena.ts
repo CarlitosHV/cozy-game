@@ -63,6 +63,10 @@ export interface BossSetup {
   wallNear?: (p: THREE.Vector3) => { pos: THREE.Vector3; normal: THREE.Vector3 } | null;
   /** Skinwalker: ceiling lamps on (1) or a blackout (0) */
   setLights?: (on: number) => void;
+  /** Inner wall corners (two walls meeting) in the rooms around p: where things can crawl out of */
+  cornersNear?: (p: THREE.Vector3, reach: number) => { pos: THREE.Vector3; dir: THREE.Vector3 }[];
+  /** A room in a straight line from p (2-4 rooms away) with nothing in between: to be seen from */
+  sightSpot?: (p: THREE.Vector3, minCells: number, maxCells: number) => THREE.Vector3 | null;
   /** How many openings the room at p has (1 = a dead end) */
   exits?: (p: THREE.Vector3) => number;
   /** A free spot right next to p for the victory portal (instead of far away in the middle) */
