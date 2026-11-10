@@ -37,7 +37,9 @@ export type CustomSoundName =
   | 'huesos' // a copy of a friend cracks into a werewolf
   | 'rasgar' // the Skinwalker tears through the wallpaper
   | 'pared_mueve' // the maze walls move
-  | 'grito_skinwalker'; // the Skinwalker screams
+  | 'grito_skinwalker' // the Skinwalker screams
+  | 'arana_glitch' // the glitched spider stutters (like a game breaking)
+  | 'arana_patas'; // the spider's legs tapping fast
 
 export const CUSTOM_SOUNDS: Partial<Record<CustomSoundName, string>> = {
   // musica_backrooms: 'musica_backrooms.mp3',
@@ -60,4 +62,6 @@ export const CUSTOM_SOUNDS: Partial<Record<CustomSoundName, string>> = {
   // rasgar: 'rasgar.mp3',
   // pared_mueve: 'pared_mueve.mp3',
   // grito_skinwalker: 'grito_skinwalker.mp3',
+  // arana_glitch: 'arana_glitch.mp3',
+  // arana_patas: 'arana_patas.mp3',
 };

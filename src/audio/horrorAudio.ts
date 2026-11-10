@@ -634,6 +634,39 @@ export class HorrorAudio {
     o.stop(now + 1.5);
   }
 
+  /** The glitched spider: a digital stutter, like a game that's breaking (square blips and static chops) */
+  glitch(volume = 1) {
+    if (this.muted() || this.file('arana_glitch', volume)) return;
+    const now = this.ctx.currentTime;
+    const v = Math.max(0.05, Math.min(1, volume));
+    const n = 5 + Math.floor(Math.random() * 6);
+    for (let i = 0; i < n; i++) {
+      const at = now + i * (0.025 + Math.random() * 0.03);
+      if (Math.random() < 0.55) {
+        const o = this.ctx.createOscillator();
+        o.type = 'square';
+        o.frequency.setValueAtTime(120 + Math.random() * 2400, at);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0.05 * v, at);
+        g.gain.setValueAtTime(0.0001, at + 0.022);
+        o.connect(g);
+        g.connect(this.sfx);
+        o.start(at);
+        o.stop(at + 0.03);
+      } else {
+        this.noiseHit(at, 0.025, 'bandpass', 600 + Math.random() * 5000, 1.5, 0.3 * v, this.sfx);
+      }
+    }
+  }
+
+  /** Many sharp legs tapping fast on the floor */
+  skitter(volume = 1) {
+    if (this.muted() || this.file('arana_patas', volume)) return;
+    const now = this.ctx.currentTime;
+    const v = Math.max(0.05, Math.min(1, volume));
+    for (let i = 0; i < 10; i++) this.noiseHit(now + i * (0.02 + Math.random() * 0.025), 0.012, 'highpass', 3500 + Math.random() * 2500, 2, 0.22 * v, this.sfx);
+  }
+
   /** Recordings for sounds the synthesizer already makes (scream, rip, walls moving) */
   tryFile(name: CustomSoundName, volume = 1): boolean {
     return this.file(name, volume);

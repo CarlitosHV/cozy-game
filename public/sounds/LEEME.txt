@@ -32,3 +32,5 @@ Lugares donde puedes poner un sonido (nombre: cuándo suena):
   rasgar               el Skinwalker rasga el papel tapiz
   pared_mueve          las paredes del laberinto se mueven
   grito_skinwalker     el grito del Skinwalker
+  arana_glitch         la araña buggeada del pasillo rojo (un "error" digital)
+  arana_patas          las patas de la araña golpeando el piso

@@ -355,8 +355,8 @@ export function levelHowTo(level: number, mode?: string): LevelHowTo {
         'Tienes 3 corazones: cada mordida te quita uno; sin corazones vuelves al último punto de control',
         'La salida del laberinto está cerrada: busca la llave en un callejón sin salida (el Maniquí solo se mueve si no lo ves)',
         'El almacén está a oscuras y no tiene piso: salta de caja en caja; cuando vuelva la luz, avanza rápido. Las Sonrisas vuelan hacia ti en lo oscuro',
-        'En el pasillo rojo te persigue el Corredor: lanza un orbe de luz (granada) para cegarlo',
-        'El pasillo se alarga sin fin… hasta que jalas las 3 palancas escondidas en huecos de las paredes',
+        'En el pasillo rojo te persigue la Araña (algo salió mal con ella): lanza un orbe de luz (granada) para cegarla',
+        'El pasillo se alarga sin fin… hasta que jalas las 3 palancas escondidas en huecos de las paredes. Detrás de la puerta: ¡corre y salta los obstáculos hasta la SALIDA!',
       ],
     };
   }

@@ -170,6 +170,13 @@ class SoundtrackSynthesizer {
   public playStretch() {
     this.horror?.stretch();
   }
+  /** The glitched spider of the red corridor */
+  public playGlitch(volume = 1) {
+    this.horror?.glitch(volume);
+  }
+  public playSkitter(volume = 1) {
+    this.horror?.skitter(volume);
+  }
   public playCreak() {
     this.horror?.creak((Math.random() * 2 - 1) * 0.6);
   }

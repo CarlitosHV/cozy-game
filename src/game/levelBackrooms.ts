@@ -306,13 +306,234 @@ function smileModel(): MonsterModel & { mats: THREE.Material[] } {
   };
 }
 
+/**
+ * La Araña: a spider that came out wrong, like a glitch in the game. A big pale spider with a
+ * second, smaller one fused upside down on its back (its legs kick at the air), the folded
+ * forelegs of a praying mantis, far too many eyes… and parts that jitter, tear and leave colored
+ * ghosts behind like a bad video signal.
+ */
+function spiderModel(): MonsterModel {
+  const g = new THREE.Group();
+  const rig = new THREE.Group();
+  g.add(rig);
+  const shell = new THREE.MeshStandardMaterial({ color: 0x221d19, roughness: 0.4, metalness: 0.1 });
+  const flesh = new THREE.MeshStandardMaterial({ color: 0xbdb19d, roughness: 0.85, flatShading: true });
+  const joint = new THREE.MeshStandardMaterial({ color: 0x4a3f36, roughness: 0.7 });
+  const mantis = new THREE.MeshStandardMaterial({ color: 0x7d8a45, roughness: 0.55, flatShading: true });
+  const red = new THREE.MeshBasicMaterial({ color: 0xff2020 });
+  const white = new THREE.MeshBasicMaterial({ color: 0xf3efe4 });
+  const black = new THREE.MeshBasicMaterial({ color: 0x050505 });
+  const mesh = (geo: THREE.BufferGeometry, mat: THREE.Material, parent: THREE.Object3D) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = true;
+    parent.add(m);
+    return m;
+  };
+  /** A capsule from a to b */
+  const bone = (parent: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material) => {
+    const len = a.distanceTo(b);
+    const m = mesh(new THREE.CapsuleGeometry(r, Math.max(0.01, len - 2 * r), 4, 6), mat, parent);
+    m.position.copy(a).add(b).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    return m;
+  };
+  /** A spider body (chest + abdomen) with legs; returns the legs to animate */
+  const spiderBody = (parent: THREE.Object3D, nLegs: number, reach: number) => {
+    const chest = mesh(new THREE.SphereGeometry(0.42, 14, 10), shell, parent);
+    chest.scale.set(1, 0.7, 1.15);
+    chest.position.set(0, 0.85, 0.35);
+    const abdomen = mesh(new THREE.SphereGeometry(0.62, 16, 12), flesh, parent);
+    abdomen.scale.set(1, 0.85, 1.25);
+    abdomen.position.set(0, 1.0, -0.6);
+    // Dark marks on the pale abdomen
+    for (let k = 0; k < 4; k++) {
+      const spot = mesh(new THREE.SphereGeometry(0.14, 8, 6), shell, parent);
+      spot.scale.set(1.4, 0.25, 0.8);
+      spot.position.set((k % 2 ? 0.18 : -0.18), 1.5 - k * 0.04, -0.3 - k * 0.28);
+    }
+    const legs: { hip: THREE.Group; side: number; phase: number; base: number }[] = [];
+    const per = nLegs / 2;
+    for (let k = 0; k < per; k++)
+      for (const side of [1, -1]) {
+        const hip = new THREE.Group();
+        hip.position.set(side * 0.3, 0.86, 0.6 - (k * 0.62) / Math.max(1, per - 1));
+        const fwd = 0.75 - (k * 1.45) / Math.max(1, per - 1);
+        const base = -side * fwd;
+        hip.rotation.y = base;
+        const knee = new THREE.Vector3(side * 0.7 * reach, 0.55, 0);
+        const foot = new THREE.Vector3(side * 1.3 * reach, -0.86, 0);
+        mesh(new THREE.SphereGeometry(0.075, 8, 6), joint, hip);
+        bone(hip, new THREE.Vector3(), knee, 0.065, shell);
+        const kj = mesh(new THREE.SphereGeometry(0.07, 8, 6), joint, hip);
+        kj.position.copy(knee);
+        bone(hip, knee, foot, 0.045, flesh);
+        parent.add(hip);
+        legs.push({ hip, side, phase: (k + (side > 0 ? 0 : 1)) % 2 ? Math.PI : 0, base });
+      }
+    return { chest, abdomen, legs };
+  };
+
+  // ---- The big spider ----
+  const main = spiderBody(rig, 8, 1);
+  // Too many eyes: a cluster of red ones and two human-looking ones
+  const eyes = new THREE.Group();
+  eyes.position.set(0, 0.98, 0.78);
+  rig.add(eyes);
+  const blinkers: THREE.Mesh[] = [];
+  for (let k = 0; k < 7; k++) {
+    const e = mesh(new THREE.SphereGeometry(0.035 + (k % 3) * 0.012, 8, 6), red, eyes);
+    e.position.set(((k % 4) - 1.5) * 0.09, (k < 4 ? 0.05 : -0.04) + Math.sin(k) * 0.02, 0.02);
+    blinkers.push(e);
+  }
+  for (const s of [1, -1]) {
+    const eye = mesh(new THREE.SphereGeometry(0.075, 12, 10), white, eyes);
+    eye.position.set(s * 0.2, -0.02, -0.04);
+    const pupil = mesh(new THREE.SphereGeometry(0.03, 8, 6), black, eye);
+    pupil.position.set(0, 0, 0.06);
+    blinkers.push(eye);
+  }
+  // Fangs
+  for (const s of [1, -1]) {
+    const f = mesh(new THREE.ConeGeometry(0.05, 0.28, 6), shell, rig);
+    f.position.set(s * 0.1, 0.7, 0.86);
+    f.rotation.x = Math.PI * 0.85;
+  }
+  // ---- The mantis forelegs: folded scythes that snap out ----
+  const scythes: THREE.Group[] = [];
+  for (const s of [1, -1]) {
+    const arm = new THREE.Group();
+    arm.position.set(s * 0.22, 0.95, 0.7);
+    bone(arm, new THREE.Vector3(), new THREE.Vector3(s * 0.08, 0.55, 0.3), 0.06, mantis);
+    const fore = new THREE.Group();
+    fore.position.set(s * 0.08, 0.55, 0.3);
+    bone(fore, new THREE.Vector3(), new THREE.Vector3(0, -0.15, 0.55), 0.05, mantis);
+    const bladeTip = mesh(new THREE.ConeGeometry(0.06, 0.55, 4), mantis, fore);
+    bladeTip.position.set(0, -0.35, 0.55);
+    bladeTip.rotation.x = Math.PI;
+    for (let k = 0; k < 4; k++) {
+      const spine = mesh(new THREE.ConeGeometry(0.015, 0.09, 4), shell, fore);
+      spine.position.set(0, -0.06 - k * 0.04, 0.12 + k * 0.11);
+      spine.rotation.x = Math.PI;
+    }
+    fore.rotation.x = 1.2;
+    arm.add(fore);
+    rig.add(arm);
+    scythes.push(fore);
+  }
+  // ---- The second spider, fused upside down on its back ----
+  const rider = new THREE.Group();
+  rider.position.set(0.05, 1.95, -0.5);
+  rider.rotation.set(Math.PI, 0.5, 0.18);
+  rider.scale.setScalar(0.75);
+  rig.add(rider);
+  const small = spiderBody(rider, 6, 0.9);
+  for (let k = 0; k < 3; k++) {
+    const e = mesh(new THREE.SphereGeometry(0.05, 8, 6), red, rider);
+    e.position.set((k - 1) * 0.1, 0.98, 0.78);
+  }
+
+  // ---- Glitch: colored ghosts that flash around it, parts that jump and vanish ----
+  const ghostMat = (color: number) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending });
+  const ghosts: THREE.Group[] = [];
+  for (const color of [0xff0044, 0x00e5ff]) {
+    const gh = new THREE.Group();
+    const mat = ghostMat(color);
+    const c = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 8), mat);
+    c.scale.set(1, 0.7, 1.15);
+    c.position.set(0, 0.85, 0.35);
+    const a = new THREE.Mesh(new THREE.SphereGeometry(0.62, 12, 8), mat);
+    a.scale.set(1, 0.85, 1.25);
+    a.position.set(0, 1.0, -0.6);
+    const r = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), mat);
+    r.position.set(0.05, 1.95, -0.5);
+    gh.add(c, a, r);
+    gh.visible = false;
+    g.add(gh);
+    ghosts.push(gh);
+  }
+  const jumpy: THREE.Object3D[] = [main.chest, main.abdomen, rider, eyes, ...scythes.map((s) => s.parent!), ...main.legs.map((l) => l.hip)];
+  const home = jumpy.map((o) => o.position.clone());
+  let glitchT = 0.5;
+  let glitching = 0;
+  let frozen = 0;
+
+  return {
+    group: g,
+    anim: (t, moving, dt) => {
+      // A frozen frame now and then: it stops dead, then jumps ahead
+      if (frozen > 0) {
+        frozen -= dt;
+        return;
+      }
+      const sp = moving ? 14 : 2.4;
+      for (const l of main.legs) {
+        const s = Math.sin(t * sp + l.phase);
+        l.hip.rotation.y = l.base + s * (moving ? 0.3 : 0.04);
+        l.hip.rotation.z = l.side * Math.max(0, Math.cos(t * sp + l.phase)) * (moving ? 0.3 : 0.03);
+      }
+      // The one on its back kicks at the air out of step, like stop-motion
+      small.legs.forEach((l, i) => {
+        const q = Math.round(Math.sin(t * 19 + i * 1.7) * 3) / 3;
+        l.hip.rotation.y = l.base + q * 0.5;
+        l.hip.rotation.z = l.side * (0.2 + Math.abs(q) * 0.4);
+      });
+      rider.rotation.z = 0.15 + Math.sin(t * 5.3) * 0.12;
+      // Scythes: folded… then a snap
+      const snap = moving ? Math.pow(Math.max(0, Math.sin(t * 2.7)), 10) : 0;
+      for (const s of scythes) s.rotation.x = 1.2 - snap * 1.7;
+      main.abdomen.scale.y = 0.85 + Math.sin(t * 3) * 0.03;
+      rig.position.y = moving ? Math.abs(Math.sin(t * sp * 2)) * 0.04 : 0;
+      for (let i = 0; i < blinkers.length; i++) blinkers[i].visible = Math.sin(t * (2 + i * 0.7) + i * 3) > -0.92;
+
+      glitchT -= dt;
+      if (glitchT <= 0) {
+        glitchT = moving ? 0.07 + Math.random() * 0.45 : 0.4 + Math.random() * 1.4;
+        glitching = 0.04 + Math.random() * 0.12;
+        // shuffle a few parts out of place, maybe drop one, maybe stretch the whole thing
+        jumpy.forEach((o, i) => {
+          o.position.copy(home[i]);
+          o.visible = true;
+          if (Math.random() < 0.3) o.position.add(new THREE.Vector3((Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.25, (Math.random() - 0.5) * 0.4));
+          if (Math.random() < 0.06) o.visible = false;
+        });
+        rig.scale.set(1 + (Math.random() < 0.3 ? (Math.random() - 0.3) * 0.5 : 0), 1 + (Math.random() < 0.2 ? (Math.random() - 0.5) * 0.4 : 0), 1);
+        ghosts[0].position.set(0.08 + Math.random() * 0.12, 0, 0);
+        ghosts[1].position.set(-0.08 - Math.random() * 0.12, 0, 0.05);
+        if (Math.random() < 0.08) frozen = 0.12 + Math.random() * 0.12;
+      }
+      if (glitching > 0) {
+        glitching -= dt;
+        for (const gh of ghosts) gh.visible = true;
+        if (glitching <= 0) {
+          for (const gh of ghosts) gh.visible = false;
+          jumpy.forEach((o, i) => {
+            o.position.copy(home[i]);
+            o.visible = true;
+          });
+          rig.scale.set(1, 1, 1);
+        }
+      }
+    },
+  };
+}
+
 // ---------------------------------------------------------------- Maze
 
 const C = 7; // cell size (m)
-const NX = 8;
-const NZ = 7;
-const X0 = -(NX * C) / 2; // -28
+// The yellow maze changes size from level to level: buildBackroomsWorld sets these first
+// (only one Backrooms level exists at a time)
+let NX = 8;
+let NZ = 7;
+let X0 = -(NX * C) / 2;
 const Z0 = 0;
+/** First of the two cells the start room opens into */
+let SI = NX / 2 - 1;
+function configureMaze(nx: number, nz: number) {
+  NX = nx;
+  NZ = nz;
+  X0 = -(NX * C) / 2;
+  SI = NX / 2 - 1;
+}
 const WALL_H = 4.6;
 const cellCenter = (i: number, j: number) => new THREE.Vector3(X0 + (i + 0.5) * C, 0, Z0 + (j + 0.5) * C);
 const cellOf = (p: THREE.Vector3): [number, number] | null => {
@@ -331,8 +552,8 @@ function makeMaze(rng: () => number): Maze {
   const east = Array.from({ length: NX }, () => new Array<boolean>(NZ).fill(false));
   const north = Array.from({ length: NX }, () => new Array<boolean>(NZ).fill(false));
   const seen = Array.from({ length: NX }, () => new Array<boolean>(NZ).fill(false));
-  const stack: [number, number][] = [[3, 0]];
-  seen[3][0] = true;
+  const stack: [number, number][] = [[SI, 0]];
+  seen[SI][0] = true;
   while (stack.length) {
     const [i, j] = stack[stack.length - 1];
     const opts: [number, number][] = [];
@@ -403,8 +624,8 @@ function bfs(m: Maze, a: [number, number], b: [number, number]): { next: [number
 
 // ---------------------------------------------------------------- Monsters
 
-type MonsterKind = 'maniqui' | 'gateador' | 'sonrisa' | 'corredor';
-const NAMES: Record<MonsterKind, string> = { maniqui: 'el Maniquí', gateador: 'el Gateador', sonrisa: 'una Sonrisa', corredor: 'el Corredor' };
+type MonsterKind = 'maniqui' | 'gateador' | 'sonrisa' | 'arana';
+const NAMES: Record<MonsterKind, string> = { maniqui: 'el Maniquí', gateador: 'el Gateador', sonrisa: 'una Sonrisa', arana: 'la Araña' };
 
 interface Monster {
   kind: MonsterKind;
@@ -422,6 +643,10 @@ interface Monster {
   /** Blinded by a light grenade (or knocked back after biting you) */
   stunT: number;
   mats?: THREE.Material[];
+  /** La Araña: crawling on the ceiling (1) or on the floor (0), and when it switches */
+  ceil?: number;
+  ceilT?: number;
+  ceilWant?: boolean;
 }
 
 /** The warehouse: lights that go on now and then (a break), then off again (the Sonrisas come out) */
@@ -442,9 +667,13 @@ interface CorridorInfo {
   seg: number;
   /** Stretches 0-2 are real; 3 is a copy of 0 (what you see ahead before it loops) */
   y: number;
+  /** The door at the end of the loop: it opens when the 3 levers are pulled (the run is behind it) */
+  gate: { plat: PlatformItem; mesh: THREE.Object3D; top: number; t: number };
   end: number;
   levers: { pos: THREE.Vector3; handle: THREE.Object3D; copies: THREE.Object3D[]; pulled: boolean }[];
   lamps: THREE.MeshBasicMaterial;
+  /** The run at the end: from z0 to z1, with holes in the floor (the spider crosses them on the ceiling) */
+  run: { z0: number; z1: number; gaps: [number, number][]; lamps: THREE.MeshBasicMaterial; ceilY: number };
 }
 
 interface KeyDoor {
@@ -487,6 +716,11 @@ class BackroomsHazards implements LevelHazards {
   private quetsyCd = 0;
   private giggleCd = 0;
   private solved = false;
+  /** La Araña waits a moment before coming back after it caught you */
+  private spiderDelay = 0;
+  private glitchCd = 0;
+  private skitterCd = 0;
+  private runMsg = false;
 
   constructor(
     root: THREE.Object3D,
@@ -510,12 +744,16 @@ class BackroomsHazards implements LevelHazards {
 
   add(root: THREE.Object3D, kind: MonsterKind, at: THREE.Vector3) {
     const model =
-      kind === 'maniqui' ? mannequinModel() : kind === 'gateador' ? crawlerModel(1, 0xf5f5dc) : kind === 'corredor' ? crawlerModel(1.25, 0xff3030) : smileModel();
+      kind === 'maniqui' ? mannequinModel() : kind === 'gateador' ? crawlerModel(1, 0xf5f5dc) : kind === 'arana' ? spiderModel() : smileModel();
     model.group.position.copy(at);
     root.add(model.group);
     const m: Monster = { kind, model, pos: at.clone(), home: at.clone(), yaw: 0, active: false, target: null, wanderT: 0, seenT: 0, seen: false, fade: kind === 'sonrisa' ? 0 : 1, stunT: 0 };
     if (kind === 'sonrisa') m.mats = (model as ReturnType<typeof smileModel>).mats;
-    if (kind === 'corredor') model.group.visible = false;
+    if (kind === 'arana') {
+      model.group.visible = false;
+      m.ceil = 0;
+      m.ceilT = 3;
+    }
     this.monsters.push(m);
   }
 
@@ -535,8 +773,15 @@ class BackroomsHazards implements LevelHazards {
     d.mesh.position.y = 0;
     d.light.color.setHex(0xff3030);
     for (const l of this.corr.levers) this.setLever(l, false);
+    const gate = this.corr.gate;
+    gate.t = 0;
+    gate.plat.position.y = gate.top;
+    gate.mesh.position.y = 0;
+    gate.mesh.visible = true;
     this.solved = false;
     this.corr.lamps.color.setHex(0xff2a2a);
+    this.spiderDelay = 0;
+    this.runMsg = false;
   }
 
   private sendHome(m: Monster) {
@@ -547,7 +792,11 @@ class BackroomsHazards implements LevelHazards {
     m.stunT = 0;
     m.fade = m.kind === 'sonrisa' ? 0 : 1;
     m.model.group.position.copy(m.home);
-    if (m.kind === 'corredor') m.model.group.visible = false;
+    if (m.kind === 'arana') {
+      m.model.group.visible = false;
+      m.ceil = 0;
+      m.model.group.rotation.z = 0;
+    }
   }
 
   syncObjects() {
@@ -610,7 +859,7 @@ class BackroomsHazards implements LevelHazards {
 
   private inCorridor(p: THREE.Vector3) {
     const c = this.corr;
-    return Math.abs(p.x - c.x) < 5 && p.z > c.z0 && p.z < c.end + 3 && p.y > c.y - 2.5;
+    return Math.abs(p.x - c.x) < 5 && p.z > c.z0 && p.z < c.end + 3 && p.y > c.y - 6;
   }
 
   /** You can see it: inside the camera view and not hidden behind a wall. */
@@ -667,7 +916,8 @@ class BackroomsHazards implements LevelHazards {
     if (this.hearts <= 0) {
       this.hearts = this.maxHearts;
       ctx.caught(`¡${NAMES[m.kind][0].toUpperCase() + NAMES[m.kind].slice(1)} te atrapó y te quedaste sin corazones!`);
-      for (const o of this.monsters) if (o.pos.distanceTo(ctx.position) < 14 || o === m || o.kind === 'corredor') this.sendHome(o);
+      for (const o of this.monsters) if (o.pos.distanceTo(ctx.position) < 14 || o === m || o.kind === 'arana') this.sendHome(o);
+      this.spiderDelay = 2.5;
       this.wareLit = false;
       this.wareT = 8;
       return;
@@ -677,9 +927,10 @@ class BackroomsHazards implements LevelHazards {
     // It backs off for a moment so you can get away
     if (m.kind === 'sonrisa') {
       m.stunT = 4;
-    } else if (m.kind === 'corredor') {
+    } else if (m.kind === 'arana') {
       m.pos.z = Math.max(this.corr.z0, m.pos.z - 7);
       m.stunT = 1.2;
+      soundManager.playGlitch(1);
     } else {
       this.sendHome(m);
     }
@@ -795,12 +1046,10 @@ class BackroomsHazards implements LevelHazards {
       if (all && !this.solved) {
         this.solved = true;
         c.lamps.color.setHex(0x34d399);
+        c.gate.plat.position.y = -100;
         soundManager.playVictory();
-        ctx.notify('¡Las 3 palancas! El pasillo se ACORTA: ¡la SALIDA está cerca!');
-        // It shrinks: you jump ahead to the last real stretch (it looks the same, so it's seamless)
-        const u = P.z - c.loopZ0;
-        const k = Math.floor(u / c.seg);
-        if (k >= 0 && k < 2) this.shiftAll(new THREE.Vector3(0, 0, (2 - k) * c.seg), ctx);
+        soundManager.playDoorCreak();
+        ctx.notify('¡Las 3 palancas! Se abrió el final del pasillo… ¡CORRE y salta hasta la SALIDA!');
       }
       // Not solved: past the third stretch you're back at the first one (it looks the same)
       if (!this.solved && P.z > c.loopZ0 + 3 * c.seg) {
@@ -810,6 +1059,32 @@ class BackroomsHazards implements LevelHazards {
           this.loopMsgCd = 12;
           ctx.notify('El pasillo se alarga… nunca llegas a la SALIDA. Busca 3 palancas en los huecos de las paredes');
         }
+      }
+    }
+
+    // The door at the end of the corridor slides down once it's solved
+    if (this.solved && c.gate.t < 1) {
+      c.gate.t = Math.min(1, c.gate.t + dt * 0.8);
+      c.gate.mesh.position.y = -c.gate.t * 4.4;
+      if (c.gate.t >= 1) c.gate.mesh.visible = false;
+    }
+
+    // ---- The run: holes in the floor (falling = back to the start of the run) ----
+    const run = c.run;
+    const inRun = inCorr && P.z > run.z0 - 0.5;
+    this.spiderDelay = Math.max(0, this.spiderDelay - dt);
+    if (inRun && !ctx.spectating) {
+      run.lamps.color.setHex(Math.sin(time * 31) * Math.sin(time * 4.7) > 0.6 ? 0x3a0808 : 0xff2a2a);
+      if (!this.runMsg) {
+        this.runMsg = true;
+        ctx.notify('¡No te detengas! Salta las vallas y los hoyos: la Araña no se cansa');
+      }
+      if (P.y < c.y - 2.5 && this.grace <= 0) {
+        this.grace = 1.5;
+        for (const o of this.monsters) if (o.kind === 'arana') this.sendHome(o);
+        this.spiderDelay = 2.5;
+        ctx.caught('¡Caíste al vacío! Vuelves al inicio de la carrera');
+        return;
       }
     }
 
@@ -879,38 +1154,79 @@ class BackroomsHazards implements LevelHazards {
         m.model.group.visible = m.fade > 0.03;
         // Face the player
         m.yaw = Math.atan2(P.x - m.pos.x, P.z - m.pos.z);
-      } else if (m.kind === 'corredor') {
-        if (!m.active && inCorr && P.z > c.z0 + 8 && !ctx.spectating) {
+      } else if (m.kind === 'arana') {
+        if (!m.active && inCorr && P.z > c.z0 + 8 && !ctx.spectating && this.spiderDelay <= 0) {
           m.active = true;
-          m.pos.copy(m.home);
+          // In the run it drops from the ceiling a little behind you; in the corridor it comes from the door
+          if (inRun) m.pos.set(c.x, c.y, P.z - 16);
+          else m.pos.copy(m.home);
+          m.ceil = 0;
+          m.ceilT = 3;
           m.model.group.visible = true;
           soundManager.playStalkerWarning();
-          soundManager.playScream(0.7);
-          ctx.notify('¡Algo despertó detrás de ti! ¡CORRE! (lanza un orbe de luz para cegarlo)');
+          soundManager.playGlitch(1);
+          soundManager.playScream(0.6);
+          ctx.notify(
+            inRun
+              ? '¡La Araña se cayó del techo detrás de ti! ¡CORRE!'
+              : '¡Algo salió mal detrás de ti… una araña sobre otra araña, como un error del juego! ¡CORRE! (lanza un orbe de luz para cegarla)'
+          );
         }
         if (m.active) {
           if (!inCorr && !ctx.spectating) {
             this.sendHome(m);
           } else if (!stunned) {
-            const goal = new THREE.Vector3(Math.abs(P.x - c.x) > 2 ? P.x : c.x, 0, P.z);
-            this.moveTo(m, goal, 8.0 + 0.8 * this.diff, dt);
+            // In the run it never lets you get away (nor jumps on you right away): it keeps pace
+            const behind = P.z - m.pos.z;
+            const sp = inRun ? (behind > 16 ? 11.6 : behind < 5 ? 8.7 + 0.6 * this.diff : 9.7 + 0.5 * this.diff) : 8.0 + 0.8 * this.diff;
+            const half = 1.5;
+            const goal = new THREE.Vector3(THREE.MathUtils.clamp(P.x, c.x - half, c.x + half), 0, P.z);
+            this.moveTo(m, goal, sp, dt);
             m.pos.y = c.y;
             moving = true;
+            // It crawls on the ceiling over the holes, and now and then just because
+            if (inRun) {
+              m.ceilT = (m.ceilT ?? 0) - dt;
+              if (m.ceilT <= 0) {
+                m.ceilWant = !m.ceilWant;
+                m.ceilT = m.ceilWant ? 1.5 + this.rng() * 2 : 3 + this.rng() * 4;
+              }
+            }
+            const overGap = run.gaps.some(([a, b]) => m.pos.z > a - 0.6 && m.pos.z < b + 0.6);
+            const wantCeil = inRun && (overGap || (!!m.ceilWant && behind > 4));
+            if (wantCeil !== (m.ceil ?? 0) > 0.5) {
+              // it doesn't climb: it glitches from the floor to the ceiling in one frame
+              m.ceil = wantCeil ? 1 : 0;
+              if (m.pos.distanceTo(P) < 25) soundManager.playGlitch(0.8);
+            }
+          }
+          // Sounds: legs tapping, and the digital stutter
+          const dd = m.pos.distanceTo(P);
+          this.skitterCd -= dt;
+          this.glitchCd -= dt;
+          if (moving && this.skitterCd <= 0 && dd < 20) {
+            this.skitterCd = 0.35 + this.rng() * 0.3;
+            soundManager.playSkitter(1 - dd / 22);
+          }
+          if (this.glitchCd <= 0 && dd < 22) {
+            this.glitchCd = 2 + this.rng() * 3;
+            soundManager.playGlitch(0.4 + 0.5 * (1 - dd / 22));
           }
         }
       }
       // Blinded monsters shake
       const shake = stunned && m.kind !== 'sonrisa' ? Math.sin(time * 60) * 0.05 : 0;
       m.model.anim(time, moving, dt);
-      m.model.group.position.set(m.pos.x + shake, m.pos.y, m.pos.z);
-      m.model.group.rotation.y = m.yaw;
+      const onCeil = m.kind === 'arana' && (m.ceil ?? 0) > 0.5;
+      m.model.group.position.set(m.pos.x + shake, onCeil ? c.run.ceilY : m.pos.y, m.pos.z);
+      m.model.group.rotation.set(0, m.yaw, onCeil ? Math.PI : 0);
 
       // Quetsy guarding you: whatever comes close gets bitten and backs off
-      if (ctx.guarding && !stunned && !ctx.spectating && (m.kind !== 'sonrisa' || m.fade > 0.3) && (m.kind !== 'corredor' || m.active)) {
+      if (ctx.guarding && !stunned && !ctx.spectating && (m.kind !== 'sonrisa' || m.fade > 0.3) && (m.kind !== 'arana' || m.active)) {
         const gx = m.pos.x - P.x;
         const gz = m.pos.z - P.z;
         if (gx * gx + gz * gz < 3.4 * 3.4 && Math.abs(m.pos.y - P.y) < 3) {
-          if (m.kind === 'corredor') {
+          if (m.kind === 'arana') {
             m.pos.z = Math.max(this.corr.z0, m.pos.z - 8);
             m.stunT = 2.5;
           } else if (m.kind === 'sonrisa') {
@@ -921,19 +1237,19 @@ class BackroomsHazards implements LevelHazards {
           soundManager.playEnemyBonk();
           if (this.quetsyCd <= 0) {
             this.quetsyCd = 2;
-            ctx.notify(`¡Quetsy mordió ${NAMES[m.kind].replace(/^el /, 'al ').replace(/^una /, 'a una ')} y lo espantó!`);
+            ctx.notify(`¡Quetsy mordió ${NAMES[m.kind].replace(/^el /, 'al ').replace(/^una /, 'a una ').replace(/^la /, 'a la ')} y ${m.kind === 'arana' ? 'la' : 'lo'} espantó!`);
           }
           continue;
         }
       }
 
       // Caught!
-      const dangerous = !stunned && (m.kind === 'sonrisa' ? m.fade > 0.6 : m.kind === 'corredor' ? m.active : true);
+      const dangerous = !stunned && (m.kind === 'sonrisa' ? m.fade > 0.6 : m.kind === 'arana' ? m.active && !onCeil : true);
       if (dangerous && this.grace <= 0 && !ctx.spectating) {
         const dx = m.pos.x - P.x;
         const dz = m.pos.z - P.z;
         const dy = m.kind === 'sonrisa' ? m.pos.y - (P.y + 0.9) : m.pos.y - P.y;
-        const r = m.kind === 'sonrisa' ? 1.15 : 0.9;
+        const r = m.kind === 'sonrisa' ? 1.15 : m.kind === 'arana' ? 1.2 : 0.9;
         if (dx * dx + dz * dz < r * r && Math.abs(dy) < (m.kind === 'sonrisa' ? 1.4 : 1.8)) this.bite(m, ctx);
       }
     }
@@ -946,7 +1262,7 @@ class BackroomsHazards implements LevelHazards {
     for (const m of this.monsters) {
       if (m.stunT > 0) continue;
       const d = m.pos.distanceTo(P);
-      if (m.kind === 'corredor' && m.active) t = Math.max(t, 0.6, 1 - Math.max(0, d - 4) / 30);
+      if (m.kind === 'arana' && m.active) t = Math.max(t, 0.7, 1 - Math.max(0, d - 4) / 30);
       else if (m.kind === 'gateador' && m.active) t = Math.max(t, 0.95 - d / 30);
       else if (m.kind === 'sonrisa' && m.fade > 0.5) t = Math.max(t, 1 - d / 18);
       else if (m.kind === 'maniqui' && d < 10) t = Math.max(t, 0.6 * (1 - d / 10));
@@ -958,7 +1274,7 @@ class BackroomsHazards implements LevelHazards {
   private shiftAll(o: THREE.Vector3, ctx: LevelHazardContext) {
     ctx.shift?.(o);
     for (const m of this.monsters) {
-      if (m.kind !== 'corredor' || !m.active) continue;
+      if (m.kind !== 'arana' || !m.active) continue;
       m.pos.add(o);
       if (m.pos.z < this.corr.z0) m.pos.z = this.corr.z0;
       m.model.group.position.copy(m.pos);
@@ -1064,10 +1380,12 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
   const kit = createLevelKit(root, textures);
   const enemies = new EnemyManager(root, textures);
   const cameraColliders: THREE.Object3D[] = [];
+  // Everything below comes out of the level's seed: every Backrooms is laid out differently
+  configureMaze(rng() < 0.45 + 0.3 * diff ? 10 : 8, 6 + Math.floor(rng() * 3) + (diff > 0.5 ? 1 : 0));
 
   const P = backroomsParts(kit, root, textures, cameraColliders);
   const { wallMat, concMat, crateMat, metalMat, lampOn, lampFlickA, lampFlickB, redLamp } = P;
-  const { carpetB, concB, concWallB, crateB, metalB, wall, ceiling } = P;
+  const { carpetB, concB, concWallB, crateB, metalB, wall, ceiling, wallB } = P;
   const tapeMat = new THREE.MeshBasicMaterial({ color: 0xffb02e });
   const voidMat = new THREE.MeshBasicMaterial({ color: 0x050403 });
   const voidPlane = (x0: number, z0: number, x1: number, z1: number, y: number) => {
@@ -1076,11 +1394,30 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
     m.position.set((x0 + x1) / 2, y, (z0 + z1) / 2);
     root.add(m);
   };
+  const pick = <T,>(arr: T[]): T => arr[Math.floor(rng() * arr.length)];
 
   // ======================================================================
-  // 1. NIVEL 0 — the yellow maze (the way out is locked: find the key)
+  // 1. NIVEL 0 — the yellow maze (the way out is locked: find the key).
+  //    Its size, its walls and a few open halls with columns change every time.
   // ======================================================================
   const maze = makeMaze(rng);
+  // Open halls (2×2 or 3×2 rooms) with columns at the inner corners
+  const halls: { i: number; j: number; w: number; h: number }[] = [];
+  const wantHalls = 1 + Math.floor(rng() * 2) + (NX > 8 ? 1 : 0);
+  for (let tries = 0; tries < 30 && halls.length < wantHalls; tries++) {
+    const w = rng() < 0.35 ? 3 : 2;
+    const h = 2;
+    const i = Math.floor(rng() * (NX - w + 1));
+    const j = 1 + Math.floor(rng() * (NZ - h));
+    if (j + h > NZ) continue;
+    if (halls.some((o) => i < o.i + o.w + 1 && o.i < i + w + 1 && j < o.j + o.h + 1 && o.j < j + h + 1)) continue;
+    halls.push({ i, j, w, h });
+    for (let a = i; a < i + w; a++)
+      for (let b = j; b < j + h; b++) {
+        if (a < i + w - 1) maze.east[a][b] = true;
+        if (b < j + h - 1) maze.north[a][b] = true;
+      }
+  }
   const XE = X0 + NX * C;
   const ZE = Z0 + NZ * C;
   const exitI = 1 + Math.floor(rng() * (NX - 2));
@@ -1120,6 +1457,11 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
       }
     }
   }
+  // Columns inside the halls (at the corners between cells, so the monsters still walk through)
+  let pn = 0;
+  for (const hl of halls)
+    for (let a = hl.i + 1; a < hl.i + hl.w; a++)
+      for (let b = hl.j + 1; b < hl.j + hl.h; b++) kit.addPlatform(`br_pillar${pn++}`, X0 + a * C, WALL_H, Z0 + b * C, 0.8, 0.8, WALL_H + 0.5, wallB).solid = true;
   ceiling(-7, -9, 7, 0, WALL_H);
   ceiling(X0, Z0, XE, ZE, WALL_H);
   const lampGeo = new THREE.PlaneGeometry(1.4, 0.7);
@@ -1127,6 +1469,7 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
     for (let j = 0; j < NZ; j++) {
       const c = cellCenter(i, j);
       const r = rng();
+      if (r > 0.94) continue; // a dead lamp here and there
       const lamp = new THREE.Mesh(lampGeo, r < 0.1 ? lampFlickA : r < 0.18 ? lampFlickB : lampOn);
       lamp.rotation.x = Math.PI / 2;
       lamp.position.set(c.x, WALL_H - 0.02, c.z);
@@ -1150,7 +1493,7 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
     sign.rotation.y = rng() * Math.PI;
     root.add(sign);
   };
-  for (let k = 0; k < 4; k++) {
+  for (let k = 0; k < 3 + Math.floor(rng() * 4); k++) {
     const c = cellCenter(Math.floor(rng() * NX), 1 + Math.floor(rng() * (NZ - 1)));
     deco(c.x + (rng() - 0.5) * 3, c.z + (rng() - 0.5) * 3);
   }
@@ -1178,8 +1521,8 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
 
   // Dead ends: the key in the farthest one, relics in others
   const deadEnds: [number, number][] = [];
-  for (let i = 0; i < NX; i++) for (let j = 0; j < NZ; j++) if (neighbors(maze, i, j).length === 1 && !(j === 0 && (i === 3 || i === 4))) deadEnds.push([i, j]);
-  const fromStart = (i: number, j: number) => bfs(maze, [3, 0], [i, j]).dist;
+  for (let i = 0; i < NX; i++) for (let j = 0; j < NZ; j++) if (neighbors(maze, i, j).length === 1 && !(j === 0 && (i === SI || i === SI + 1))) deadEnds.push([i, j]);
+  const fromStart = (i: number, j: number) => bfs(maze, [SI, 0], [i, j]).dist;
   const byFar = deadEnds.slice().sort((a, b) => fromStart(b[0], b[1]) - fromStart(a[0], a[1]));
   const keyCell: [number, number] = byFar[0] ?? [NX - 1, NZ - 1];
   const keyAt = cellCenter(keyCell[0], keyCell[1]);
@@ -1211,73 +1554,109 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
 
   // ======================================================================
   // 2. THE WAREHOUSE — no floor: jump across crates, shelves and swinging pallets in the dark.
-  //    Now and then the lights come back for a few seconds; when they go off, the Sonrisas fly.
+  //    The course is put together from random pieces (crates, shelves, beams, pallets, soggy
+  //    boxes, concrete blocks) that climb up to the mezzanine at the far end.
   // ======================================================================
   const WX = 20;
-  const WL = 84;
-  const WZ1 = WZ0 + WL;
   const WH = 11;
   const MEZ_Y = 4.4;
+  const MEZ_D = 12;
   const doorX = Math.round((rng() - 0.5) * 22);
-  const lineX = (z: number) => THREE.MathUtils.lerp(exitX, doorX, THREE.MathUtils.clamp((z - WZ0) / (WL - 12), 0, 1));
-  const step = (id: string, z: number, top: number, w: number, d: number, b: Builder = crateB, jitter = 1.4, h = top + 9) => {
-    const x = lineX(z) + (rng() - 0.5) * 2 * jitter;
-    const plat = kit.addPlatform(id, x, top, z, w, d, h, b);
-    addTape(plat.mesh, w, d, tapeMat);
-    return plat;
-  };
+  const courseLen = 60 + Math.floor(rng() * 22) + Math.round(diff * 8);
+  const lineX = (z: number) => THREE.MathUtils.lerp(exitX, doorX, THREE.MathUtils.clamp((z - WZ0) / (courseLen + 7), 0, 1));
   // Start ledge (full width) by the door from the maze
   const startLedge = kit.addPlatform('br_w_floor1', 0, 0, WZ0 + 3.5, WX * 2, 7, 9, concB);
   addTape(startLedge.mesh, WX * 2, 7, tapeMat);
-  // Crates going up
-  step('br_w_c1', WZ0 + 9.6, 0.5, 1.6, 1.6);
-  step('br_w_c2', WZ0 + 12.2, 1.0, 1.6, 1.6);
-  step('br_w_c3', WZ0 + 14.8, 1.5, 1.6, 1.6);
-  // Two long shelves to run along the top of
-  const shelfA = step('br_w_shelfA', WZ0 + 21, 2.0, 1.5, 8, metalB, 0.6);
-  const shelfB = kit.addPlatform('br_w_shelfB', shelfA.position.x + (rng() < 0.5 ? -1.2 : 1.2), 2.6, WZ0 + 31, 1.5, 8, 11.6, metalB);
-  addTape(shelfB.mesh, 1.5, 8, tapeMat);
-  for (const s of [shelfA, shelfB])
-    for (let k = 0; k < 3; k++) {
-      // boxes on the lower shelves (looks)
-      const box = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.9), crateMat);
-      box.position.set(s.position.x + (k % 2 ? 0.95 : -0.95), s.position.y - 1.6 - k * 1.7, s.position.z - 2.5 + k * 2.5);
-      root.add(box);
+  let cz = WZ0 + 7; // where the last piece ends
+  let ctop = 0; // how high it is
+  let cn = 0;
+  const landings: PlatformItem[] = [];
+  /** Height of the next piece: climbs toward the mezzanine, never more than an easy jump up */
+  const nextTop = (zc: number) => {
+    const goal = THREE.MathUtils.lerp(0.6, MEZ_Y - 0.3, THREE.MathUtils.clamp((zc - WZ0 - 7) / courseLen, 0, 1));
+    return ctop + THREE.MathUtils.clamp(goal - ctop + (rng() - 0.5) * 0.4, -0.8, 0.5);
+  };
+  /** A piece of the course `len` deep, after a gap of `gap` */
+  const piece = (len: number, w: number, b: Builder, jitter: number, gap: number, fixedTop?: number, depth?: number) => {
+    cz += gap;
+    const zc = cz + len / 2;
+    const top = fixedTop ?? nextTop(zc);
+    const x = lineX(zc) + (rng() - 0.5) * 2 * jitter;
+    const plat = kit.addPlatform(`br_w_p${cn++}`, x, top, zc, w, len, depth ?? top + 9, b);
+    addTape(plat.mesh, w, len, tapeMat);
+    cz += len;
+    ctop = top;
+    return plat;
+  };
+  const gap = (min = 0.9) => min + rng() * 0.7 + diff * 0.3;
+  type WPiece = 'crates' | 'shelf' | 'beam' | 'pallets' | 'soggy' | 'block';
+  let lastPiece: WPiece | '' = '';
+  let midIsland: PlatformItem | null = null;
+  const courseEnd = WZ0 + 7 + courseLen;
+  while (cz < courseEnd) {
+    // The middle concrete block (checkpoint) comes once you're about halfway
+    let kind: WPiece;
+    if (!midIsland && cz > WZ0 + 7 + courseLen * 0.42) kind = 'block';
+    else {
+      const opts: WPiece[] = ['crates', 'shelf', 'pallets', 'soggy', 'block', 'crates'];
+      if (diff > 0.15 || rng() < 0.5) opts.push('beam');
+      do kind = pick(opts);
+      while (kind === lastPiece || (lastPiece === 'pallets' && kind === 'soggy'));
     }
-  // A big concrete block halfway (checkpoint)
-  const mid = kit.addPlatform('br_w_island1', lineX(WZ0 + 40), 2.0, WZ0 + 40, 6, 6, 11, concB);
-  addTape(mid.mesh, 6, 6, tapeMat);
-  // Pallets hanging from chains, sliding sideways
-  const pallets: PlatformItem[] = [];
-  [46, 50, 54].forEach((dz, k) => {
-    const pl = kit.addPlatform(`br_w_pallet${k}`, lineX(WZ0 + dz), 2.0, WZ0 + dz, 2.2, 2.2, 0.3, crateB);
-    addTape(pl.mesh, 2.2, 2.2, tapeMat);
-    for (const [cx, cz] of [
-      [0.9, 0.9],
-      [-0.9, -0.9],
-    ]) {
-      const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, WH - 2.2, 4), metalMat);
-      chain.position.set(cx, (WH - 2.2) / 2, cz);
-      pl.mesh.add(chain);
+    lastPiece = kind;
+    if (kind === 'crates') {
+      const n = 2 + Math.floor(rng() * 3);
+      for (let k = 0; k < n; k++) landings.push(piece(1.6, 1.6, crateB, 1.2, gap()));
+    } else if (kind === 'shelf') {
+      const s = piece(6 + rng() * 3, 1.5, metalB, 0.6, gap(1.1));
+      landings.push(s);
+      for (let k = 0; k < 3; k++) {
+        // boxes on the lower shelves (looks)
+        const box = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.9), crateMat);
+        box.position.set(s.position.x + (k % 2 ? 0.95 : -0.95), s.position.y - 1.6 - k * 1.7, s.position.z - s.size.z / 3 + k * (s.size.z / 3));
+        root.add(box);
+      }
+    } else if (kind === 'beam') {
+      // A narrow steel beam: walk it carefully
+      landings.push(piece(5 + rng() * 2, 0.7, metalB, 0.3, gap(1.0)));
+    } else if (kind === 'pallets') {
+      // Pallets hanging from chains, sliding sideways (same height: you can't see far in the dark)
+      const n = 2 + Math.floor(rng() * 2);
+      const top = ctop;
+      for (let k = 0; k < n; k++) {
+        const pl = piece(2.2, 2.2, crateB, 0, 1.6 + rng() * 0.3, top, 0.3);
+        for (const [cx, cz2] of [
+          [0.9, 0.9],
+          [-0.9, -0.9],
+        ]) {
+          const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, WH - top, 4), metalMat);
+          chain.position.set(cx, (WH - top) / 2, cz2);
+          pl.mesh.add(chain);
+        }
+        kit.makeMoving(pl, 'x', 3.0, 0.9 + 0.25 * k + 0.4 * diff, rng() * 6);
+      }
+      // and something solid right after
+      landings.push(piece(2.4, 2.4, crateB, 0.4, gap(1.0)));
+    } else if (kind === 'soggy') {
+      // Soggy cardboard boxes: they give way a moment after you land
+      const n = 2 + Math.floor(rng() * 2);
+      for (let k = 0; k < n; k++) kit.makeCrumbling(piece(1.6, 1.6, crateB, 1.0, gap(0.8), undefined, 1.0));
+    } else {
+      const b = piece(4 + rng() * 2, 4 + rng() * 2, concB, 0.8, gap(1.1));
+      landings.push(b);
+      if (!midIsland) midIsland = b;
     }
-    kit.makeMoving(pl, 'x', 3.0, 0.9 + 0.25 * k + 0.4 * diff, k * 2.1);
-    pallets.push(pl);
-  });
-  const island2 = kit.addPlatform('br_w_island2', lineX(WZ0 + 59), 2.4, WZ0 + 59, 5, 4, 11.4, concB);
-  addTape(island2.mesh, 5, 4, tapeMat);
-  // Soggy cardboard boxes: they give way a moment after you land
-  [63.4, 65.8, 68.2].forEach((dz, k) => {
-    const bx = step(`br_w_box${k}`, WZ0 + dz, 2.8 + k * 0.4, 1.6, 1.6, crateB, 1.0, 1.0);
-    kit.makeCrumbling(bx);
-  });
-  step('br_w_last', WZ0 + 70.6, 4.0, 2, 2, crateB, 0.4);
-  // Mezzanine at the far end, with the door to the red corridor
-  const MEZ_D = 12;
+  }
+  // Last steps up to the mezzanine
+  while (ctop < MEZ_Y - 0.55) landings.push(piece(1.8, 1.8, crateB, 0.4, gap(0.9), Math.min(MEZ_Y - 0.3, ctop + 0.5)));
+  const WZ1 = cz + 1.3 + MEZ_D;
+  const WL = WZ1 - WZ0;
   const mezz = kit.addPlatform('br_w_mezz', 0, MEZ_Y, WZ1 - MEZ_D / 2, WX * 2, MEZ_D, 13.4, metalB);
   addTape(mezz.mesh, WX * 2, MEZ_D, tapeMat);
   const rail = new THREE.Mesh(new THREE.BoxGeometry(WX * 2, 0.08, 0.08), metalMat);
   rail.position.set(0, MEZ_Y + 1, WZ1 - MEZ_D + 0.1);
   root.add(rail);
+  const mid = midIsland ?? landings[Math.floor(landings.length / 2)];
   // Walls and ceiling
   wall('br_w_s1', -WX, WZ0, exitX - 1.8, WZ0, WH, -9.5, concWallB);
   wall('br_w_s2', exitX + 1.8, WZ0, WX, WZ0, WH, -9.5, concWallB);
@@ -1299,47 +1678,77 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
       lamp.position.set(x, WH - 1, z);
       root.add(lamp);
     }
-  relic(lineX(WZ0 + 12.2), 1.0, WZ0 + 12.2);
-  relic(shelfB.position.x, 2.6, WZ0 + 33);
-  relic(mid.position.x + 2, 2.0, WZ0 + 41.5);
+  // Relics on a few of the pieces
+  const relicSpots = landings.filter((l) => l !== mid).sort(() => rng() - 0.5);
+  for (const l of relicSpots.slice(0, 3)) relic(l.position.x, l.position.y, l.position.z);
+  relic(mid.position.x + 1.2, mid.position.y, mid.position.z + 1.2);
   relic(-doorX * 0.5, MEZ_Y, WZ1 - 3);
   kit.addCheckpoint(2, 'El almacén', new THREE.Vector3(exitX + 3, 0, WZ0 + 2), new THREE.Vector3(exitX, 0.2, WZ0 + 2.2));
-  kit.addCheckpoint(3, 'Mitad del almacén', new THREE.Vector3(mid.position.x + 2, 2.0, WZ0 + 38.5), new THREE.Vector3(mid.position.x, 2.2, WZ0 + 39));
+  kit.addCheckpoint(
+    3,
+    'Mitad del almacén',
+    new THREE.Vector3(mid.position.x + Math.max(0, mid.size.x / 2 - 1.0), mid.position.y, mid.position.z + Math.max(0, mid.size.z / 2 - 1.0)),
+    new THREE.Vector3(mid.position.x - 0.6, mid.position.y + 0.2, mid.position.z - 0.6)
+  );
   kit.addCheckpoint(4, 'Pasillo de emergencia', new THREE.Vector3(doorX + 3.2, MEZ_Y, WZ1 - 2.2), new THREE.Vector3(doorX, MEZ_Y + 0.2, WZ1 - 2.5));
 
   // ======================================================================
   // 3. ¡CORRE! — the red corridor. It repeats forever… until you pull the 3 levers hidden
-  //    in nooks along the walls. Light orbs (granadas de luz) blind the Corredor for a while.
+  //    in nooks along the walls (each stretch has its nook, its hole and its hurdle in a
+  //    different place). Then the door at the end opens onto the run.
   // ======================================================================
   const CZ0 = WZ1;
   const CY = MEZ_Y;
-  const SEG = 18;
+  const SEG = 16 + Math.floor(rng() * 5);
   const LZ0 = CZ0 + 10;
   const NSEG = 4; // 0-2 real, 3 = a copy of 0 (what you see ahead before the loop takes you back)
   const CEND = LZ0 + NSEG * SEG;
   const corrLamp = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
   const corrCeil = new THREE.MeshStandardMaterial({ color: 0x3b2222, roughness: 1, side: THREE.DoubleSide });
   const cw = (id: string, z0: number, z1: number, side: number) => wall(id, doorX + side * 1.8, z0, doorX + side * 1.8, z1, CY + 4.2, CY - 9.5);
+  // The corridor floor glows a little red, so the holes (pitch black) stand out while you run
+  const redCarpetBase = P.build(new THREE.MeshStandardMaterial({ map: P.carpetMat.map, color: 0xd9c7a6, emissive: 0x3a120a, emissiveIntensity: 1, roughness: 1 }), 2.2, false);
+  // (no shadows on it: the walls' shadow made a black stripe that looked like a hole)
+  const redCarpetB: Builder = (g, w, d, h) => {
+    redCarpetBase(g, w, d, h);
+    g.traverse((o) => (o.receiveShadow = false));
+  };
   // Entrance stretch
-  kit.addPlatform('br_c_floorA', doorX, CY, (CZ0 + LZ0) / 2, 3.6, LZ0 - CZ0, 0.5, carpetB);
+  kit.addPlatform('br_c_floorA', doorX, CY, (CZ0 + LZ0) / 2, 3.6, LZ0 - CZ0, 0.5, redCarpetB);
   cw('br_c_wA', CZ0, LZ0, -1);
   cw('br_c_eA', CZ0, LZ0, 1);
-  // The repeating stretches
+  // Where the nook, the hole and the hurdle are in each stretch
+  const NOOK_W = 2.4;
+  const layouts = [0, 1, 2].map(() => {
+    const side = rng() < 0.5 ? -1 : 1;
+    const n0 = 1.5 + rng() * (SEG - 4.5);
+    const nook: [number, number] = [n0, n0 + NOOK_W];
+    const holeLen = 1.8 + rng() * 0.5 + diff * 0.4;
+    const holeOpts: number[] = [];
+    for (let h = 1.5; h + holeLen < SEG - 1.5; h += 0.5) if (h > nook[1] + 0.8 || h + holeLen < nook[0] - 0.8) holeOpts.push(h);
+    const h0 = holeOpts.length ? pick(holeOpts) : SEG - holeLen - 1.5;
+    const hole: [number, number] = [h0, h0 + holeLen];
+    const hurdleOpts: number[] = [];
+    for (let u = 1; u < SEG - 1; u += 0.5) if ((u < hole[0] - 1.6 || u > hole[1] + 1.6) && (u < nook[0] - 0.4 || u > nook[1] + 0.4)) hurdleOpts.push(u);
+    const hurdle = hurdleOpts.length ? pick(hurdleOpts) : -1;
+    return { side, nook, hole, hurdle };
+  });
+  layouts.push(layouts[0]);
   const levers: CorridorInfo['levers'] = [];
-  const NOOK0 = 2.4;
-  const NOOK1 = 4.8;
   for (let k = 0; k < NSEG; k++) {
     const z = LZ0 + k * SEG;
-    const side = k === 1 ? 1 : -1;
-    kit.addPlatform(`br_c_f${k}a`, doorX, CY, z + 3.7, 3.6, 7.4, 0.5, carpetB);
-    kit.addPlatform(`br_c_f${k}b`, doorX, CY, z + 13.8, 3.6, 8.4, 0.5, carpetB);
-    kit.addPlatform(`br_c_h${k}`, doorX, CY + 0.75, z + 13.5, 3.6, 0.5, 0.75, crateB);
+    const L = layouts[k];
+    const side = L.side;
+    const [NOOK0, NOOK1] = L.nook;
+    kit.addPlatform(`br_c_f${k}a`, doorX, CY, z + L.hole[0] / 2, 3.6, L.hole[0], 0.5, redCarpetB);
+    kit.addPlatform(`br_c_f${k}b`, doorX, CY, z + (L.hole[1] + SEG) / 2, 3.6, SEG - L.hole[1], 0.5, redCarpetB);
+    if (L.hurdle > 0) kit.addPlatform(`br_c_h${k}`, doorX, CY + 0.75, z + L.hurdle, 3.6, 0.5, 0.75, crateB);
     // Wall with a nook on one side
     cw(`br_c_s${k}a`, z, z + NOOK0, side);
     cw(`br_c_s${k}b`, z + NOOK1, z + SEG, side);
     cw(`br_c_o${k}`, z, z + SEG, -side);
     const nx = doorX + side * 3.0;
-    kit.addPlatform(`br_c_nook${k}`, nx, CY, z + (NOOK0 + NOOK1) / 2, 2.4, NOOK1 - NOOK0, 0.5, carpetB);
+    kit.addPlatform(`br_c_nook${k}`, nx, CY, z + (NOOK0 + NOOK1) / 2, 2.4, NOOK1 - NOOK0, 0.5, redCarpetB);
     wall(`br_c_nb${k}`, doorX + side * 4.2, z + NOOK0, doorX + side * 4.2, z + NOOK1, CY + 4.2, CY - 0.6);
     wall(`br_c_ns${k}`, doorX + side * 1.8, z + NOOK0, doorX + side * 4.2, z + NOOK0, CY + 4.2, CY - 0.6);
     wall(`br_c_nn${k}`, doorX + side * 1.8, z + NOOK1, doorX + side * 4.2, z + NOOK1, CY + 4.2, CY - 0.6);
@@ -1357,23 +1766,148 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
       root.add(lamp);
     }
   }
-  wall('br_c_n', doorX - 1.8, CEND + 2, doorX + 1.8, CEND + 2, CY + 4.2, CY - 0.6);
-  cw('br_c_wE', CEND, CEND + 2, -1);
-  cw('br_c_eE', CEND, CEND + 2, 1);
-  kit.addPlatform('br_c_floorE', doorX, CY, CEND + 1, 3.6, 2, 0.5, carpetB);
-  ceiling(doorX - 1.8, CZ0, doorX + 1.8, CEND + 2, CY + 4.2, corrCeil, 2);
+  ceiling(doorX - 1.8, CZ0, doorX + 1.8, CEND, CY + 4.2, corrCeil, 2);
   voidPlane(doorX - 1.8, LZ0, doorX + 1.8, CEND, CY - 9);
-  // EXIT sign over the end door
+  // The door at the end of the loop, under a SALIDA sign: it slides down when the levers are pulled
+  const gatePlat = kit.addPlatform('br_c_gate', doorX, CY + 4.2, CEND, 3.6, 0.3, 4.7, () => {});
+  gatePlat.solid = true;
+  const gateMesh = new THREE.Group();
+  const gateBody = new THREE.Mesh(new THREE.BoxGeometry(3.6, 4.2, 0.25), new THREE.MeshStandardMaterial({ color: 0x7c8087, metalness: 0.6, roughness: 0.45 }));
+  gateBody.position.set(doorX, CY + 2.1, CEND);
+  for (let k = 0; k < 5; k++) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.12, 0.05), new THREE.MeshBasicMaterial({ color: k % 2 ? 0x111111 : 0xfacc15 }));
+    stripe.position.set(doorX, CY + 0.4 + k * 0.16, CEND - 0.15);
+    gateMesh.add(stripe);
+  }
+  gateMesh.add(gateBody);
+  root.add(gateMesh);
+  const gateSign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.6), new THREE.MeshBasicMaterial({ map: exitTex() }));
+  gateSign.position.set(doorX, CY + 3.7, CEND - 0.2);
+  gateSign.rotation.y = Math.PI;
+  root.add(gateSign);
+
+  // ======================================================================
+  // 4. THE RUN — behind the door: a long corridor full of hurdles, holes, crates sliding across,
+  //    floors that fall apart and columns. La Araña follows you all the way (it crosses the
+  //    holes on the ceiling). Every level puts the obstacles in a different order.
+  // ======================================================================
+  const RZ0 = CEND;
+  const RW = 4.0;
+  const runLamp = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
+  /** Holes, and stretches with something in the way: the spider crosses them on the ceiling */
+  const gaps: [number, number][] = [];
+  let rz = RZ0;
+  let rn = 0;
+  const runFloor = (len: number) => {
+    kit.addPlatform(`br_r_f${rn++}`, doorX, CY, rz + len / 2, RW, len, 0.5, redCarpetB);
+    rz += len;
+  };
+  const hurdle = (zc: number, h: number) => {
+    gaps.push([zc - 0.5, zc + 0.5]);
+    const p = kit.addPlatform(`br_r_h${rn++}`, doorX, CY + h, zc, RW, 0.45, h, crateB);
+    addTape(p.mesh, RW, 0.45, tapeMat);
+  };
+  const edgeTape = (zz: number) => {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(RW, 0.05, 0.12), tapeMat);
+    t.position.set(doorX, CY + 0.02, zz);
+    root.add(t);
+  };
+  runFloor(10); // a breath before it starts (the checkpoint is here)
+  type RunPiece = 'valla' | 'doble' | 'hueco' | 'escalon' | 'pilares' | 'deslizante' | 'cae';
+  const runOpts: RunPiece[] = ['valla', 'doble', 'hueco', 'hueco', 'escalon', 'pilares', 'deslizante', 'cae'];
+  const nRun = 9 + Math.round(diff * 5) + Math.floor(rng() * 2);
+  let lastRun: RunPiece | '' = '';
+  for (let k = 0; k < nRun; k++) {
+    let kind: RunPiece;
+    do kind = pick(runOpts);
+    while (kind === lastRun);
+    lastRun = kind;
+    if (kind === 'valla') {
+      // a barrier across the whole corridor: jump it
+      const z0 = rz;
+      runFloor(7);
+      hurdle(z0 + 3.5, 0.8 + rng() * 0.25 + diff * 0.1);
+    } else if (kind === 'doble') {
+      const z0 = rz;
+      runFloor(10);
+      hurdle(z0 + 3, 0.8 + rng() * 0.2);
+      hurdle(z0 + 6.6, 0.8 + rng() * 0.2);
+    } else if (kind === 'hueco') {
+      // a hole in the floor
+      const g = 2.0 + rng() * 0.8 + diff * 0.8;
+      edgeTape(rz - 0.06);
+      gaps.push([rz, rz + g]);
+      rz += g;
+      edgeTape(rz + 0.06);
+      runFloor(5);
+    } else if (kind === 'escalon') {
+      // a pile of crates: up, up, and down again
+      const z0 = rz;
+      runFloor(10);
+      gaps.push([z0 + 2.4, z0 + 6.4]);
+      const a = kit.addPlatform(`br_r_s${rn++}`, doorX, CY + 0.75, z0 + 3, RW, 1.2, 0.75, crateB);
+      const b = kit.addPlatform(`br_r_s${rn++}`, doorX, CY + 1.45, z0 + 5.2, RW, 2.4, 1.45, crateB);
+      addTape(a.mesh, RW, 1.2, tapeMat);
+      addTape(b.mesh, RW, 2.4, tapeMat);
+    } else if (kind === 'pilares') {
+      // columns from alternating sides: zig-zag between them
+      const z0 = rz;
+      runFloor(12);
+      gaps.push([z0 + 2.5, z0 + 10.5]);
+      let s0 = rng() < 0.5 ? 1 : -1;
+      for (const dz of [3, 6.5, 10]) {
+        kit.addPlatform(`br_r_c${rn++}`, doorX + s0 * (RW / 2 - 1.1), CY + 4.2, z0 + dz, 2.2, 0.8, 4.7, wallB).solid = true;
+        s0 = -s0;
+      }
+    } else if (kind === 'deslizante') {
+      // a crate sliding from wall to wall: time it or jump it
+      const z0 = rz;
+      runFloor(9);
+      gaps.push([z0 + 3.6, z0 + 5.4]);
+      const box = kit.addPlatform(`br_r_d${rn++}`, doorX, CY + 1.0, z0 + 4.5, 1.3, 1.3, 1.0, crateB);
+      addTape(box.mesh, 1.3, 1.3, tapeMat);
+      kit.makeMoving(box, 'x', RW / 2 - 0.75, 1.8 + diff * 0.8, rng() * 6);
+    } else {
+      // floor tiles over the void that fall apart once you step on them: don't stop
+      const z0 = rz;
+      edgeTape(z0 - 0.06);
+      for (let t = 0; t < 3; t++) {
+        const tile = kit.addPlatform(`br_r_t${rn++}`, doorX, CY, z0 + 1.1 + t * 2.35, RW - 0.2, 2.2, 0.5, redCarpetB);
+        kit.makeCrumbling(tile);
+      }
+      rz = z0 + 7.0;
+      gaps.push([z0, rz]);
+      edgeTape(rz + 0.06);
+      runFloor(3);
+    }
+  }
+  runFloor(8); // the last stretch to the door
+  const REND = rz;
+  // Walls, the joint with the corridor, ceiling, lamps, the void under the holes
+  wall('br_r_w', doorX - RW / 2, RZ0, doorX - RW / 2, REND, CY + 4.2, CY - 9.5);
+  wall('br_r_e', doorX + RW / 2, RZ0, doorX + RW / 2, REND, CY + 4.2, CY - 9.5);
+  wall('br_r_jw', doorX - RW / 2, RZ0, doorX - 1.8, RZ0, CY + 4.2, CY - 9.5);
+  wall('br_r_je', doorX + 1.8, RZ0, doorX + RW / 2, RZ0, CY + 4.2, CY - 9.5);
+  wall('br_r_n', doorX - RW / 2, REND, doorX + RW / 2, REND, CY + 4.2, CY - 0.6);
+  ceiling(doorX - RW / 2, RZ0, doorX + RW / 2, REND, CY + 4.2, corrCeil, 2);
+  voidPlane(doorX - RW / 2, RZ0, doorX + RW / 2, REND, CY - 9);
+  for (let u = RZ0 + 3; u < REND; u += 5) {
+    const lamp = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 1.6), runLamp);
+    lamp.rotation.x = Math.PI / 2;
+    lamp.position.set(doorX, CY + 4.18, u);
+    root.add(lamp);
+  }
+  kit.addCheckpoint(5, '¡Corre!', new THREE.Vector3(doorX + 1.3, CY, RZ0 + 4), new THREE.Vector3(doorX - 0.8, CY + 0.2, RZ0 + 2.5));
+  // The real EXIT, at the very end
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.8), new THREE.MeshBasicMaterial({ map: exitTex() }));
-  sign.position.set(doorX, CY + 3.4, CEND + 1.75);
+  sign.position.set(doorX, CY + 3.4, REND - 0.25);
   sign.rotation.y = Math.PI;
   root.add(sign);
   const door = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.6, 0.12), new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.6, roughness: 0.4 }));
-  door.position.set(doorX, CY + 1.3, CEND + 1.9);
+  door.position.set(doorX, CY + 1.3, REND - 0.1);
   root.add(door);
   relic(doorX, CY, CZ0 + 6);
-  relic(doorX, CY, LZ0 + SEG + 11);
-  relic(island2.position.x, 2.4, WZ0 + 59);
+  relic(doorX, CY, LZ0 + SEG + (layouts[1].hole[0] > 3 ? 1.2 : SEG - 1.2));
   relic(keyAt.x + 1.5, 0, keyAt.z + 1.5);
 
   // ======================================================================
@@ -1385,7 +1919,18 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
     maze,
     cameraColliders.filter((o) => o instanceof THREE.Mesh && (o as THREE.Mesh).material === wallMat),
     { minX: -WX, maxX: WX, minZ: WZ0, maxZ: WZ1 - 0.5, lamps: wareLamp },
-    { x: doorX, z0: CZ0, loopZ0: LZ0, seg: SEG, y: CY, end: CEND, levers, lamps: corrLamp },
+    {
+      x: doorX,
+      z0: CZ0,
+      loopZ0: LZ0,
+      seg: SEG,
+      y: CY,
+      end: REND,
+      levers,
+      lamps: corrLamp,
+      gate: { plat: gatePlat, mesh: gateMesh, top: CY + 4.2, t: 0 },
+      run: { z0: RZ0, z1: REND, gaps, lamps: runLamp, ceilY: CY + 4.15 },
+    },
     { plat: doorPlat, mesh: doorMesh, light: doorLightMat, pos: new THREE.Vector3(exitX, WALL_H, ZE), open: false, openT: 0, hintCd: 0 },
     [lampFlickA, lampFlickB]
   );
@@ -1394,7 +1939,7 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
   const farCells: [number, number][] = [];
   for (let i = 0; i < NX; i++) for (let j = 2; j < NZ; j++) if (i !== keyCell[0] || j !== keyCell[1]) farCells.push([i, j]);
   shuffled(farCells);
-  const nMannequins = 2 + Math.round(diff * 2);
+  const nMannequins = 2 + Math.round(diff * 2) + (NX * NZ > 60 ? 1 : 0);
   const nCrawlers = 1 + Math.round(diff);
   let fc = 0;
   for (let k = 0; k < nMannequins; k++) {
@@ -1406,15 +1951,15 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
     hazards.add(root, 'gateador', cellCenter(i, j));
   }
   // Sonrisas wait up in the dark, over the pit
-  const nSmiles = 4 + Math.round(diff * 2);
+  const nSmiles = 4 + Math.round(diff * 2) + Math.floor(WL / 40);
   for (let k = 0; k < nSmiles; k++) {
     const z = WZ0 + 14 + (k / Math.max(1, nSmiles - 1)) * (WL - 26);
     const x = (k % 2 ? 1 : -1) * (6 + rng() * 9);
     hazards.add(root, 'sonrisa', new THREE.Vector3(x, 6.5 + rng() * 2, z));
   }
-  hazards.add(root, 'corredor', new THREE.Vector3(doorX, CY, CZ0 - 1));
+  hazards.add(root, 'arana', new THREE.Vector3(doorX, CY, CZ0 - 1));
 
-  const summit = new THREE.Vector3(doorX, CY + 0.2, CEND + 0.6);
+  const summit = new THREE.Vector3(doorX, CY + 0.2, REND - 0.8);
   const items: ItemSpot[] = [
     { type: 'llave', pos: new THREE.Vector3(keyAt.x, 0.95, keyAt.z) },
     { type: 'baya', pos: new THREE.Vector3(-3.5, 0.95, -6.5) },
@@ -1425,8 +1970,9 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
     { type: 'luz', pos: new THREE.Vector3(exitX + 1.5, 0.95, WZ0 + 4.5) },
     { type: 'luz', pos: new THREE.Vector3(doorX + 2.5, MEZ_Y + 0.95, WZ1 - 4) },
     { type: 'luz', pos: new THREE.Vector3(doorX, CY + 0.95, CZ0 + 4) },
+    { type: 'luz', pos: new THREE.Vector3(doorX - 1, CY + 0.95, RZ0 + 6) },
   ];
-  const world = kit.finish(summit, enemies, items, new THREE.Vector3(doorX + 1.2, CY + 1.2, CEND - 3));
+  const world = kit.finish(summit, enemies, items, new THREE.Vector3(doorX + 1.2, CY + 1.2, REND - 3));
   world.levelName = `Los Backrooms · Nivel ${level}`;
   world.summitName = 'SALIDA';
   world.hazards = hazards;
