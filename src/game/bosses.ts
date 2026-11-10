@@ -3368,8 +3368,11 @@ class DraculaBoss extends BossController {
  * staring · feint: it rushes at you and stops short · call: it screams and copies crawl out of the
  * wall corners next to you · hunt: it stopped playing (the real attack: windup → lunge)
  */
-type SkinState = 'intro' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'scared' | 'hurt' | 'mimic' | 'tear' | 'stalk' | 'peek' | 'feint' | 'call';
-const SKIN_STATES: SkinState[] = ['intro', 'hunt', 'windup', 'lunge', 'recover', 'scared', 'hurt', 'mimic', 'tear', 'stalk', 'peek', 'feint', 'call'];
+type SkinState = 'intro' | 'hunt' | 'windup' | 'lunge' | 'recover' | 'scared' | 'hurt' | 'mimic' | 'tear' | 'stalk' | 'peek' | 'feint' | 'call' | 'escape' | 'gone' | 'arrive';
+const SKIN_STATES: SkinState[] = ['intro', 'hunt', 'windup', 'lunge', 'recover', 'scared', 'hurt', 'mimic', 'tear', 'stalk', 'peek', 'feint', 'call', 'escape', 'gone', 'arrive'];
+/** escape: it opens a portal in a wall or the floor and goes through · gone: away · arrive: it climbs out of a portal somewhere else */
+const ESCAPE_T = 1.6;
+const ARRIVE_T = 1.4;
 /** First number of a boss snapshot from the party host (the rest of that channel is for spectators) */
 export const BOSS_SYNC_MARK = -7777;
 /** What the AI director (xAI, on the server) can tell a copy to do */
@@ -3544,6 +3547,14 @@ class SkinwalkerBoss extends BossController {
   private peekStanding = false;
   private prevPos = V();
   private moveK = 0;
+  // ---- Escaping through a portal (instead of running away) ----
+  /** Where the portal opened (normal 0,0,0 = in the floor) */
+  private portalAt: { pos: THREE.Vector3; normal: THREE.Vector3 } | null = null;
+  private portals: { g: THREE.Group; k: number; open: boolean; rings: THREE.Mesh[] }[] = [];
+  private curPortal: { g: THREE.Group; k: number; open: boolean; rings: THREE.Mesh[] } | null = null;
+  private escapeAway = 0;
+  /** How far it has sunk into the floor (portal) */
+  private sinkY = 0;
   // ---- Copies that fuse into the Nahual ----
   private nahuales: Nahual[] = [];
   private gatherAt: THREE.Vector3 | null = null;
@@ -3750,7 +3761,7 @@ class SkinwalkerBoss extends BossController {
   syncPayload(): number[] | null {
     if (this.dead || this.following) return null;
     const r = (n: number) => Math.round(n * 100) / 100;
-    const w = this.tearAt;
+    const w = this.state === 'escape' || this.state === 'arrive' ? this.portalAt : this.tearAt;
     return [
       BOSS_SYNC_MARK,
       r(this.pos.x),
@@ -3814,6 +3825,13 @@ class SkinwalkerBoss extends BossController {
       this.startTear({ pos: V(d[8], this.s.floorY, d[9]), normal: V(d[10], 0, d[11]) });
       return;
     }
+    if (st === 'escape' || st === 'arrive') {
+      this.portalAt = { pos: V(d[8], this.s.floorY, d[9]), normal: V(d[10], 0, d[11]) };
+      this.openPortal(this.portalAt);
+      if (st === 'arrive') this.pos.copy(this.syncPos);
+    }
+    if (prev === 'escape' && this.curPortal) this.curPortal.open = false;
+    if (prev === 'arrive' && this.curPortal) this.curPortal.open = false;
     this.state = st;
     if (st === 'windup' && prev !== 'tear') this.scream(0.55);
     if (st === 'lunge') {
@@ -4023,12 +4041,12 @@ class SkinwalkerBoss extends BossController {
     const tp = T ? T.pos : p;
     const dT = Math.hypot(tp.x - this.pos.x, tp.z - this.pos.z);
     // Dim rooms; darker when it's close; pitch black in a blackout
-    this.c.darknessTarget = this.lightsOff ? 0.93 : this.state === 'scared' ? 0.35 : d < 9 ? 0.55 + Math.max(0, Math.sin(time * 17)) * 0.15 : 0.45;
+    this.c.darknessTarget = this.lightsOff ? 0.93 : this.state === 'scared' || this.state === 'gone' ? 0.35 : d < 9 ? 0.55 + Math.max(0, Math.sin(time * 17)) * 0.15 : 0.45;
     if (!follow) this.updateRage(dt);
     // Music: heartbeat and strings the closer it (or a werewolf copy) is
     let tension = this.lightsOff ? 0.6 : 0;
     if (this.state === 'windup' || this.state === 'lunge' || this.state === 'tear' || this.state === 'feint' || this.state === 'call') tension = 1;
-    else if (this.state !== 'scared' && this.state !== 'intro') tension = Math.max(tension, 1 - Math.max(0, d - 4) / 24);
+    else if (this.state !== 'scared' && this.state !== 'intro' && this.state !== 'gone') tension = Math.max(tension, 1 - Math.max(0, d - 4) / 24);
     for (const cp of this.copies) if (cp.phase === 'hunt' || cp.phase === 'distort' || cp.phase === 'emerge' || cp.phase === 'merge') tension = Math.max(tension, 1 - cp.pos.distanceTo(p) / 20);
     for (const nh of this.nahuales) if (nh.state !== 'die') tension = Math.max(tension, 1 - nh.pos.distanceTo(p) / 26);
     soundManager.setTension(tension);
@@ -4178,6 +4196,50 @@ class SkinwalkerBoss extends BossController {
           this.yaw = turnTo(this.yaw, Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z), 6, dt);
           if (this.t <= 0) this.state = 'stalk';
           break;
+        case 'escape': {
+          // Into the portal: through the wall, or sinking into the floor
+          const at = this.portalAt;
+          const k = 1 - this.t / ESCAPE_T;
+          if (at && at.normal.lengthSq() > 0.01) {
+            const front = V(at.pos.x + at.normal.x * 0.7, this.s.floorY, at.pos.z + at.normal.z * 0.7);
+            const inside = V(at.pos.x - at.normal.x * 1.2, this.s.floorY, at.pos.z - at.normal.z * 1.2);
+            const goal = k < 0.45 ? front : inside;
+            const dx = goal.x - this.pos.x;
+            const dz = goal.z - this.pos.z;
+            const d = Math.hypot(dx, dz);
+            if (d > 0.05) {
+              const step = Math.min(d, (k < 0.45 ? 6 : 2.2) * dt);
+              this.pos.x += (dx / d) * step;
+              this.pos.z += (dz / d) * step;
+            }
+            this.yaw = turnTo(this.yaw, Math.atan2(-at.normal.x, -at.normal.z), 8, dt);
+          } else this.yaw += dt * 2.5;
+          if (this.t <= 0) {
+            this.state = 'gone';
+            this.t = this.escapeAway;
+            if (this.curPortal) this.curPortal.open = false;
+          }
+          break;
+        }
+        case 'gone':
+          if (this.t <= 0) {
+            // It climbs out of another portal, far from everybody
+            this.pos.copy(this.arrivalSpot());
+            this.portalAt = { pos: this.pos.clone(), normal: V(0, 0, 0) };
+            this.openPortal(this.portalAt);
+            this.state = 'arrive';
+            this.t = ARRIVE_T;
+          }
+          break;
+        case 'arrive':
+          this.yaw = turnTo(this.yaw, Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z), 3, dt);
+          if (this.t <= 0) {
+            if (this.curPortal) this.curPortal.open = false;
+            this.state = 'stalk';
+            this.lurkTo = null;
+            this.c.say(this.has('daga') ? 'Volvió por otro lado… tienes la daga: espera a que se acerque' : 'Volvió a salir de un portal… y aún no tienes la daga', 'skin-back', 2);
+          }
+          break;
         case 'hunt': {
           // It stopped playing… but if it can't reach you in a while, it goes back to stalking
           if (this.t <= 0 && dT > 6) {
@@ -4300,7 +4362,24 @@ class SkinwalkerBoss extends BossController {
       }
     }
 
+    // Through the portal: it sinks into the floor (or walks into the wall), hidden while it's away
+    this.updatePortals(dt);
+    let sink = 0;
+    if (this.state === 'escape') {
+      const k = 1 - this.t / ESCAPE_T;
+      const floor = !this.portalAt || this.portalAt.normal.lengthSq() < 0.01;
+      sink = floor ? -Math.max(0, (k - 0.3) / 0.7) * 3.4 : 0;
+      this.m.group.visible = floor ? k < 0.98 : k < 0.9;
+    } else if (this.state === 'gone') {
+      sink = -3.4;
+      this.m.group.visible = false;
+    } else if (this.state === 'arrive') {
+      sink = -3.4 * (1 - ease(Math.min(1, 1 - this.t / ARRIVE_T)));
+      this.m.group.visible = true;
+    }
+    this.sinkY = sink;
     this.group.position.copy(this.pos);
+    this.group.position.y += this.sinkY;
     this.group.rotation.y = this.yaw;
     this.center.copy(this.pos).add(V(0, 1.9 - 0.6 * this.crawlK, 0));
   }
@@ -4578,6 +4657,82 @@ class SkinwalkerBoss extends BossController {
     if (this.copy) this.endMimic(false), (this.state = 'scared');
     this.scream(0.9);
     this.ensureDagger();
+    // Sometimes it runs away… other times it opens a portal in a wall or the floor and escapes
+    if (Math.random() < 0.5) this.startEscape(this.t + 2);
+  }
+
+  /** It tears a portal open (in the nearest wall, or under its feet) and goes through it. */
+  private startEscape(away: number) {
+    const w = this.s.wallNear?.(this.pos) ?? null;
+    const floor = !w || Math.random() < 0.5 || Math.hypot(w.pos.x - this.pos.x, w.pos.z - this.pos.z) > 4;
+    this.portalAt = floor ? { pos: V(this.pos.x, this.s.floorY, this.pos.z), normal: V(0, 0, 0) } : { pos: w!.pos.clone(), normal: w!.normal.clone() };
+    this.state = 'escape';
+    this.t = ESCAPE_T;
+    this.escapeAway = away;
+    this.openPortal(this.portalAt);
+    if (this.dist() < 24) this.c.say(floor ? '¡Abrió un portal en el suelo y se está hundiendo en él!' : '¡Abrió un portal en la pared y se mete por ahí!', 'skin-portal', 2);
+  }
+
+  /** A swirling dark portal, in a wall (a tall oval) or flat on the floor. */
+  private openPortal(at: { pos: THREE.Vector3; normal: THREE.Vector3 }) {
+    if (this.curPortal) this.curPortal.open = false;
+    const g = new THREE.Group();
+    const floor = at.normal.lengthSq() < 0.01;
+    const hole = new THREE.Mesh(new THREE.CircleGeometry(1.15, 40), new THREE.MeshBasicMaterial({ color: 0x040106 }));
+    g.add(hole);
+    const rings: THREE.Mesh[] = [];
+    [1.18, 0.98, 0.76, 0.52].forEach((r, k) => {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(r, 0.05 + 0.02 * (k % 2), 6, 40, Math.PI * (1.2 + 0.25 * k)),
+        new THREE.MeshBasicMaterial({ color: k % 2 ? 0xb91c1c : 0x7c3aed, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
+      );
+      ring.position.z = 0.01 + k * 0.005;
+      g.add(ring);
+      rings.push(ring);
+    });
+    const holder = new THREE.Group();
+    holder.add(g);
+    if (floor) {
+      g.rotation.x = -Math.PI / 2;
+      holder.position.set(at.pos.x, this.s.floorY + 0.03, at.pos.z);
+    } else {
+      g.scale.set(1, 1.5, 1);
+      holder.position.copy(at.pos).addScaledVector(at.normal, 0.04);
+      holder.position.y = this.s.floorY + 1.75;
+      holder.rotation.y = Math.atan2(at.normal.x, at.normal.z);
+    }
+    holder.scale.setScalar(0.01);
+    this.root.add(holder);
+    const portal = { g: holder, k: 0, open: true, rings };
+    this.portals.push(portal);
+    this.curPortal = portal;
+    const vol = Math.max(0.2, 1 - at.pos.distanceTo(this.c.playerPos) / 30);
+    soundManager.playRumble(vol);
+    soundManager.playWhisper(vol);
+  }
+
+  /** Portals swirl, open and close. */
+  private updatePortals(dt: number) {
+    for (let i = this.portals.length - 1; i >= 0; i--) {
+      const pt = this.portals[i];
+      pt.k = THREE.MathUtils.damp(pt.k, pt.open ? 1 : 0, pt.open ? 5 : 4, dt);
+      pt.g.scale.setScalar(Math.max(0.01, pt.k));
+      pt.rings.forEach((r, k) => (r.rotation.z += dt * (k % 2 ? -3 : 4) * (1 + k * 0.3)));
+      if (!pt.open && pt.k < 0.03) {
+        disposeGroup(this.root, pt.g);
+        this.portals.splice(i, 1);
+        if (this.curPortal === pt) this.curPortal = null;
+      }
+    }
+  }
+
+  /** Somewhere away from everybody, to climb out of a portal. */
+  private arrivalSpot(): THREE.Vector3 {
+    const players = [this.c.playerPos, ...this.c.deps.remotes().map((r) => r.pos)];
+    const cd = this.s.cellDist;
+    const spots = (this.s.searchSpots ?? []).filter((q) => players.every((pp) => (cd ? cd(q, pp) >= 4 : Math.hypot(q.x - pp.x, q.z - pp.z) > 22)));
+    const pick = spots.length ? spots[Math.floor(Math.random() * spots.length)] : this.fleeTo;
+    return V(pick.x, this.s.floorY, pick.z);
   }
 
   /**
@@ -5569,7 +5724,7 @@ class SkinwalkerBoss extends BossController {
       return 'wear';
     }
     if (type === 'daga') {
-      if (d > 3.3 || this.state === 'intro') {
+      if (d > 3.3 || this.state === 'intro' || this.state === 'gone' || this.state === 'escape') {
         this.c.say('Acércate más… cuando se lance contra ti, ¡apuñálalo!', 'skin-dagger-far', 2);
         return 'none';
       }
@@ -5596,7 +5751,7 @@ class SkinwalkerBoss extends BossController {
 
   targets(out: AimTarget[]) {
     if (this.dead) return;
-    if (this.state !== 'tear')
+    if (this.state !== 'tear' && this.state !== 'gone' && this.state !== 'escape')
       out.push({
         pos: this.center,
         radius: 1.35,
@@ -5764,6 +5919,7 @@ class SkinwalkerBoss extends BossController {
     if (this.state === 'mimic') return '¿Eres tú? No te acerques: ¡espántalo o prepárate!';
     if (this.state === 'scared') return this.has('daga') ? 'Tienes la daga: espera a que vuelva' : 'Huyó: busca la daga de obsidiana (brillo morado)';
     if (this.state === 'hurt') return '¡Le diste! Ahora huirá un momento';
+    if (this.state === 'gone' || this.state === 'escape') return 'Se fue por un portal… volverá por otro lado. Aprovecha para buscar la daga (brillo morado)';
     if (this.nahuales.some((n) => n.state !== 'die')) return '¡Un Nahual! Pégale con el bate o piedras, usa el cráneo… o huye: no dura mucho';
     if (this.state === 'peek') return 'Te mira desde el fondo del pasillo… si vas hacia él, huye';
     if (this.state === 'feint') return '¡Viene corriendo! A veces solo juega contigo… a veces no';
@@ -5795,6 +5951,8 @@ class SkinwalkerBoss extends BossController {
     this.copies = [];
     for (const n of this.nahuales) disposeGroup(this.root, n.m.group);
     this.nahuales = [];
+    for (const pt of this.portals) disposeGroup(this.root, pt.g);
+    this.portals = [];
     super.dispose();
   }
 }
