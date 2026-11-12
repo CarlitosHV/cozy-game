@@ -14,6 +14,7 @@ export default function App() {
   const [gameState, setGameState] = useState<GameState>('title');
   const [checkpointName, setCheckpointName] = useState<string>('Pradera del Amanecer');
   const [checkpointIndex, setCheckpointIndex] = useState<number>(1);
+  const [checkpointTotal, setCheckpointTotal] = useState<number>(3);
   const [collectedCount, setCollectedCount] = useState<number>(0);
   const [totalCollectibles, setTotalCollectibles] = useState<number>(10);
   const [currentWeather, setCurrentWeather] = useState<WeatherType>('golden_hour');
@@ -29,7 +30,12 @@ export default function App() {
   const [isPortrait, setIsPortrait] = useState<boolean>(() => {
     return typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false;
   });
-  const [showEasterEgg, setShowEasterEgg] = useState(false);
+  const [easterEggData, setEasterEggData] = useState<{
+    title?: string;
+    message?: string;
+    badge?: string;
+    variant?: 'love' | 'secret';
+  } | null>(null);
 
   useEffect(() => {
     const handleFsChange = () => {
@@ -133,6 +139,9 @@ export default function App() {
   const [roomFinishNotice, setRoomFinishNotice] = useState<any | null>(null);
   const [deaths, setDeaths] = useState<number>(0);
   const [partyTimer, setPartyTimer] = useState<number | null>(null);
+  const [stamina, setStamina] = useState<number>(100);
+  const [maxStamina, setMaxStamina] = useState<number>(100);
+  const [staminaExhausted, setStaminaExhausted] = useState<boolean>(false);
 
   const weatherTimerRef = useRef<number | null>(null);
   const timeBonusTimerRef = useRef<number | null>(null);
@@ -143,9 +152,10 @@ export default function App() {
 
     const engine = new GameEngine(mountRef.current, {
       onStateChange: (state) => setGameState(state),
-      onCheckpointChange: (name, index) => {
+      onCheckpointChange: (name, index, total) => {
         setCheckpointName(name);
         setCheckpointIndex(index);
+        if (typeof total === 'number' && total > 0) setCheckpointTotal(total);
       },
       onCollectiblesChange: (collected, total) => {
         setCollectedCount(collected);
@@ -180,7 +190,7 @@ export default function App() {
         setStalkerDistance(distance);
         setStalkerWarningLevel(warningLevel);
       },
-      onEasterEgg: () => setShowEasterEgg(true),
+      onEasterEgg: (egg) => setEasterEggData(egg ?? { variant: 'love' }),
       onSpectateChange: (spectating, _targetUserId, targetName, rank, timeSeconds) => {
         setIsSpectating(spectating);
         setSpectateTargetName(targetName || '');
@@ -203,6 +213,11 @@ export default function App() {
       },
       onDeathsChange: (n) => setDeaths(n),
       onPartyTimer: (left) => setPartyTimer(left),
+      onStaminaChange: (s, max, exhausted) => {
+        setStamina(s);
+        setMaxStamina(max);
+        setStaminaExhausted(exhausted);
+      },
     });
 
     engineRef.current = engine;
@@ -236,6 +251,7 @@ export default function App() {
         stalkerWarningLevel={stalkerWarningLevel}
         checkpointName={checkpointName}
         checkpointIndex={checkpointIndex}
+        checkpointTotal={checkpointTotal}
         collectedCount={collectedCount}
         totalCollectibles={totalCollectibles}
         currentWeather={currentWeather}
@@ -245,8 +261,8 @@ export default function App() {
         isFullscreen={isFullscreen}
         toggleFullscreen={toggleFullscreen}
         isPortrait={isPortrait}
-        showEasterEgg={showEasterEgg}
-        onDismissEasterEgg={() => setShowEasterEgg(false)}
+        easterEggData={easterEggData}
+        onDismissEasterEgg={() => setEasterEggData(null)}
         isSpectating={isSpectating}
         spectateTargetName={spectateTargetName}
         spectateRank={spectateRank}
@@ -256,6 +272,9 @@ export default function App() {
         onDismissRoomSummary={() => setRoomSummary(null)}
         deaths={deaths}
         partyTimer={partyTimer}
+        stamina={stamina}
+        maxStamina={maxStamina}
+        staminaExhausted={staminaExhausted}
       />
     </div>
   );

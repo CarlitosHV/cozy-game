@@ -167,7 +167,12 @@ export class BackgroundCloudsSystem {
   ) {
     const isTrans = targetWeather !== undefined && targetWeather !== currentWeather && transitionProgress < 1.0;
 
-    const getSpeedFactor = (w: WeatherType) => (w === 'cozy_rain' ? 1.5 : w === 'sakura_breeze' ? 1.25 : 1.0);
+    const getSpeedFactor = (w: WeatherType) =>
+      w === 'cozy_rain' || w === 'cyber_storm' || w === 'blizzard'
+        ? 1.55
+        : w === 'sakura_breeze' || w === 'neon_night' || w === 'lava_ash'
+          ? 1.25
+          : 1.0;
     const speedFactorA = getSpeedFactor(currentWeather);
     const speedFactorB = targetWeather ? getSpeedFactor(targetWeather) : speedFactorA;
     const weatherSpeedFactor = isTrans
@@ -191,6 +196,18 @@ export class BackgroundCloudsSystem {
           return { color: 0x4a5a4e, roughness: 0.95 }; // Murky swamp fog banks
         case 'castle_night':
           return { color: 0x3b2a5c, roughness: 0.95 }; // Purple haunted night clouds
+        case 'neon_night':
+          return { color: 0x4a1d7a, roughness: 0.85 }; // Synthwave magenta-violet clouds
+        case 'cyber_storm':
+          return { color: 0x163038, roughness: 0.9 }; // Dark cyber-smog clouds
+        case 'lava_ash':
+          return { color: 0x5c2b24, roughness: 0.95 }; // Smoky ember ash clouds
+        case 'blizzard':
+          return { color: 0xf0f9ff, roughness: 0.85 }; // Crisp icy white storm clouds
+        case 'desert_sun':
+          return { color: 0xfff3d6, roughness: 0.9 }; // Sunlit warm cream clouds
+        case 'candy_sky':
+          return { color: 0xffd6ec, roughness: 0.95 }; // Fluffy cotton-candy pink clouds
         case 'garden_day':
           return { color: 0xffffff, roughness: 0.9 }; // Fluffy morning clouds
         case 'aero_day':

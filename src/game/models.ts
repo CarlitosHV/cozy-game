@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { ProceduralTextures } from './textures';
 import { CharacterAppearance, DEFAULT_APPEARANCE } from './character';
+import { getClothingPatternTexture } from './patterns';
 
 export interface PlayerCharacterModel {
   group: THREE.Group;
@@ -49,8 +50,10 @@ export function createPlayerCharacter(
   group.add(headGroup);
 
   // Materials with varied roughness & PBR richness
+  const patternTex = getClothingPatternTexture(look.shirtPattern, look.sweaterColor, look.detailColor);
   const sweaterMat = new THREE.MeshStandardMaterial({
-    color: look.sweaterColor, // knit sweater
+    color: patternTex ? 0xffffff : look.sweaterColor, // pattern CanvasTexture already bakes sweaterColor
+    map: patternTex,
     roughness: 0.85,
     metalness: 0.05,
   });
@@ -187,7 +190,8 @@ export function createPlayerCharacter(
       const hoodGeom = new THREE.SphereGeometry(0.17, 16, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
       hoodGeom.scale(1.15, 0.70, 0.65);
       const hood = new THREE.Mesh(hoodGeom, new THREE.MeshStandardMaterial({
-        color: look.sweaterColor,
+        color: patternTex ? 0xffffff : look.sweaterColor,
+        map: patternTex,
         roughness: 0.85,
         side: THREE.DoubleSide,
       }));
@@ -260,7 +264,12 @@ export function createPlayerCharacter(
       // Dress: flared skirt with contrasting trim, waist sash and little buttons
       const skirt = new THREE.Mesh(
         new THREE.CylinderGeometry(0.21, 0.34, 0.27, 24, 1, true),
-        new THREE.MeshStandardMaterial({ color: look.sweaterColor, roughness: 0.85, side: THREE.DoubleSide })
+        new THREE.MeshStandardMaterial({
+          color: patternTex ? 0xffffff : look.sweaterColor,
+          map: patternTex,
+          roughness: 0.85,
+          side: THREE.DoubleSide,
+        })
       );
       skirt.position.y = 0.355;
       skirt.castShadow = true;
@@ -298,7 +307,12 @@ export function createPlayerCharacter(
       const R_TOP = 0.13;
       const R_BOT = 0.38;
       const radiusAt = (t: number) => R_TOP + (R_BOT - R_TOP) * t;
-      const ponchoMat = new THREE.MeshStandardMaterial({ color: look.sweaterColor, roughness: 0.9, side: THREE.DoubleSide });
+      const ponchoMat = new THREE.MeshStandardMaterial({
+        color: patternTex ? 0xffffff : look.sweaterColor,
+        map: patternTex,
+        roughness: 0.9,
+        side: THREE.DoubleSide,
+      });
       const poncho = new THREE.Mesh(new THREE.CylinderGeometry(R_TOP, R_BOT, H, 8, 1, true), ponchoMat);
       poncho.position.y = TOP_Y - H / 2;
       poncho.castShadow = true;

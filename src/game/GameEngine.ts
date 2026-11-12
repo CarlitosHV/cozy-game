@@ -27,6 +27,7 @@ const DEV_KINDS: DevLevelPick['kind'][] = ['sandbox', 'boss', 'backrooms'];
 const DEV_THEMES: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero', 'garden', 'castle', 'backrooms'];
 import { buildBackroomsWorld, buildSkinwalkerArena } from './levelBackrooms';
 import { generateLevel } from './levelGen';
+import { generateParkourLevel } from './levelParkourGen';
 import { generateBossArena } from './bossArena';
 import { BOSS_SYNC_MARK, CombatStatus, CombatSystem } from './combat';
 import { PuzzleSystem } from './puzzles';
@@ -34,6 +35,7 @@ import { DungeonContext, DungeonSystem } from './dungeon';
 import { AmbientDecor, Quality } from './ambience';
 import { computeRating, LevelRating, saveRating } from './rating';
 import { CompanionStyle } from './character';
+import { recordMissionEvent } from './dailyMissions';
 import { RemotePlayersManager } from './RemotePlayersManager';
 import {
   multiplayerClient,
@@ -58,6 +60,12 @@ const THEME_ATMOS: Record<ThemeId, { weather: WeatherType; title: string; victor
   aero: { weather: 'aero_day', title: 'Valle Aero', victoryWeather: 'golden_hour', victoryTitle: 'Atardecer Aero', victoryDesc: '¡Llegaste a la Plaza del Globo!' },
   garden: { weather: 'garden_day', title: 'Jardín Gigante', victoryWeather: 'golden_hour', victoryTitle: 'Tarde en el Jardín', victoryDesc: '¡Llegaste al Girasol Gigante!' },
   castle: { weather: 'castle_night', title: 'Castillo Embrujado', victoryWeather: 'starlit_night', victoryTitle: 'Noche Estrellada', victoryDesc: '¡Llegaste a la Torre del Vampiro!' },
+  neon: { weather: 'neon_night', title: 'Ciudad Neón', victoryWeather: 'starlit_night', victoryTitle: 'Horizonte Synth', victoryDesc: '¡Conquistaste la Torre Prisma Neón!' },
+  cyberpunk: { weather: 'cyber_storm', title: 'Cyberpunk', victoryWeather: 'neon_night', victoryTitle: 'Cielo Eléctrico', victoryDesc: '¡Alcanzaste la Azotea Corporativa!' },
+  lava: { weather: 'lava_ash', title: 'Volcán Infernal', victoryWeather: 'golden_hour', victoryTitle: 'Cima Volcánica', victoryDesc: '¡Dominaste el Volcán Infernal!' },
+  ice: { weather: 'blizzard', title: 'Cumbre Glacial', victoryWeather: 'starlit_night', victoryTitle: 'Noche Boreal', victoryDesc: '¡Conquistaste la Cumbre Glacial!' },
+  desert: { weather: 'desert_sun', title: 'Dunas Doradas', victoryWeather: 'golden_hour', victoryTitle: 'Ocaso en el Oasis', victoryDesc: '¡Llegaste al Templo del Sol!' },
+  candy: { weather: 'candy_sky', title: 'Reino Dulce', victoryWeather: 'sakura_breeze', victoryTitle: 'Brisa de Algodón', victoryDesc: '¡Conquistaste el Palacio del Azúcar!' },
   backrooms: { weather: 'backrooms', title: 'Los Backrooms', victoryWeather: 'backrooms', victoryTitle: 'SALIDA', victoryDesc: '¡Escapaste de los Backrooms!' },
 };
 const atmos = (level: number) => THEME_ATMOS[themeForLevel(level)];
@@ -86,14 +94,14 @@ export interface WeatherNotice {
 
 export interface GameEngineCallbacks {
   onStateChange: (state: GameState) => void;
-  onCheckpointChange: (name: string, index: number) => void;
+  onCheckpointChange: (name: string, index: number, total?: number) => void;
   onCollectiblesChange: (collected: number, total: number) => void;
   onWeatherChange: (weather: WeatherType, isTransitioning?: boolean) => void;
   onWeatherNotice?: (notice: WeatherNotice) => void;
   onModeChange?: (mode: GameMode) => void;
   onTimeTrialTick?: (timeRemaining: number, bonusNotice?: { seconds: number; reason: string }) => void;
   onStalkerProximity?: (distance: number, warningLevel: 'none' | 'caution' | 'danger') => void;
-  onEasterEgg?: () => void;
+  onEasterEgg?: (egg?: NonNullable<WorldBuildResult['easterEgg']>) => void;
   onSpectateChange?: (
     isSpectating: boolean,
     targetUserId: string | null,
@@ -110,6 +118,8 @@ export interface GameEngineCallbacks {
   onPartyTimer?: (secondsLeft: number | null) => void;
   /** Actual rendered frames per second update */
   onFpsUpdate?: (fps: number) => void;
+  /** Player sprint stamina bar updates */
+  onStaminaChange?: (stamina: number, maxStamina: number, exhausted: boolean) => void;
 }
 
 /** Seconds the rest of the party has to reach the goal once someone finished */
@@ -318,6 +328,8 @@ export class GameEngine {
   private reverseRunTimer: number = 0;
   private directionTurnCooldown: number = 0;
   private lastInputVector = new THREE.Vector2();
+  private lastReportedStamina: number = 100;
+  private lastReportedExhausted: boolean = false;
 
   // Character Creator preview (close-up turntable camera on the title screen)
   public playerAppearance: CharacterAppearance = loadAppearance();
@@ -495,6 +507,16 @@ export class GameEngine {
 
     // 7c. Backpack items (berries, walnuts…) — 5 slots, keys 1-5
     this.itemSystem = new ItemSystem(this.scene);
+    this.itemSystem.onPickup = (itemType) => {
+      if (this.gameState === 'playing' && !this.isSpectating) {
+        recordMissionEvent({
+          type: 'item_collected',
+          itemType,
+          level: this.currentLevel,
+          theme: themeForLevel(this.currentLevel),
+        });
+      }
+    };
     this.itemSystem.loadSpots(this.world.itemSpots);
     this.puzzleSystem.load(this.world.puzzles, this.world.platforms);
     this.dungeonSystem.load(this.world.dungeon);
@@ -686,17 +708,22 @@ export class GameEngine {
 
     // Report initial state
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
-    this.callbacks.onCheckpointChange('Pradera del Amanecer', 1);
+    this.callbacks.onCheckpointChange('Pradera del Amanecer', 1, this.world.checkpoints.length || 3);
 
     // Start render loop
     this.startLoop();
   }
 
-  /** Time trial budget: open-world levels with orbs are bigger, so they get more time. */
+  /** Time trial budget: open-world & 2x longer Only-Up parkour courses get proportionally more time. */
   private timeTrialStart(): number {
     if (this.world?.boss) return 240;
     const orbs = this.world?.puzzles?.orbs.length ?? 0;
-    return orbs > 0 ? 100 + orbs * 25 : 90;
+    if (orbs > 0) return 100 + orbs * 25;
+    const platCount = this.world?.platforms.length ?? 0;
+    if (platCount > 40) {
+      return Math.round(80 + Math.min(130, platCount * 1.45));
+    }
+    return 90;
   }
 
   public setGameMode(mode: GameMode) {
@@ -832,9 +859,13 @@ export class GameEngine {
         return buildAeroWorld(this.levelRoot, this.textures);
       case 1:
         return buildCozyParkourWorld(this.levelRoot, this.textures);
+      case 5:
+        return generateLevel(level, this.levelRoot, this.textures);
       default:
-        // Level 5 and beyond: generated — an open sandbox zone or a boss arena (random per level)
-        return isBossLevel(level) ? generateBossArena(level, this.levelRoot, this.textures) : generateLevel(level, this.levelRoot, this.textures);
+        // Level 6 and beyond: bosses every 10 levels, complex non-linear parkour, or open sandbox zones
+        if (isBossLevel(level)) return generateBossArena(level, this.levelRoot, this.textures);
+        if (levelKind(level) === 'parkour') return generateParkourLevel(level, this.levelRoot, this.textures);
+        return generateLevel(level, this.levelRoot, this.textures);
     }
   }
 
@@ -954,7 +985,7 @@ export class GameEngine {
 
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
     const cp0 = this.world.checkpoints[0];
-    this.callbacks.onCheckpointChange(cp0 ? cp0.name : '', 1);
+    this.callbacks.onCheckpointChange(cp0 ? cp0.name : '', 1, this.world.checkpoints.length || 3);
     // New world: switch the sky almost instantly
     this.weatherSystem.setWeather(this.levelWeather(), 0.2);
     soundManager.setWeather(this.levelWeather(), 1.5);
@@ -1407,6 +1438,9 @@ export class GameEngine {
     this.resetCombat();
     this.physics.respawnAtCheckpoint(0, false, this.getPartySpawnOffset());
     this.spawnedAt.copy(this.physics.position);
+    this.lastReportedStamina = this.physics.stamina;
+    this.lastReportedExhausted = this.physics.isStaminaExhausted;
+    this.callbacks.onStaminaChange?.(this.physics.stamina, this.physics.maxStamina, this.physics.isStaminaExhausted);
     soundManager.init();
     soundManager.resume();
     if (mode) {
@@ -1823,6 +1857,30 @@ export class GameEngine {
         title: 'Noche Embrujada',
         desc: 'Luna enorme sobre las torres del castillo',
       },
+      neon_night: {
+        title: 'Noche de Neón',
+        desc: 'Horizonte retrowave entre láseres y palmeras luminosas',
+      },
+      cyber_storm: {
+        title: 'Tormenta Cyberpunk',
+        desc: 'Lluvia eléctrica sobre rascacielos y hologramas',
+      },
+      lava_ash: {
+        title: 'Cenizas Volcánicas',
+        desc: 'Brasas ascendentes y calor del cráter',
+      },
+      blizzard: {
+        title: 'Ventisca Glacial',
+        desc: 'Nieve suave bajo auroras boreales',
+      },
+      desert_sun: {
+        title: 'Sol del Desierto',
+        desc: 'Cálida brisa dorada entre dunas y obeliscos',
+      },
+      candy_sky: {
+        title: 'Cielo de Algodón',
+        desc: 'Pétalos de caramelo sobre nubes pastel',
+      },
     };
 
     const info = descriptions[weather];
@@ -1897,7 +1955,7 @@ export class GameEngine {
   public warpToCheckpoint(index: number) {
     this.physics.respawnAtCheckpoint(index, true);
     if (this.world.checkpoints[index]) {
-      this.callbacks.onCheckpointChange(this.world.checkpoints[index].name, index + 1);
+      this.callbacks.onCheckpointChange(this.world.checkpoints[index].name, index + 1, this.world.checkpoints.length || 3);
     }
     if (this.gameMode === 'chase' && this.stalker) {
       this.stalker.resetPosition(this.physics.position);
@@ -2680,7 +2738,7 @@ export class GameEngine {
       const egg = this.world.easterEgg;
       if (this.physics.position.distanceTo(egg.position) <= egg.radius) {
         this.easterEggFound = true;
-        this.callbacks.onEasterEgg?.();
+        this.callbacks.onEasterEgg?.(egg);
       }
     }
 
@@ -2747,7 +2805,14 @@ export class GameEngine {
     const prevCollectibles = this.physics.collectedCount;
     const onCheckpoint = (cpName: string) => {
       const cpIdx = this.physics.currentCheckpointIndex;
-      this.callbacks.onCheckpointChange(cpName, cpIdx + 1);
+      this.callbacks.onCheckpointChange(cpName, cpIdx + 1, this.world.checkpoints.length || 3);
+      if (cpIdx > 0 && !this.isSpectating) {
+        recordMissionEvent({
+          type: 'checkpoint_reached',
+          level: this.currentLevel,
+          theme: themeForLevel(this.currentLevel),
+        });
+      }
 
       // Mode specific checkpoint bonuses
       if (this.gameMode === 'time_trial') {
@@ -2792,6 +2857,16 @@ export class GameEngine {
       this.transitionWeather(theme.victoryWeather, 4.5, 'milestone', theme.victoryTitle, theme.victoryDesc);
 
       const rating = this.rateRun(false);
+      recordMissionEvent({
+        type: 'level_completed',
+        level: this.currentLevel,
+        kind: levelKind(this.currentLevel),
+        theme: themeForLevel(this.currentLevel),
+        mode: this.gameMode,
+        deaths: this.deaths,
+        timeSeconds: rating.timeSeconds,
+        relicsFound: this.physics.collectedCount,
+      });
       if (this.partyRoomId) {
         multiplayerClient.emitPlayerFinish(this.currentLevel, rating.timeSeconds, this.physics.collectedCount, rating);
         this.startSpectating(undefined, 1, rating.timeSeconds);
@@ -2811,6 +2886,17 @@ export class GameEngine {
       this.physics.update(dt, this.currentInput, this.cameraYaw, onCheckpoint, onSummit);
     }
 
+    if (
+      Math.abs(this.physics.stamina - this.lastReportedStamina) >= 0.4 ||
+      this.physics.isStaminaExhausted !== this.lastReportedExhausted ||
+      ((this.physics.stamina === 0 || this.physics.stamina === this.physics.maxStamina) &&
+        this.physics.stamina !== this.lastReportedStamina)
+    ) {
+      this.lastReportedStamina = this.physics.stamina;
+      this.lastReportedExhausted = this.physics.isStaminaExhausted;
+      this.callbacks.onStaminaChange?.(this.physics.stamina, this.physics.maxStamina, this.physics.isStaminaExhausted);
+    }
+
     // 6b. Puzzles (push blocks, doors, key carriers, sentinels)
     if (this.world.puzzles && this.gameState === 'playing') {
       this.puzzleSystem.update(dt, time, {
@@ -2827,6 +2913,13 @@ export class GameEngine {
         },
         onOrb: (_have, _total, index) => {
           if (this.gameMode === 'time_trial') this.addTimeTrialBonus(20, 'Orbe (+20s)');
+          if (!this.isSpectating) {
+            recordMissionEvent({
+              type: 'orb_collected',
+              level: this.currentLevel,
+              theme: themeForLevel(this.currentLevel),
+            });
+          }
           if (this.partyRoomId) multiplayerClient.sendOrb(this.currentLevel, index);
         },
         onBlockMoved: (index, pos, final) => {
@@ -2879,12 +2972,19 @@ export class GameEngine {
     }
 
     if (this.physics.collectedCount !== prevCollectibles) {
+      const gained = Math.max(0, this.physics.collectedCount - prevCollectibles);
       this.callbacks.onCollectiblesChange(
         this.physics.collectedCount,
         this.physics.totalCollectibles
       );
       if (this.gameMode === 'time_trial') {
         this.addTimeTrialBonus(8, 'Reliquia (+8s)');
+      }
+      if (gained > 0 && !this.isSpectating) {
+        const theme = themeForLevel(this.currentLevel);
+        for (let i = 0; i < gained; i++) {
+          recordMissionEvent({ type: 'relic_collected', level: this.currentLevel, theme });
+        }
       }
     }
 

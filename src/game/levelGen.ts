@@ -69,7 +69,20 @@ function mulberry32(seed: number) {
 
 /** Relics on the open zone (+1 on the summit = RELICS.zone, the total the menus show) */
 const RELICS_IN_ZONE = RELICS.zone - 1;
-const STONE: Record<OutdoorThemeId, number> = { cozy: 0xa08a7a, cosmic: 0x6d6a8f, swamp: 0x55604a, aero: 0x6fb7dc, garden: 0x9ca3af, castle: 0x4b4458 };
+const STONE: Record<OutdoorThemeId, number> = {
+  cozy: 0xa08a7a,
+  cosmic: 0x6d6a8f,
+  swamp: 0x55604a,
+  aero: 0x6fb7dc,
+  garden: 0x9ca3af,
+  castle: 0x4b4458,
+  neon: 0x2e1065,
+  cyberpunk: 0x334155,
+  lava: 0x292524,
+  ice: 0x7dd3fc,
+  desert: 0xd9a05b,
+  candy: 0xf472b6,
+};
 const ORB_COLORS = [0xf472b6, 0x38bdf8, 0xfacc15, 0x4ade80, 0xc084fc];
 
 type Puzzle = 'rock' | 'vault' | 'thief' | 'stealth' | 'dungeon';
@@ -1542,7 +1555,9 @@ export function addOpenBackdrop(
   textures: ProceduralTextures,
   themeId: OutdoorThemeId,
   playR: number,
-  animators: ((dt: number, time: number) => void)[]
+  animators: ((dt: number, time: number) => void)[],
+  centerX = 0,
+  centerZ = 0
 ) {
   const group = new THREE.Group();
   root.add(group);
@@ -1555,15 +1570,20 @@ export function addOpenBackdrop(
   const box = new THREE.Box3();
   const size = new THREE.Vector3();
   for (const obj of group.children) {
-    if ((obj as THREE.Points).isPoints || (obj as THREE.Sprite).isSprite) continue;
+    if ((obj as THREE.Points).isPoints || (obj as THREE.Sprite).isSprite) {
+      obj.position.x += centerX;
+      obj.position.z += centerZ;
+      continue;
+    }
     const geo = (obj as THREE.Mesh).geometry;
     if (geo && geo.type === 'PlaneGeometry') {
       // Water / ground sheets: lower them under the deepest floors and center them
-      obj.position.set(0, -6.5, 0);
+      obj.position.set(centerX, -6.5, centerZ);
       obj.scale.set(1.8, 1.8, 1);
       continue;
     }
-    obj.position.z -= zMax / 2;
+    obj.position.x += centerX;
+    obj.position.z += centerZ - zMax / 2;
     obj.updateMatrixWorld(true);
     box.setFromObject(obj);
     if (box.isEmpty()) continue;
@@ -1571,13 +1591,15 @@ export function addOpenBackdrop(
     const cx = (box.min.x + box.max.x) / 2;
     const cz = (box.min.z + box.max.z) / 2;
     const rad = Math.max(size.x, size.z) / 2;
-    const dist = Math.hypot(cx, cz);
+    const relX = cx - centerX;
+    const relZ = cz - centerZ;
+    const dist = Math.hypot(relX, relZ);
     const need = playR + rad;
     if (dist < need) {
-      const dx = dist > 0.01 ? cx / dist : 1;
-      const dz = dist > 0.01 ? cz / dist : 0;
-      obj.position.x += dx * need - cx;
-      obj.position.z += dz * need - cz;
+      const dx = dist > 0.01 ? relX / dist : 1;
+      const dz = dist > 0.01 ? relZ / dist : 0;
+      obj.position.x += centerX + dx * need - cx;
+      obj.position.z += centerZ + dz * need - cz;
     }
   }
 }

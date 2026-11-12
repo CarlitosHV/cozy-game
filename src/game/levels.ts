@@ -156,8 +156,15 @@ export interface WorldBuildResult {
   summitRequiresLanding?: boolean;
   /** Push blocks, locked doors, key carriers, sentinels (generated levels) */
   puzzles?: PuzzleData;
-  /** Hidden interactable for the Monse easter egg (early levels) */
-  easterEgg?: { position: THREE.Vector3; radius: number };
+  /** Hidden interactable for easter eggs (Monse in level 1, Julio Piña in level 2) */
+  easterEgg?: {
+    position: THREE.Vector3;
+    radius: number;
+    title?: string;
+    message?: string;
+    badge?: string;
+    variant?: 'love' | 'secret';
+  };
   /** "Lucha contra jefes" levels: the arena's boss (see bossArena.ts / combat.ts) */
   boss?: BossSetup;
   /** Generated levels: guardian arenas and basement trapdoors (see dungeon.ts) */

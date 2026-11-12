@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bug, Castle, DoorOpen, Flag, KeyRound, Lock, Play, Skull, Sparkles, X } from 'lucide-react';
+import { Bug, Castle, Compass, DoorOpen, Flag, KeyRound, Lock, Play, Skull, Sparkles, X } from 'lucide-react';
 import { BTN } from '../ui/labels';
 import { isTypingTarget } from '../ui/shortcuts';
 import { checkDevPassword } from '../game/devMode';
@@ -16,7 +16,7 @@ import {
 
 export type DevPlay =
   | { kind: 'handmade'; level: number }
-  | { kind: 'sandbox' | 'boss' | 'backrooms'; level: number; theme: ThemeId };
+  | { kind: 'parkour' | 'sandbox' | 'boss' | 'backrooms'; level: number; theme: ThemeId };
 
 interface DevPanelProps {
   open: boolean;
@@ -30,12 +30,26 @@ interface DevPanelProps {
   onClose: () => void;
 }
 
-const THEMES: OutdoorThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero', 'garden', 'castle'];
-/** Bosses: the six worlds plus the Skinwalker of the Backrooms */
+const THEMES: OutdoorThemeId[] = [
+  'cozy',
+  'cosmic',
+  'swamp',
+  'aero',
+  'garden',
+  'castle',
+  'neon',
+  'cyberpunk',
+  'lava',
+  'ice',
+  'desert',
+  'candy',
+];
+/** Bosses: the eight worlds plus the Skinwalker of the Backrooms */
 const BOSS_THEMES: ThemeId[] = [...THEMES, 'backrooms'];
 const HANDMADE = [1, 2, 3, 4].map((level) => ({ level, name: levelInfo(level).name }));
 type Kind = DevPlay['kind'];
 const KIND_LABEL: Record<Kind, { label: string; icon: React.ReactNode }> = {
+  parkour: { label: 'Parkour', icon: <Compass className="w-4 h-4" /> },
   sandbox: { label: 'Caja de arena', icon: <Sparkles className="w-4 h-4" /> },
   boss: { label: 'Lucha contra jefe', icon: <Skull className="w-4 h-4" /> },
   handmade: { label: 'Hecho a mano', icon: <Castle className="w-4 h-4" /> },
@@ -142,15 +156,23 @@ export const DevPanel: React.FC<DevPanelProps> = ({ open, hasAccess, devOn, onUn
 
   const lvl = Math.min(DEV_MAX_LEVEL, Math.max(5, Math.floor(level) || 5));
   const play = () =>
-    onPlay(kind === 'handmade' ? { kind, level: handmade } : kind === 'backrooms' ? { kind, level: lvl, theme: 'backrooms' } : { kind, level: lvl, theme: kind === 'sandbox' ? sandboxTheme : theme });
+    onPlay(
+      kind === 'handmade'
+        ? { kind, level: handmade }
+        : kind === 'backrooms'
+          ? { kind, level: lvl, theme: 'backrooms' }
+          : { kind, level: lvl, theme: kind === 'sandbox' || kind === 'parkour' ? sandboxTheme : theme }
+    );
   const summary =
     kind === 'handmade'
       ? `Nivel ${handmade} · ${HANDMADE[handmade - 1].name}`
       : kind === 'backrooms'
         ? `Nivel ${lvl} · Los Backrooms (laberinto, almacén y pasillo; regala al Hombre Polilla en el 15)`
         : kind === 'boss'
-        ? `Nivel ${lvl} · Jefe: ${BOSS_INFO[BOSS_FOR_THEME[theme]].short} (${THEME_INFO[theme].name})`
-        : `Nivel ${lvl} · Caja de arena en ${THEME_INFO[sandboxTheme].name}`;
+          ? `Nivel ${lvl} · Jefe: ${BOSS_INFO[BOSS_FOR_THEME[theme]].short} (${THEME_INFO[theme].name})`
+          : kind === 'parkour'
+            ? `Nivel ${lvl} · Parkour complejo no lineal en ${THEME_INFO[sandboxTheme].name}`
+            : `Nivel ${lvl} · Caja de arena en ${THEME_INFO[sandboxTheme].name}`;
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-3 sm:p-4 cozy-scrim pointer-events-auto font-ui">
@@ -194,8 +216,8 @@ export const DevPanel: React.FC<DevPanelProps> = ({ open, hasAccess, devOn, onUn
         {/* Generator */}
         <div className="flex flex-col gap-2">
           <span className="text-[11px] font-bold uppercase tracking-wider text-cozy-soft">Tipo de nivel</span>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5" role="radiogroup" aria-label="Tipo de nivel">
-            {(['sandbox', 'boss', 'backrooms', 'handmade'] as Kind[]).map((k) => (
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5" role="radiogroup" aria-label="Tipo de nivel">
+            {(['parkour', 'sandbox', 'boss', 'backrooms', 'handmade'] as Kind[]).map((k) => (
               <button
                 key={k}
                 type="button"

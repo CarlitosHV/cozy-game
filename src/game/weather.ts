@@ -116,6 +116,72 @@ export const WEATHER_PRESETS: Record<WeatherType, WeatherPreset> = {
     hemiGroundColor: 0x7a6a34,
     hemiIntensity: 1.35,
   },
+  neon_night: {
+    // Ciudad Neón: midnight synthwave violet sky, magenta-indigo fog, crisp electric cyan light
+    skyColor: 0x0a041c,
+    fogColor: 0x1b0b38,
+    fogDensity: 0.0052,
+    sunColor: 0xa5f3fc,
+    sunIntensity: 1.65,
+    hemiSkyColor: 0xe879f9,
+    hemiGroundColor: 0x1e1b4b,
+    hemiIntensity: 0.95,
+  },
+  cyber_storm: {
+    // Cyberpunk: gritty industrial teal smog, acid-lime & orange accents, storm light
+    skyColor: 0x07131a,
+    fogColor: 0x0f252e,
+    fogDensity: 0.0085,
+    sunColor: 0xd9f99d,
+    sunIntensity: 1.45,
+    hemiSkyColor: 0x22d3ee,
+    hemiGroundColor: 0x271c19,
+    hemiIntensity: 0.9,
+  },
+  lava_ash: {
+    // Volcán Infernal: smoky volcanic crimson sky, glowing basalt shadows, fiery orange key light
+    skyColor: 0x230b08,
+    fogColor: 0x3b120d,
+    fogDensity: 0.0072,
+    sunColor: 0xffa06b,
+    sunIntensity: 1.85,
+    hemiSkyColor: 0xff6b35,
+    hemiGroundColor: 0x3a0f08,
+    hemiIntensity: 1.0,
+  },
+  blizzard: {
+    // Cumbre Glacial: crisp arctic blue sky, cool bright frost bounce light
+    skyColor: 0x99d9f5,
+    fogColor: 0xd6f1ff,
+    fogDensity: 0.0068,
+    sunColor: 0xffffff,
+    sunIntensity: 1.95,
+    hemiSkyColor: 0xe0f7ff,
+    hemiGroundColor: 0x5c8ab5,
+    hemiIntensity: 1.2,
+  },
+  desert_sun: {
+    // Dunas Doradas: warm golden ochre sky, blazing sun, sandstone bounce light
+    skyColor: 0xffd394,
+    fogColor: 0xf6c280,
+    fogDensity: 0.0052,
+    sunColor: 0xfff3c4,
+    sunIntensity: 2.35,
+    hemiSkyColor: 0xffe4ad,
+    hemiGroundColor: 0xb36f34,
+    hemiIntensity: 1.15,
+  },
+  candy_sky: {
+    // Reino Dulce: pastel cotton-candy sky, strawberry-cream fog, bright sweet daylight
+    skyColor: 0xffd9ec,
+    fogColor: 0xffe8f5,
+    fogDensity: 0.0055,
+    sunColor: 0xfff8e7,
+    sunIntensity: 2.15,
+    hemiSkyColor: 0xffe1f2,
+    hemiGroundColor: 0xd67eb5,
+    hemiIntensity: 1.2,
+  },
   starlit_night: {
     skyColor: 0x0d1321,
     fogColor: 0x1d2d44,
@@ -157,6 +223,12 @@ export class WeatherSystem {
   private fireflyParticles: THREE.Points;
   private fireflyCount = 120;
   private fireflyPositions: Float32Array;
+  private snowParticles: THREE.Points;
+  private snowCount = 700;
+  private snowPositions: Float32Array;
+  private emberParticles: THREE.Points;
+  private emberCount = 220;
+  private emberPositions: Float32Array;
 
   // Rain droplet positions
   private rainCount = 1500;
@@ -289,6 +361,47 @@ export class WeatherSystem {
     });
     this.fireflyParticles = new THREE.Points(fireflyGeom, fireflyMat);
     this.scene.add(this.fireflyParticles);
+
+    // 5. Glacial Snowfall (Drifting soft snow flakes)
+    const snowGeom = new THREE.BufferGeometry();
+    this.snowPositions = new Float32Array(this.snowCount * 3);
+    for (let i = 0; i < this.snowCount; i++) {
+      this.snowPositions[i * 3] = (Math.random() - 0.5) * 56;
+      this.snowPositions[i * 3 + 1] = Math.random() * 30;
+      this.snowPositions[i * 3 + 2] = (Math.random() - 0.5) * 56;
+    }
+    snowGeom.setAttribute('position', new THREE.BufferAttribute(this.snowPositions, 3));
+    const snowMat = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.34,
+      map: textures.particleGlow,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    this.snowParticles = new THREE.Points(snowGeom, snowMat);
+    this.scene.add(this.snowParticles);
+
+    // 6. Rising Volcanic Embers
+    const emberGeom = new THREE.BufferGeometry();
+    this.emberPositions = new Float32Array(this.emberCount * 3);
+    for (let i = 0; i < this.emberCount; i++) {
+      this.emberPositions[i * 3] = (Math.random() - 0.5) * 48;
+      this.emberPositions[i * 3 + 1] = -2 + Math.random() * 24;
+      this.emberPositions[i * 3 + 2] = (Math.random() - 0.5) * 48;
+    }
+    emberGeom.setAttribute('position', new THREE.BufferAttribute(this.emberPositions, 3));
+    const emberMat = new THREE.PointsMaterial({
+      color: 0xff6b2b,
+      size: 0.34,
+      map: textures.particleGlow,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.emberParticles = new THREE.Points(emberGeom, emberMat);
+    this.scene.add(this.emberParticles);
   }
 
   /**
@@ -415,12 +528,18 @@ export class WeatherSystem {
     this.pollenParticles.position.z = playerCenter.z;
     this.fireflyParticles.position.x = playerCenter.x;
     this.fireflyParticles.position.z = playerCenter.z;
+    this.snowParticles.position.x = playerCenter.x;
+    this.snowParticles.position.z = playerCenter.z;
+    this.emberParticles.position.x = playerCenter.x;
+    this.emberParticles.position.z = playerCenter.z;
 
     // Calculate dynamic weather blend weights for particles
-    const rainWeight = this.getWeatherWeight('cozy_rain');
-    const sakuraWeight = this.getWeatherWeight('sakura_breeze');
-    const goldenWeight = this.getWeatherWeight('golden_hour');
-    const nightWeight = this.getWeatherWeight('starlit_night');
+    const rainWeight = Math.max(this.getWeatherWeight('cozy_rain'), this.getWeatherWeight('cyber_storm') * 0.72);
+    const sakuraWeight = Math.max(this.getWeatherWeight('sakura_breeze'), this.getWeatherWeight('candy_sky') * 0.55);
+    const goldenWeight = Math.max(this.getWeatherWeight('golden_hour'), this.getWeatherWeight('desert_sun') * 0.85);
+    const nightWeight = Math.max(this.getWeatherWeight('starlit_night'), this.getWeatherWeight('neon_night') * 0.75);
+    const snowWeight = this.getWeatherWeight('blizzard');
+    const emberWeight = this.getWeatherWeight('lava_ash');
 
     // 1. Update Rain
     const rainMat = this.rainParticles.material as THREE.PointsMaterial;
@@ -492,6 +611,46 @@ export class WeatherSystem {
       }
       this.fireflyParticles.geometry.attributes.position.needsUpdate = true;
     }
+
+    // 5. Update Glacial Snow
+    const snowMat = this.snowParticles.material as THREE.PointsMaterial;
+    const targetSnowOpacity = snowWeight * 0.9;
+    snowMat.opacity = THREE.MathUtils.damp(snowMat.opacity, targetSnowOpacity, 5.0, dt);
+
+    if (snowMat.opacity > 0.01) {
+      const pos = this.snowPositions;
+      for (let i = 0; i < this.snowCount; i++) {
+        pos[i * 3 + 1] -= dt * 4.5;
+        pos[i * 3] += Math.sin(animTime * 0.8 + i) * dt * 1.4 + dt * 1.2;
+        pos[i * 3 + 2] += Math.cos(animTime * 0.6 + i) * dt * 0.8;
+        if (pos[i * 3 + 1] < -4) {
+          pos[i * 3 + 1] = 28;
+          pos[i * 3] = (Math.random() - 0.5) * 56;
+          pos[i * 3 + 2] = (Math.random() - 0.5) * 56;
+        }
+      }
+      this.snowParticles.geometry.attributes.position.needsUpdate = true;
+    }
+
+    // 6. Update Volcanic Embers
+    const emberMat = this.emberParticles.material as THREE.PointsMaterial;
+    const targetEmberOpacity = emberWeight * 0.92;
+    emberMat.opacity = THREE.MathUtils.damp(emberMat.opacity, targetEmberOpacity, 5.0, dt);
+
+    if (emberMat.opacity > 0.01) {
+      const pos = this.emberPositions;
+      for (let i = 0; i < this.emberCount; i++) {
+        pos[i * 3 + 1] += dt * (2.6 + (i % 5) * 0.45);
+        pos[i * 3] += Math.sin(animTime * 1.4 + i) * dt * 0.9;
+        pos[i * 3 + 2] += Math.cos(animTime * 1.2 + i) * dt * 0.9;
+        if (pos[i * 3 + 1] > 24) {
+          pos[i * 3 + 1] = -3;
+          pos[i * 3] = (Math.random() - 0.5) * 48;
+          pos[i * 3 + 2] = (Math.random() - 0.5) * 48;
+        }
+      }
+      this.emberParticles.geometry.attributes.position.needsUpdate = true;
+    }
   }
 
   public dispose() {
@@ -503,5 +662,9 @@ export class WeatherSystem {
     (this.pollenParticles.material as THREE.Material).dispose();
     this.fireflyParticles.geometry.dispose();
     (this.fireflyParticles.material as THREE.Material).dispose();
+    this.snowParticles.geometry.dispose();
+    (this.snowParticles.material as THREE.Material).dispose();
+    this.emberParticles.geometry.dispose();
+    (this.emberParticles.material as THREE.Material).dispose();
   }
 }

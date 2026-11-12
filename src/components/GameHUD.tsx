@@ -67,6 +67,7 @@ import {
   RefreshCw,
   KeyRound,
   ToggleRight,
+  Gift,
 } from 'lucide-react';
 import { GameEngine, GameState, GameMode } from '../game/GameEngine';
 import {
@@ -90,8 +91,15 @@ import { AuthModal } from './AuthModal';
 import { PartyRoomModal } from './PartyRoomModal';
 import { LeaderboardModal } from './LeaderboardModal';
 import { SettingsModal } from './SettingsModal';
+import { DailyMissionsModal } from './DailyMissionsModal';
 import { ActionFeedbackBanner } from './ActionFeedback';
 import { ConfirmDialog, ConfirmRequest } from './ConfirmDialog';
+import {
+  getDailyMissionsState,
+  subscribeDailyMissions,
+  subscribeMissionCompleted,
+} from '../game/dailyMissions';
+import type { ShirtPatternId } from '../game/patterns';
 import { WaitingRoom } from './WaitingRoom';
 import { IconAction } from './IconAction';
 import { EmptyState, HelpTip, TIPS } from './HelpTip';
@@ -142,6 +150,12 @@ const THEME_COMPANION: Record<ThemeId, CompanionStyle> = {
   aero: 'catarina',
   garden: 'hada',
   castle: 'serpiente',
+  neon: 'estrella',
+  cyberpunk: 'catarina',
+  lava: 'polilla',
+  ice: 'nube',
+  desert: 'catarina',
+  candy: 'hada',
   backrooms: 'polilla',
 };
 
@@ -162,6 +176,7 @@ interface GameHUDProps {
   stalkerWarningLevel?: 'none' | 'caution' | 'danger';
   checkpointName: string;
   checkpointIndex: number;
+  checkpointTotal?: number;
   collectedCount: number;
   totalCollectibles: number;
   currentWeather: WeatherType;
@@ -176,7 +191,12 @@ interface GameHUDProps {
   isFullscreen?: boolean;
   toggleFullscreen?: () => void | Promise<boolean>;
   isPortrait?: boolean;
-  showEasterEgg?: boolean;
+  easterEggData?: {
+    title?: string;
+    message?: string;
+    badge?: string;
+    variant?: 'love' | 'secret';
+  } | null;
   onDismissEasterEgg?: () => void;
   isSpectating?: boolean;
   spectateTargetName?: string;
@@ -189,6 +209,10 @@ interface GameHUDProps {
   deaths?: number;
   /** Party: seconds left to reach the goal after a friend finished */
   partyTimer?: number | null;
+  /** Character sprint stamina */
+  stamina?: number;
+  maxStamina?: number;
+  staminaExhausted?: boolean;
 }
 
 // --- 360° Analog Virtual Joystick for Mobile Devices with Auto-Sprint ---
@@ -497,6 +521,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   stalkerWarningLevel = 'none',
   checkpointName,
   checkpointIndex,
+  checkpointTotal = 3,
   collectedCount,
   totalCollectibles,
   currentWeather,
@@ -506,7 +531,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   isFullscreen = false,
   toggleFullscreen,
   isPortrait = false,
-  showEasterEgg = false,
+  easterEggData = null,
   onDismissEasterEgg,
   isSpectating = false,
   spectateTargetName = '',
@@ -517,6 +542,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   onDismissRoomSummary,
   deaths = 0,
   partyTimer = null,
+  stamina = 100,
+  maxStamina = 100,
+  staminaExhausted = false,
 }) => {
   const [isMuted, setIsMuted] = useState(() => soundManager.getMuted());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -560,6 +588,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showPartyModal, setShowPartyModal] = useState(false);
   const [showLeaderboardModal, setShowLeaderboardModal] = useState(false);
+  const [showDailyMissions, setShowDailyMissions] = useState(false);
+  const [claimableMissions, setClaimableMissions] = useState(() => getDailyMissionsState().claimableCount);
   const [leaderboardLevelId, setLeaderboardLevelId] = useState(1);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<InviteReceivedPayload | null>(null);
@@ -720,6 +750,29 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     setAppearance(next);
     engine?.setPlayerAppearance(next);
   };
+
+  const handleEquipPattern = (pattern: ShirtPatternId) => {
+    const next: CharacterAppearance = { ...appearance, shirtPattern: pattern };
+    setAppearance(next);
+    engine?.setPlayerAppearance(next);
+    if (apiClient.isAuthenticated()) {
+      apiClient.updateAppearance(next).catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    setClaimableMissions(getDailyMissionsState().claimableCount);
+    const unsubState = subscribeDailyMissions(() => {
+      setClaimableMissions(getDailyMissionsState().claimableCount);
+    });
+    const unsubCompleted = subscribeMissionCompleted((mission) => {
+      showToast(`¡Misión diaria cumplida: ${mission.title}!`, 4000, 'success');
+    });
+    return () => {
+      unsubState();
+      unsubCompleted();
+    };
+  }, []);
 
   // The creator only lives on the title screen
   useEffect(() => {
@@ -1106,6 +1159,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       showLevelBrief ||
       showLobby ||
       showSettingsModal ||
+      showDailyMissions ||
       showAuthModal ||
       showLeaderboardModal ||
       showCreator ||
@@ -1123,6 +1177,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showLevelBrief,
     showLobby,
     showSettingsModal,
+    showDailyMissions,
     showAuthModal,
     showLeaderboardModal,
     showCreator,
@@ -1137,7 +1192,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showLevelBrief ||
     showLobby ||
     showSettingsModal ||
-    showEasterEgg ||
+    showDailyMissions ||
+    Boolean(easterEggData) ||
     showBackpack ||
     showCreator ||
     showAuthModal ||
@@ -2006,6 +2062,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       <UserRound className="w-4 h-4" />
                       Personalizar personaje
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowDailyMissions(true)}
+                      className={`${BTN.ghost} inline-flex items-center justify-center gap-2`}
+                      data-testid="menu-daily-missions"
+                    >
+                      <Gift className={`w-4 h-4 ${claimableMissions > 0 ? 'text-cozy-accent-deep' : ''}`} />
+                      <span>Misiones diarias</span>
+                      {claimableMissions > 0 && (
+                        <span className="text-[11px] font-bold text-cozy-accent-deep tabular-nums">
+                          · {claimableMissions} {claimableMissions === 1 ? 'lista' : 'listas'}
+                        </span>
+                      )}
+                    </button>
                   </div>
 
                   <div className="w-full pt-4 mt-1 border-t border-cozy-line flex items-center justify-center gap-4 text-xs text-cozy-muted">
@@ -2687,7 +2757,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     </>
                   ) : (
                     <>
-                      Descanso {checkpointIndex}/3
+                      Descanso {checkpointIndex}/{checkpointTotal}
                       <HelpTip label={TIPS.descanso} />
                     </>
                   )}
@@ -2808,6 +2878,43 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <span className={`tabular-nums font-semibold ${deaths > 0 ? 'text-rose-300' : 'text-stone-300'}`}>{deaths}</span>
               </div>
             </div>
+
+            {/* Stamina Bar (limits continuous sprinting) */}
+            {!isSpectating && (() => {
+              const pct = Math.max(0, Math.min(100, maxStamina > 0 ? (stamina / maxStamina) * 100 : 100));
+              const fillClass = staminaExhausted
+                ? 'bg-gradient-to-r from-rose-500 to-orange-500'
+                : pct < 35
+                  ? 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                  : 'bg-gradient-to-r from-emerald-500 to-teal-300';
+              return (
+                <div
+                  data-testid="stamina-bar"
+                  className={`flex items-center gap-2 rounded-xl cozy-chip text-xs ${isMobileUi ? 'px-2 py-1 max-w-[165px]' : 'px-3 py-1.5 w-[210px]'}`}
+                  title="Energía para correr (Shift o empujar el joystick)"
+                >
+                  <Zap
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      staminaExhausted ? 'text-rose-400' : pct < 35 ? 'text-amber-400' : 'text-emerald-400'
+                    }`}
+                  />
+                  <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                    <div className="flex items-center justify-between text-[9px] font-bold uppercase tracking-wider leading-none">
+                      <span className={staminaExhausted ? 'text-rose-300' : 'text-stone-300'}>
+                        {staminaExhausted ? 'Sin energía' : 'Energía'}
+                      </span>
+                      <span className="font-mono tabular-nums text-stone-300">{Math.round(pct)}%</span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-stone-800/90 overflow-hidden border border-stone-700/50">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-75 ${fillClass}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Multiplayer Party Room badge */}
             {multiplayerClient.isInPartyRoom() && (
@@ -3799,25 +3906,54 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         </div>
       )}
 
-      {showEasterEgg && (
+      {easterEggData && (
         <div className="absolute inset-0 z-[70] pointer-events-auto flex items-center justify-center p-4 pt-safe pb-safe cozy-scrim">
-          <div className="w-full max-w-xs rounded-[1.75rem] bg-cozy-blush-soft border border-cozy-line shadow-2xl p-6 text-cozy-ink flex flex-col items-center text-center gap-3 animate-in fade-in zoom-in-95">
-            <div className="w-14 h-14 rounded-full bg-white/70 border border-cozy-line flex items-center justify-center text-cozy-blush">
-              <Heart className="w-7 h-7 fill-current" />
+          <div
+            className={`w-full max-w-xs rounded-[1.75rem] border shadow-2xl p-6 text-cozy-ink flex flex-col items-center text-center gap-3 animate-in fade-in zoom-in-95 ${
+              easterEggData.variant === 'secret'
+                ? 'bg-amber-50 border-amber-300'
+                : 'bg-cozy-blush-soft border-cozy-line'
+            }`}
+          >
+            <div
+              className={`w-14 h-14 rounded-full bg-white/80 border flex items-center justify-center ${
+                easterEggData.variant === 'secret'
+                  ? 'border-amber-300 text-amber-500'
+                  : 'border-cozy-line text-cozy-blush'
+              }`}
+            >
+              {easterEggData.variant === 'secret' ? (
+                <Sparkles className="w-7 h-7" />
+              ) : (
+                <Heart className="w-7 h-7 fill-current" />
+              )}
             </div>
+            {easterEggData.badge && (
+              <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-amber-200/70 text-amber-900">
+                {easterEggData.badge}
+              </span>
+            )}
             <h3 className="text-xl font-display font-bold text-cozy-ink leading-snug">
-              Este juego fue creado para hacer feliz a Monse
+              {easterEggData.title || 'Este juego fue creado para hacer feliz a Monse'}
             </h3>
             <p className="text-xs text-cozy-muted leading-relaxed">
-              Un secreto entre nubes, islas y saltos. Gracias por jugar Cozy Leap.
+              {easterEggData.message || 'Un secreto entre nubes, islas y saltos. Gracias por jugar Cozy Leap.'}
             </p>
             <button
               type="button"
               onClick={() => onDismissEasterEgg?.()}
-              className="w-full py-3 rounded-xl bg-cozy-blush hover:brightness-105 text-white font-bold text-sm cursor-pointer inline-flex items-center justify-center gap-2"
+              className={`w-full py-3 rounded-xl text-white font-bold text-sm cursor-pointer inline-flex items-center justify-center gap-2 ${
+                easterEggData.variant === 'secret'
+                  ? 'bg-amber-500 hover:bg-amber-600'
+                  : 'bg-cozy-blush hover:brightness-105'
+              }`}
             >
-              <span>Con cariño</span>
-              <Heart className="w-4 h-4 fill-current" />
+              <span>{easterEggData.variant === 'secret' ? '¡Genial!' : 'Con cariño'}</span>
+              {easterEggData.variant === 'secret' ? (
+                <Sparkles className="w-4 h-4" />
+              ) : (
+                <Heart className="w-4 h-4 fill-current" />
+              )}
             </button>
           </div>
         </div>
@@ -3905,6 +4041,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <Settings className="w-3.5 h-3.5" />
                 <span>Ajustes</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setShowDailyMissions(true)}
+                className="hover:text-cozy-ink cursor-pointer inline-flex items-center gap-1"
+              >
+                <Gift className={`w-3.5 h-3.5 ${claimableMissions > 0 ? 'text-cozy-accent-deep' : ''}`} />
+                <span>
+                  Misiones diarias{claimableMissions > 0 ? ` (${claimableMissions})` : ''}
+                </span>
+              </button>
               <span className="inline-flex items-center gap-0.5">
                 <button
                   type="button"
@@ -3971,7 +4117,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <h2 className="text-2xl font-display font-bold text-cozy-ink">{engine?.gameOverReason ? '¡Perdiste la batalla!' : '¡Tiempo agotado!'}</h2>
               {engine?.gameOverReason && <p className="text-sm text-cozy-muted">{engine.gameOverReason}</p>}
               <p className={`text-xs text-cozy-muted items-center justify-center gap-1 flex-wrap ${engine?.gameOverReason ? 'hidden' : 'inline-flex'}`}>
-                <span>Descanso {checkpointIndex}/3</span>
+                <span>Descanso {checkpointIndex}/{checkpointTotal}</span>
                 <HelpTip label={TIPS.descanso} />
                 <span>· Reliquias {collectedCount}/{totalCollectibles}</span>
                 <HelpTip label={TIPS.reliquias} />
@@ -4151,17 +4297,28 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               >
                 {UI.playAgain}
               </button>
-              <button
-                type="button"
-                disabled={saveProgressAction.busy}
-                onClick={() => {
-                  setLeaderboardLevelId(engine?.currentLevel ?? 1);
-                  setShowLeaderboardModal(true);
-                }}
-                className="text-xs text-cozy-muted hover:text-cozy-ink cursor-pointer py-1"
-              >
-                {UI.leaderboard}
-              </button>
+              <div className="flex items-center justify-center gap-4 pt-0.5">
+                <button
+                  type="button"
+                  disabled={saveProgressAction.busy}
+                  onClick={() => {
+                    setLeaderboardLevelId(engine?.currentLevel ?? 1);
+                    setShowLeaderboardModal(true);
+                  }}
+                  className="text-xs text-cozy-muted hover:text-cozy-ink cursor-pointer py-1"
+                >
+                  {UI.leaderboard}
+                </button>
+                <button
+                  type="button"
+                  disabled={saveProgressAction.busy}
+                  onClick={() => setShowDailyMissions(true)}
+                  className="text-xs font-semibold text-cozy-accent-deep hover:text-cozy-ink cursor-pointer py-1 inline-flex items-center gap-1"
+                >
+                  <Gift className="w-3.5 h-3.5" />
+                  <span>Misiones diarias{claimableMissions > 0 ? ` (${claimableMissions})` : ''}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4816,6 +4973,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           showToast(`Nivel ${pick.level} · ${levelInfo(pick.level).name}`, 2000, 'neutral');
         }}
         onClose={() => setShowDevPanel(false)}
+      />
+      <DailyMissionsModal
+        open={showDailyMissions}
+        appearance={appearance}
+        onEquipPattern={handleEquipPattern}
+        onClaimFeedback={(msg) => showToast(msg, 3200, 'success')}
+        onClose={() => setShowDailyMissions(false)}
       />
     </div>
   );

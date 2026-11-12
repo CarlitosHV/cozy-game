@@ -43,6 +43,12 @@ const LOOK: Record<ThemeId, ThemeLook> = {
   swamp: { particle: 0xd9f99d, particle2: 0xfde047, motion: 'float', island: 0x4d6b3c, rock: 0x55604a, flowers: [0xbef264, 0xfde047, 0xa3e635], grass: 0x4f772d, bird: 0x1c1917 },
   garden: { particle: 0xfbcfe8, particle2: 0xffffff, motion: 'fall', island: 0x7cc46b, rock: 0x9ca3af, flowers: [0xf472b6, 0xfb7185, 0xfacc15, 0xffffff], grass: 0x65a30d, bird: 0x57534e },
   castle: { particle: 0xfb923c, particle2: 0xfde68a, motion: 'rise', island: 0x3f3a4a, rock: 0x4b4458, flowers: [0xdc2626, 0x7c3aed, 0x1f2937], grass: 0x3f4f2f, bird: 0x0c0a09 },
+  neon: { particle: 0x22d3ee, particle2: 0xe879f9, motion: 'rise', island: 0x1e1b4b, rock: 0x0f172a, flowers: [0x22d3ee, 0xf472b6, 0xc084fc], grass: 0x38bdf8, bird: 0xe879f9 },
+  cyberpunk: { particle: 0x22d3ee, particle2: 0xfacc15, motion: 'fall', island: 0x334155, rock: 0x0f172a, flowers: [0xfacc15, 0x22d3ee, 0xf43f5e], grass: 0x475569, bird: 0x22d3ee },
+  lava: { particle: 0xf97316, particle2: 0xfacc15, motion: 'rise', island: 0x292524, rock: 0x1c1917, flowers: [0xf97316, 0xfacc15, 0xef4444], grass: 0x44403c, bird: 0xfb923c },
+  ice: { particle: 0xe0f2fe, particle2: 0x7dd3fc, motion: 'fall', island: 0xf0f9ff, rock: 0x38bdf8, flowers: [0x7dd3fc, 0xffffff, 0xbae6fd], grass: 0x7dd3fc, bird: 0xe0f2fe },
+  desert: { particle: 0xfde68a, particle2: 0xf59e0b, motion: 'float', island: 0xe7b972, rock: 0xb45309, flowers: [0xfbbf24, 0xf59e0b, 0x2dd4bf], grass: 0xd97706, bird: 0x78350f },
+  candy: { particle: 0xf9a8d4, particle2: 0x6ee7b7, motion: 'float', island: 0xfbcfe8, rock: 0x5c3317, flowers: [0xf472b6, 0x6ee7b7, 0xfde047, 0xffffff], grass: 0xf472b6, bird: 0xf472b6 },
   backrooms: { particle: 0xfff3c4, particle2: 0xd6c58a, motion: 'float', island: 0, rock: 0, flowers: [], grass: 0, bird: 0, indoor: true },
 };
 
@@ -81,6 +87,20 @@ const G = {
   woodLeaf: () => () => new THREE.CircleGeometry(0.08, 5).rotateX(-Math.PI / 2).scale(1.4, 1, 0.8).translate(0, 0.005, 0),
   shelfFungus: () => () => new THREE.CylinderGeometry(0.14, 0.02, 0.03, 6, 1, false, 0, Math.PI).translate(0, 0.02, 0),
   tombTop: () => new THREE.CylinderGeometry(0.25, 0.25, 0.12, 10, 1, false, -Math.PI / 2, Math.PI).rotateX(Math.PI / 2).translate(0, 0.55, 0),
+  cyberVent: () => () => new THREE.BoxGeometry(0.36, 0.014, 0.36).translate(0, 0.007, 0),
+  cyberNode: () => () => new THREE.CylinderGeometry(0.055, 0.075, 0.09, 6).translate(0, 0.045, 0),
+  cyberAntenna: () => () => new THREE.CylinderGeometry(0.012, 0.018, 0.28, 5).translate(0, 0.22, 0),
+  cyberPylon: () => () => new THREE.CylinderGeometry(0.04, 0.06, 0.24, 6).translate(0, 0.12, 0),
+  neonTile: () => () => new THREE.BoxGeometry(0.3, 0.01, 0.3).translate(0, 0.005, 0),
+  neonCube: () => () => new THREE.BoxGeometry(0.11, 0.11, 0.11).translate(0, 0.18, 0),
+  emberCrack: () => () => new THREE.CircleGeometry(0.16, 6).rotateX(-Math.PI / 2).scale(1.9, 1, 0.42).translate(0, 0.005, 0),
+  basaltSpike: (r = 0.09, h = 0.28) => () => new THREE.ConeGeometry(r, h, 4).rotateY(0.3).translate(0, h * 0.5, 0),
+  frostMound: () => () => new THREE.SphereGeometry(0.18, 7, 5, 0, Math.PI * 2, 0, Math.PI / 2).scale(1.3, 0.46, 1.0).translate(0, 0.01, 0),
+  sprinkle: () => () => new THREE.BoxGeometry(0.22, 0.042, 0.07).translate(0, 0.021, 0),
+  gummy: () => () => new THREE.CylinderGeometry(0.075, 0.095, 0.11, 8).translate(0, 0.055, 0),
+  sandstoneChip: () => () => new THREE.BoxGeometry(0.22, 0.055, 0.16).translate(0, 0.027, 0),
+  desertScrub: () => () => new THREE.ConeGeometry(0.08, 0.24, 4).translate(0, 0.12, 0),
+  candleWax: () => () => new THREE.CylinderGeometry(0.032, 0.038, 0.2, 6).translate(0, 0.1, 0),
 };
 
 /** Classifies the surface type of any static platform for logical decoration */
@@ -99,11 +119,14 @@ export function classifyPlatformSurface(p: PlatformItem, theme: ThemeId): Platfo
   if (/dirt|soil|planter|mud|peat|field/.test(id)) {
     return 'soil';
   }
-  if (/crystal|gem|shard|prism|meteor|space|cosmic|astral/.test(id)) {
+  if (/crystal|gem|shard|prism|meteor|space|cosmic|astral|neon|synth|holo/.test(id)) {
     return 'crystal';
   }
+  if (/cyber|steel|chrome|hazard|grate|metal|girder|pad|step|bridge/.test(id) && (theme === 'cyberpunk' || theme === 'neon')) {
+    return theme === 'neon' ? 'crystal' : 'stone';
+  }
   if (/grass|lawn|meadow|moss|pasture|island|summit|spawn/.test(id)) {
-    return 'grass';
+    return theme === 'neon' ? 'crystal' : theme === 'cyberpunk' ? 'stone' : 'grass';
   }
 
   // Color-based matching from platform mesh
@@ -118,7 +141,7 @@ export function classifyPlatformSurface(p: PlatformItem, theme: ThemeId): Platfo
     });
   }
   if (c !== undefined) {
-    if (c === 0x888888 || c === 0x64748b || c === 0x475569 || c === 0x334155 || c === 0x94a3b8 || c === 0x555555 || c === 0x6d6a8f || c === 0x4b4458 || c === 0x3f3a4a) {
+    if (c === 0x888888 || c === 0x64748b || c === 0x475569 || c === 0x334155 || c === 0x94a3b8 || c === 0x555555 || c === 0x6d6a8f || c === 0x4b4458 || c === 0x3f3a4a || c === 0x1e293b || c === 0x0f172a) {
       return 'stone';
     }
     if (c === 0x8b5a2b || c === 0xa0522d || c === 0x78350f || c === 0x92400e || c === 0xb45309 || c === 0x854d0e || c === 0x6b4f3a || c === 0x5c4033) {
@@ -132,14 +155,14 @@ export function classifyPlatformSurface(p: PlatformItem, theme: ThemeId): Platfo
     }
   }
 
-  if (theme === 'castle') return 'stone';
-  if (theme === 'cosmic') return 'crystal';
-  if (theme === 'aero') return 'cloud';
+  if (theme === 'castle' || theme === 'cyberpunk' || theme === 'lava' || theme === 'desert') return 'stone';
+  if (theme === 'cosmic' || theme === 'neon' || theme === 'ice') return 'crystal';
+  if (theme === 'aero' || theme === 'candy') return 'cloud';
   if (theme === 'swamp') return 'soil';
   return 'grass';
 }
 
-/** Distinctive decoration tables keyed logically by platform surface type */
+/** Distinctive natural/organic decoration tables keyed by platform surface type */
 const SURFACE_DECOR: Record<PlatformSurfaceType, DecorKind[]> = {
   grass: [
     { share: 0.58, parts: [{ geo: G.tuft, colors: [0x6fbf4a, 0x5aa83a, 0x84cc16] }], scale: [0.7, 1.4], tilt: 0.3, stretch: [0.8, 1.4] },
@@ -170,6 +193,119 @@ const SURFACE_DECOR: Record<PlatformSurfaceType, DecorKind[]> = {
     { share: 0.40, parts: [{ geo: G.head(0.06, 0.06), colors: [0xfef08a, 0x67e8f9, 0xa855f7], emissive: 0.9 }], scale: [0.6, 1.4], tilt: 0 },
   ],
 };
+
+/**
+ * Ad-hoc theme-strict surface decorations:
+ * ensures Cyberpunk gets industrial steel vents, holo-nodes & pylons (never river pebbles),
+ * Neon gets glowing synth tiles & crystals, Lava gets basalt shards & magma cracks, Candy gets sprinkles & gummies, etc.
+ */
+const CYBERPUNK_DECK_DECOR: DecorKind[] = [
+  { share: 0.42, parts: [{ geo: G.cyberVent(), colors: [0x0f172a, 0x1e293b, 0x334155] }], scale: [0.75, 1.35], tilt: 0.02 },
+  {
+    share: 0.33,
+    parts: [
+      { geo: G.cyberNode(), colors: [0x1e293b, 0x0f172a] },
+      { geo: G.head(0.045, 0.12), colors: [0x22d3ee, 0xfacc15, 0xf43f5e], emissive: 0.95 },
+    ],
+    scale: [0.8, 1.25],
+    tilt: 0.04,
+  },
+  {
+    share: 0.25,
+    parts: [
+      { geo: G.cyberPylon(), colors: [0xfacc15, 0xf59e0b, 0x334155] },
+      { geo: G.cyberAntenna(), colors: [0x94a3b8] },
+    ],
+    scale: [0.75, 1.2],
+    tilt: 0.05,
+  },
+];
+
+const NEON_SYNTH_DECOR: DecorKind[] = [
+  { share: 0.44, parts: [{ geo: G.neonTile(), colors: [0x22d3ee, 0xe879f9, 0xa855f7], emissive: 0.65 }], scale: [0.7, 1.35], tilt: 0.02 },
+  { share: 0.34, parts: [{ geo: G.crystal(0.08, 0.36), colors: [0x22d3ee, 0xf472b6, 0xc084fc], emissive: 0.85 }], scale: [0.7, 1.5], tilt: 0.2 },
+  { share: 0.22, parts: [{ geo: G.neonCube(), colors: [0x67e8f9, 0xf0abfc, 0xfef08a], emissive: 0.95 }], scale: [0.65, 1.3], tilt: 0.3 },
+];
+
+const LAVA_BASALT_DECOR: DecorKind[] = [
+  { share: 0.45, parts: [{ geo: G.basaltSpike(0.085, 0.3), colors: [0x1c1917, 0x292524, 0x0c0a09] }], scale: [0.7, 1.5], tilt: 0.22 },
+  { share: 0.35, parts: [{ geo: G.emberCrack(), colors: [0xf97316, 0xfacc15, 0xef4444], emissive: 0.95 }], scale: [0.75, 1.55], tilt: 0.02 },
+  {
+    share: 0.20,
+    parts: [
+      { geo: G.cyberNode(), colors: [0x1c1917] },
+      { geo: G.head(0.055, 0.1), colors: [0xf97316, 0xfbbf24], emissive: 0.95 },
+    ],
+    scale: [0.8, 1.25],
+    tilt: 0.06,
+  },
+];
+
+const ICE_GLACIER_DECOR: DecorKind[] = [
+  { share: 0.55, parts: [{ geo: G.crystal(0.095, 0.44), colors: [0xe0f2fe, 0x7dd3fc, 0xbae6fd], emissive: 0.35 }], scale: [0.65, 1.65], tilt: 0.28 },
+  { share: 0.45, parts: [{ geo: G.frostMound(), colors: [0xf8fafc, 0xf0f9ff, 0xe0f2fe] }], scale: [0.7, 1.4], tilt: 0.04 },
+];
+
+const DESERT_DUNE_DECOR: DecorKind[] = [
+  { share: 0.45, parts: [{ geo: G.sandstoneChip(), colors: [0xd97706, 0xb45309, 0xe7b972, 0xc28b40] }], scale: [0.7, 1.45], tilt: 0.12 },
+  { share: 0.32, parts: [{ geo: G.desertScrub(), colors: [0xa16207, 0x854d0e, 0xca8a04] }], scale: [0.75, 1.3], tilt: 0.22 },
+  { share: 0.23, parts: [{ geo: G.crystal(0.075, 0.28), colors: [0xfbbf24, 0x2dd4bf, 0xf59e0b], emissive: 0.55 }], scale: [0.7, 1.3], tilt: 0.18 },
+];
+
+const CANDY_SUGAR_DECOR: DecorKind[] = [
+  { share: 0.50, parts: [{ geo: G.sprinkle(), colors: [0xf43f5e, 0x38bdf8, 0xfacc15, 0x4ade80, 0xffffff] }], scale: [0.75, 1.35], tilt: 0.03 },
+  { share: 0.30, parts: [{ geo: G.gummy(), colors: [0xf472b6, 0x6ee7b7, 0xa78bfa, 0xfde047] }], scale: [0.75, 1.3], tilt: 0.05 },
+  { share: 0.20, parts: [{ geo: G.puff, colors: [0xffffff, 0xfbcfe8] }], scale: [0.5, 1.05], tilt: 0 },
+];
+
+const CASTLE_STONE_DECOR: DecorKind[] = [
+  { share: 0.45, parts: [{ geo: G.basaltSpike(0.075, 0.24), colors: [0x3f3a4a, 0x4b4458, 0x27272a] }], scale: [0.7, 1.35], tilt: 0.18 },
+  {
+    share: 0.30,
+    parts: [
+      { geo: G.candleWax(), colors: [0xfef3c7, 0xe7e5e4] },
+      { geo: G.head(0.032, 0.22), colors: [0xf97316, 0xfde047], emissive: 0.95 },
+    ],
+    scale: [0.8, 1.25],
+    tilt: 0.05,
+  },
+  { share: 0.25, parts: [{ geo: G.tuft, colors: [0x3f4f2f, 0x365314] }], scale: [0.65, 1.15], tilt: 0.25 },
+];
+
+const COSMIC_DECK_DECOR: DecorKind[] = [
+  { share: 0.62, parts: [{ geo: G.crystal(0.09, 0.42), colors: [0xc084fc, 0x67e8f9, 0xf0abfc, 0x818cf8], emissive: 0.78 }], scale: [0.65, 1.6], tilt: 0.32 },
+  { share: 0.38, parts: [{ geo: G.head(0.06, 0.07), colors: [0xfef08a, 0x67e8f9, 0xe879f9], emissive: 0.9 }], scale: [0.6, 1.3], tilt: 0 },
+];
+
+const AERO_GRASS_DECOR: DecorKind[] = [
+  { share: 0.62, parts: [{ geo: G.tuft, colors: [0x4fc23f, 0x69db7c, 0x8be04e] }], scale: [0.7, 1.3], tilt: 0.25, stretch: [0.8, 1.3] },
+  { share: 0.38, parts: [{ geo: G.stem(0.28), colors: [0x22c55e] }, { geo: G.head(0.085, 0.28), colors: [0x7dd3fc, 0xffffff, 0xfde047, 0xa5f3fc] }], scale: [0.8, 1.25], tilt: 0.08 },
+];
+
+function getDecorForSurface(theme: ThemeId, sType: PlatformSurfaceType): DecorKind[] {
+  switch (theme) {
+    case 'cyberpunk':
+      return CYBERPUNK_DECK_DECOR;
+    case 'neon':
+      return NEON_SYNTH_DECOR;
+    case 'lava':
+      return LAVA_BASALT_DECOR;
+    case 'ice':
+      return ICE_GLACIER_DECOR;
+    case 'desert':
+      return DESERT_DUNE_DECOR;
+    case 'candy':
+      return CANDY_SUGAR_DECOR;
+    case 'castle':
+      return sType === 'wood' ? SURFACE_DECOR.wood : CASTLE_STONE_DECOR;
+    case 'cosmic':
+      return COSMIC_DECK_DECOR;
+    case 'aero':
+      return sType === 'grass' ? AERO_GRASS_DECOR : SURFACE_DECOR[sType] || SURFACE_DECOR.cloud;
+    default:
+      return SURFACE_DECOR[sType] || SURFACE_DECOR.grass;
+  }
+}
 
 const BACKROOMS_DECOR: DecorKind[] = [
   { share: 0.4, parts: [{ geo: G.box(0.3, 0.004, 0.42, 0.004), colors: [0xfafaf9, 0xfef9c3] }], scale: [0.8, 1.2], tilt: 0.03 },
@@ -451,10 +587,10 @@ export class AmbientDecor {
     const floors = world.platforms.filter(
       (p) =>
         p.type === 'static' &&
-        p.size.x >= 3.5 &&
-        p.size.z >= 3.5 &&
+        p.size.x >= 3.0 &&
+        p.size.z >= 3.0 &&
         p.position.y > -20 &&
-        p.position.y < (indoor ? 2 : 60) &&
+        p.position.y < (indoor ? 2 : 120) &&
         !/shield|hatch|cellar|summit_shield|fort_wall|core|rim_|altar|pillar|cover|wall|ceil|roof|mez|shelf/.test(p.id)
     );
     if (!floors.length) return;
@@ -491,13 +627,13 @@ export class AmbientDecor {
 
     const totalArea = floors.reduce((a, f) => a + f.size.x * f.size.z, 0);
 
-    // Populate each platform surface only with its logically appropriate decor
+    // Populate each platform surface with strictly theme-adhoc decor
     surfaceMap.forEach((surfaceFloors, sType) => {
       const sArea = surfaceFloors.reduce((a, f) => a + f.size.x * f.size.z, 0);
       if (sArea <= 0) return;
       const sShare = sArea / totalArea;
       const sCount = Math.max(8, Math.round(count * sShare));
-      const decorList = SURFACE_DECOR[sType] || SURFACE_DECOR.grass;
+      const decorList = getDecorForSurface(this.theme, sType);
 
       const pickFloor = () => {
         let x = rng() * sArea;
@@ -599,13 +735,16 @@ export class AmbientDecor {
       for (let k = 0; k < 2 + Math.floor(rng() * 3); k++) {
         const r0 = size * (0.15 + rng() * 0.12);
         let tr: THREE.Mesh;
-        if (this.theme === 'cosmic') {
+        if (this.theme === 'cosmic' || this.theme === 'neon' || this.theme === 'ice') {
           tr = new THREE.Mesh(new THREE.OctahedronGeometry(r0 * 0.6, 0).scale(1, 2.6, 1), crystalMat);
           tr.position.y = size * 0.17 + r0 * 1.4;
-        } else if (this.theme === 'castle') {
-          tr = new THREE.Mesh(new THREE.ConeGeometry(r0 * 0.45, r0 * 4, 5), rockMat);
-          tr.position.y = size * 0.17 + r0 * 2;
-        } else if (this.theme === 'aero') {
+        } else if (this.theme === 'castle' || this.theme === 'cyberpunk' || this.theme === 'lava' || this.theme === 'desert') {
+          tr = new THREE.Mesh(
+            this.theme === 'cyberpunk' ? new THREE.BoxGeometry(r0 * 0.9, r0 * 3.8, r0 * 0.9) : new THREE.ConeGeometry(r0 * 0.45, r0 * 4, 5),
+            rockMat
+          );
+          tr.position.y = size * 0.17 + r0 * 1.9;
+        } else if (this.theme === 'aero' || this.theme === 'candy') {
           tr = new THREE.Mesh(new THREE.IcosahedronGeometry(r0, 1).scale(1.4, 0.6, 1), cloudMat);
           tr.position.y = size * 0.3;
         } else {
@@ -616,7 +755,7 @@ export class AmbientDecor {
         tr.position.z = (rng() - 0.5) * size;
         g.add(tr);
       }
-      if (this.quality === 'high' && this.theme !== 'castle' && this.theme !== 'cosmic' && rng() < 0.45) {
+      if (this.quality === 'high' && this.theme !== 'castle' && this.theme !== 'cosmic' && this.theme !== 'lava' && this.theme !== 'desert' && rng() < 0.45) {
         const fall = new THREE.Mesh(new THREE.PlaneGeometry(size * 0.25, size * 3.5), waterMat);
         fall.position.set(0, -size * 1.6, size * 0.86);
         g.add(fall);

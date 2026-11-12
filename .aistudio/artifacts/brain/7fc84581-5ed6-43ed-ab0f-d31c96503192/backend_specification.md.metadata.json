@@ -1,5 +1,0 @@
-{
-  "summary": "Especificación técnica y de arquitectura de backend para Cozy Leap Online, con Node.js, Fastify, MongoDB, Redis, WebSockets y autenticación segura con Argon2id y JWT en cookies HttpOnly.",
-  "updatedAt": "2026-11-03T02:43:18.072937054Z",
-  "userFacing": true
-}

@@ -29,7 +29,19 @@ import { CozyEnemy, EnemyManager, KnockFn } from './enemies';
 
 export type ExtraKind = 'chaser' | 'hopper' | 'shooter' | 'diver';
 type SkinKind = ExtraKind | 'walker' | 'flyer';
-export type EnemyTheme = 'cozy' | 'cosmic' | 'swamp' | 'aero' | 'garden' | 'castle';
+export type EnemyTheme =
+  | 'cozy'
+  | 'cosmic'
+  | 'swamp'
+  | 'aero'
+  | 'garden'
+  | 'castle'
+  | 'neon'
+  | 'cyberpunk'
+  | 'lava'
+  | 'ice'
+  | 'desert'
+  | 'candy';
 
 export const EXTRA_ENEMY_NAMES: Record<EnemyTheme, Record<ExtraKind, string>> = {
   cozy: { chaser: 'Erizo Castaño', hopper: 'Rana Saltarina', shooter: 'Seta Lanzaesporas', diver: 'Cuervo Travieso' },
@@ -38,6 +50,12 @@ export const EXTRA_ENEMY_NAMES: Record<EnemyTheme, Record<ExtraKind, string>> = 
   aero: { chaser: 'Gusano Malware', hopper: 'Bloque 404', shooter: 'Torre de Spam', diver: 'Cursor Maldito' },
   garden: { chaser: 'Gnomo Corredor', hopper: 'Gnomo Saltarín', shooter: 'Gnomo Lanzabellotas', diver: 'Gnomo Planeador' },
   castle: { chaser: 'Hombre Lobo', hopper: 'Lobo Saltarín', shooter: 'Vampiro Conde', diver: 'Gárgola en Picada' },
+  neon: { chaser: 'Ciber-Dron Neón', hopper: 'Pulso Saltarín', shooter: 'Torreta Synth', diver: 'Ala Holográfica' },
+  cyberpunk: { chaser: 'Sabueso Cromo', hopper: 'Mina Saltarina', shooter: 'Cañón Centinela', diver: 'Dron Cazador' },
+  lava: { chaser: 'Sabueso Ígneo', hopper: 'Bomba Magma', shooter: 'Torreta Obsidiana', diver: 'Fénix de Ceniza' },
+  ice: { chaser: 'Lobo Glacial', hopper: 'Cubo de Escarcha', shooter: 'Cristal Ventisca', diver: 'Halcón Ártico' },
+  desert: { chaser: 'Escarabajo Arena', hopper: 'Duna Saltarina', shooter: 'Esfinge Láser', diver: 'Buitre Solar' },
+  candy: { chaser: 'Osito Gominola', hopper: 'Malvavisco', shooter: 'Cañón de Caramelo', diver: 'Abeja de Azúcar' },
 };
 
 type SkinState = 'idle' | 'alert' | 'act';
@@ -435,6 +453,139 @@ function makeSkin(theme: EnemyTheme, kind: SkinKind): Skin {
         outline.visible = Math.floor(t * 10) % 3 !== 0;
       },
     });
+  }
+  // ======================= NEON & CYBERPUNK =======================
+  if (theme === 'neon' || theme === 'cyberpunk') {
+    const isNeon = theme === 'neon';
+    const bodyCol = isNeon ? 0x1e1b4b : 0x1e293b;
+    const accentCol = isNeon ? 0x22d3ee : 0xfacc15;
+    const bodyMat = std(bodyCol, 0.25, { metalness: 0.75 });
+    const trimMat = basic(accentCol);
+
+    if (kind === 'chaser' || kind === 'walker') {
+      const hull = mesh(new THREE.BoxGeometry(0.65, 0.42, 0.72), bodyMat, 0, 0.4, 0);
+      const visor = mesh(new THREE.BoxGeometry(0.52, 0.14, 0.06), alert, 0, 0.46, 0.37);
+      const crest = mesh(new THREE.BoxGeometry(0.14, 0.2, 0.45), trimMat, 0, 0.68, 0);
+      const wheels: THREE.Mesh[] = [];
+      for (const s of [-1, 1]) {
+        const wh = mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.12, 12), std(0x0f172a, 0.5), 0.36 * s, 0.18, 0);
+        wh.rotation.z = Math.PI / 2;
+        root.add(wh);
+        wheels.push(wh);
+      }
+      root.add(hull, visor, crest);
+      Object.assign(skin, {
+        normalColor: accentCol,
+        alertColor: 0xff2244,
+        anim: (t: number, st: SkinState) => wheels.forEach((w) => (w.rotation.x = t * (st === 'act' ? 18 : 6))),
+      });
+    } else if (kind === 'hopper') {
+      const pod = mesh(new THREE.CylinderGeometry(0.32, 0.44, 0.48, 8), bodyMat, 0, 0.3, 0);
+      const ring = mesh(new THREE.TorusGeometry(0.38, 0.05, 6, 16), trimMat, 0, 0.26, 0);
+      ring.rotation.x = Math.PI / 2;
+      const core = mesh(new THREE.SphereGeometry(0.16, 10, 10), alert, 0, 0.58, 0);
+      root.add(pod, ring, core);
+      Object.assign(skin, { normalColor: isNeon ? 0xe879f9 : 0x22d3ee, alertColor: 0xff2244 });
+    } else if (kind === 'shooter') {
+      const base = mesh(new THREE.CylinderGeometry(0.36, 0.45, 0.35, 8), bodyMat, 0, 0.18, 0);
+      const head = mesh(new THREE.BoxGeometry(0.48, 0.42, 0.52), bodyMat, 0, 0.65, 0);
+      const barrel = mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.42, 8), trimMat, 0, 0.65, 0.35);
+      barrel.rotation.x = Math.PI / 2;
+      const lens = mesh(new THREE.SphereGeometry(0.1, 8, 8), alert, 0, 0.65, 0.56);
+      const muzzle = new THREE.Object3D();
+      muzzle.position.set(0, 0.65, 0.62);
+      root.add(base, head, barrel, lens, muzzle);
+      Object.assign(skin, {
+        muzzle,
+        normalColor: accentCol,
+        alertColor: 0xff1133,
+        projectile: () => glowBall(isNeon ? 0xe879f9 : 0x22d3ee, 0.16),
+      });
+    } else {
+      // diver / flyer
+      const pod = mesh(new THREE.OctahedronGeometry(0.32, 0), bodyMat, 0, 0, 0);
+      pod.scale.set(1.1, 0.6, 1.3);
+      const wingMat = basic(isNeon ? 0xe879f9 : 0x22d3ee);
+      const wingL = mesh(new THREE.BoxGeometry(0.62, 0.05, 0.28), wingMat, 0.45, 0.04, 0);
+      const wingR = mesh(new THREE.BoxGeometry(0.62, 0.05, 0.28), wingMat, -0.45, 0.04, 0);
+      const eye = mesh(new THREE.SphereGeometry(0.11, 8, 8), alert, 0, 0.02, 0.32);
+      root.add(pod, wingL, wingR, eye);
+      Object.assign(skin, {
+        normalColor: accentCol,
+        alertColor: 0xff2244,
+        anim: (t: number, st: SkinState) => {
+          const tilt = st === 'act' ? 0.35 : Math.sin(t * 8) * 0.22;
+          wingL.rotation.z = tilt;
+          wingR.rotation.z = -tilt;
+        },
+      });
+    }
+  }
+  // ======================= LAVA, ICE, DESERT, CANDY =======================
+  if (theme === 'lava' || theme === 'ice' || theme === 'desert' || theme === 'candy') {
+    const palette: Record<'lava' | 'ice' | 'desert' | 'candy', { body: number; accent: number; proj: number }> = {
+      lava: { body: 0x292524, accent: 0xf97316, proj: 0xfacc15 },
+      ice: { body: 0x7dd3fc, accent: 0x0284c7, proj: 0xe0f2fe },
+      desert: { body: 0xd9a05b, accent: 0xfbbf24, proj: 0xf59e0b },
+      candy: { body: 0xf472b6, accent: 0x6ee7b7, proj: 0xfef08a },
+    };
+    const pal = palette[theme];
+    const bodyMat = std(pal.body, theme === 'ice' ? 0.2 : 0.65);
+    const accentMat = std(pal.accent, 0.35);
+
+    if (kind === 'chaser' || kind === 'walker') {
+      const body = mesh(new THREE.BoxGeometry(0.66, 0.56, 0.72), bodyMat, 0, 0.42, 0);
+      const hornL = mesh(new THREE.ConeGeometry(0.12, 0.34, 5), accentMat, 0.2, 0.82, 0.1);
+      const hornR = mesh(new THREE.ConeGeometry(0.12, 0.34, 5), accentMat, -0.2, 0.82, 0.1);
+      const visor = mesh(new THREE.BoxGeometry(0.46, 0.14, 0.08), alert, 0, 0.48, 0.37);
+      root.add(body, hornL, hornR, visor);
+      Object.assign(skin, {
+        normalColor: pal.accent,
+        alertColor: 0xff2244,
+        anim: (t: number, st: SkinState) => {
+          body.position.y = 0.42 + Math.abs(Math.sin(t * (st === 'act' ? 14 : 5))) * 0.08;
+        },
+      });
+    } else if (kind === 'hopper') {
+      const orb = mesh(new THREE.DodecahedronGeometry(0.44, 0), bodyMat, 0, 0.44, 0);
+      const band = mesh(new THREE.TorusGeometry(0.4, 0.07, 6, 16), accentMat, 0, 0.44, 0);
+      band.rotation.x = Math.PI / 2;
+      const core = mesh(new THREE.SphereGeometry(0.16, 10, 10), alert, 0, 0.72, 0.22);
+      root.add(orb, band, core);
+      Object.assign(skin, { normalColor: pal.accent, alertColor: 0xff2244 });
+    } else if (kind === 'shooter') {
+      const base = mesh(new THREE.CylinderGeometry(0.38, 0.48, 0.42, 8), bodyMat, 0, 0.21, 0);
+      const head = mesh(new THREE.SphereGeometry(0.34, 12, 10), accentMat, 0, 0.68, 0);
+      const barrel = mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.42, 8), bodyMat, 0, 0.68, 0.34);
+      barrel.rotation.x = Math.PI / 2;
+      const eye = mesh(new THREE.SphereGeometry(0.1, 8, 8), alert, 0, 0.74, 0.52);
+      const muzzle = new THREE.Object3D();
+      muzzle.position.set(0, 0.68, 0.62);
+      root.add(base, head, barrel, eye, muzzle);
+      Object.assign(skin, {
+        muzzle,
+        normalColor: pal.accent,
+        alertColor: 0xff1133,
+        projectile: () => glowBall(pal.proj, 0.16),
+      });
+    } else {
+      // diver / flyer
+      const body = mesh(new THREE.OctahedronGeometry(0.32, 0), bodyMat, 0, 0, 0);
+      body.scale.set(1.1, 0.7, 1.3);
+      const wingL = mesh(new THREE.BoxGeometry(0.64, 0.06, 0.28), accentMat, 0.46, 0.04, 0);
+      const wingR = mesh(new THREE.BoxGeometry(0.64, 0.06, 0.28), accentMat, -0.46, 0.04, 0);
+      const eye = mesh(new THREE.SphereGeometry(0.11, 8, 8), alert, 0, 0.02, 0.34);
+      root.add(body, wingL, wingR, eye);
+      Object.assign(skin, {
+        normalColor: pal.accent,
+        alertColor: 0xff2244,
+        anim: (t: number, st: SkinState) => {
+          const fl = st === 'act' ? 0.38 : Math.sin(t * 9) * 0.24;
+          wingL.rotation.z = fl;
+          wingR.rotation.z = -fl;
+        },
+      });
+    }
   }
   return skin;
 }

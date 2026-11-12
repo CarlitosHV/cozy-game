@@ -15,8 +15,11 @@ import { addCosmicBackdrop, createCosmicStyle } from './levelCosmic';
 import { addSwampBackdrop, createSwampStyle } from './levelSwamp';
 import { gardenPack } from './levelGarden';
 import { castlePack } from './levelCastle';
+import { neonPack, cyberpunkPack } from './levelNeonCyber';
+import { lavaPack, icePack, desertPack, candyPack } from './levelMoreThemes';
+import type { OutdoorThemeId } from './progress';
 
-export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero' | 'garden' | 'castle';
+export type ThemeId = OutdoorThemeId;
 export type Builder = (g: THREE.Group, w: number, d: number, h: number) => void;
 type Spawner = (em: EnemyManager, id: string, pos: THREE.Vector3, axis: 'x' | 'z', range: number) => void;
 
@@ -50,6 +53,12 @@ export const THEME_NAMES: Record<ThemeId, string> = {
   aero: 'Valle Aero',
   garden: 'Jardín Gigante',
   castle: 'Castillo Embrujado',
+  neon: 'Ciudad Neón',
+  cyberpunk: 'Cyberpunk',
+  lava: 'Volcán Infernal',
+  ice: 'Cumbre Glacial',
+  desert: 'Dunas Doradas',
+  candy: 'Reino Dulce',
 };
 
 export const THEME_ACCENTS: Record<ThemeId, string> = {
@@ -59,6 +68,12 @@ export const THEME_ACCENTS: Record<ThemeId, string> = {
   aero: '#38bdf8',
   garden: '#f472b6',
   castle: '#ef4444',
+  neon: '#e879f9',
+  cyberpunk: '#22d3ee',
+  lava: '#f97316',
+  ice: '#7dd3fc',
+  desert: '#fbbf24',
+  candy: '#fb7185',
 };
 
 // ---------------------------------------------------------------------------
@@ -430,6 +445,18 @@ export function createThemePack(id: ThemeId, kit: LevelKit, textures: Procedural
       return gardenPack(kit);
     case 'castle':
       return castlePack(kit, textures);
+    case 'neon':
+      return neonPack(kit, textures);
+    case 'cyberpunk':
+      return cyberpunkPack(kit, textures);
+    case 'lava':
+      return lavaPack(kit, textures);
+    case 'ice':
+      return icePack(kit, textures);
+    case 'desert':
+      return desertPack(kit, textures);
+    case 'candy':
+      return candyPack(kit, textures);
     default:
       return cozyPack(kit, textures);
   }

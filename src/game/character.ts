@@ -5,6 +5,10 @@
  */
 
 import { isCompanionUnlocked } from './progress';
+import { ShirtPatternId, SHIRT_PATTERNS } from './patterns';
+import { isPatternUnlocked } from './dailyMissions';
+
+export type { ShirtPatternId };
 
 export type BodyType = 'chico' | 'chica';
 export type HairStyle = 'flequillo' | 'puntas' | 'rapado' | 'coleta' | 'largo' | 'trenzas' | 'chongo';
@@ -27,6 +31,8 @@ export interface CharacterAppearance {
   hatColor: string;
   outfitStyle: OutfitStyle;
   sweaterColor: string;
+  /** Cosmetic fabric pattern unlocked via Daily Missions */
+  shirtPattern?: ShirtPatternId;
   /** Secondary outfit color: overall denim, poncho stripes, dress trim, hoodie pocket */
   detailColor: string;
   scarfColor: string;
@@ -51,6 +57,7 @@ export const DEFAULT_APPEARANCE: CharacterAppearance = {
   hatColor: '#3d5a80',
   outfitStyle: 'sueter',
   sweaterColor: '#db6b50',
+  shirtPattern: 'liso',
   detailColor: '#3d5a80',
   scarfColor: '#f2cc8f',
   bootColor: '#3d312a',
@@ -72,6 +79,7 @@ export const DEFAULT_CHICA: CharacterAppearance = {
   hatColor: '#b56576',
   outfitStyle: 'vestido',
   sweaterColor: '#81b29a',
+  shirtPattern: 'liso',
   detailColor: '#f2cc8f',
   scarfColor: '#f4f1de',
   bootColor: '#5e4636',
@@ -262,6 +270,8 @@ export function generateRandomAppearance(body: BodyType = 'chico', keepName?: st
   const hatColor = pickDistinct(CLOTH_COLORS, [sweaterColor, scarfColor]);
   const detailColor = pickDistinct(CLOTH_COLORS, [sweaterColor, scarfColor]);
   const round2 = (n: number) => Math.round(n * 100) / 100;
+  const unlockedPatterns = SHIRT_PATTERNS.filter((p) => isPatternUnlocked(p.id));
+  const pickedPattern = unlockedPatterns.length > 1 && Math.random() < 0.7 ? pick(unlockedPatterns).id : 'liso';
   return {
     bodyType: body,
     name: keepName ?? generateRandomName(body),
@@ -274,6 +284,7 @@ export function generateRandomAppearance(body: BodyType = 'chico', keepName?: st
     hatColor,
     outfitStyle: pick(outfitStylesFor(body)).id,
     sweaterColor,
+    shirtPattern: pickedPattern,
     detailColor,
     scarfColor,
     bootColor: pick(BOOT_COLORS),
@@ -391,6 +402,14 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
   if (oneOf(r.companion, COMPANIONS)) {
     if (isRemote || isCompanionUnlocked(r.companion)) {
       out.companion = r.companion;
+    }
+  }
+
+  // Cosmetic shirt pattern
+  const rawPattern = r.shirtPattern ?? r.clothingPattern ?? r.pattern;
+  if (oneOf(rawPattern, SHIRT_PATTERNS)) {
+    if (isRemote || isPatternUnlocked(rawPattern)) {
+      out.shirtPattern = rawPattern;
     }
   }
 

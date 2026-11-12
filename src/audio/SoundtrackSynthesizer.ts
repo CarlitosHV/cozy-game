@@ -16,6 +16,12 @@ export type WeatherType =
   | 'swamp_mist'
   | 'garden_day'
   | 'castle_night'
+  | 'neon_night'
+  | 'cyber_storm'
+  | 'lava_ash'
+  | 'blizzard'
+  | 'desert_sun'
+  | 'candy_sky'
   | 'backrooms';
 
 class SoundtrackSynthesizer {
@@ -339,30 +345,46 @@ class SoundtrackSynthesizer {
     const wGain = this.windNode as GainNode;
     const timeConstant = Math.max(0.3, duration * 0.32);
 
-    if (this.currentWeather === 'cozy_rain') {
-      wGain.gain.setTargetAtTime(0.20, now, timeConstant);
+    if (this.currentWeather === 'cozy_rain' || this.currentWeather === 'cyber_storm') {
+      wGain.gain.setTargetAtTime(this.currentWeather === 'cyber_storm' ? 0.16 : 0.20, now, timeConstant);
       if (this.rainGainNode) {
-        this.rainGainNode.gain.setTargetAtTime(1.0, now, timeConstant);
+        this.rainGainNode.gain.setTargetAtTime(this.currentWeather === 'cyber_storm' ? 0.65 : 1.0, now, timeConstant);
       }
       if (this.nightGainNode) {
-        this.nightGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
+        this.nightGainNode.gain.setTargetAtTime(this.currentWeather === 'cyber_storm' ? 0.1 : 0.0, now, timeConstant);
       }
       this.ensureRainLoop();
-    } else if (this.currentWeather === 'sakura_breeze') {
-      wGain.gain.setTargetAtTime(0.16, now, timeConstant);
+    } else if (this.currentWeather === 'sakura_breeze' || this.currentWeather === 'candy_sky' || this.currentWeather === 'desert_sun') {
+      wGain.gain.setTargetAtTime(this.currentWeather === 'desert_sun' ? 0.11 : 0.15, now, timeConstant);
       if (this.rainGainNode) {
         this.rainGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
       }
       if (this.nightGainNode) {
         this.nightGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
       }
-    } else if (this.currentWeather === 'starlit_night' || this.currentWeather === 'castle_night') {
-      wGain.gain.setTargetAtTime(0.05, now, timeConstant);
+    } else if (this.currentWeather === 'blizzard') {
+      wGain.gain.setTargetAtTime(0.24, now, timeConstant);
       if (this.rainGainNode) {
         this.rainGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
       }
       if (this.nightGainNode) {
-        this.nightGainNode.gain.setTargetAtTime(0.22, now, timeConstant);
+        this.nightGainNode.gain.setTargetAtTime(0.08, now, timeConstant);
+      }
+    } else if (this.currentWeather === 'lava_ash') {
+      wGain.gain.setTargetAtTime(0.18, now, timeConstant);
+      if (this.rainGainNode) {
+        this.rainGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
+      }
+      if (this.nightGainNode) {
+        this.nightGainNode.gain.setTargetAtTime(0.12, now, timeConstant);
+      }
+    } else if (this.currentWeather === 'starlit_night' || this.currentWeather === 'castle_night' || this.currentWeather === 'neon_night') {
+      wGain.gain.setTargetAtTime(0.06, now, timeConstant);
+      if (this.rainGainNode) {
+        this.rainGainNode.gain.setTargetAtTime(0.0, now, timeConstant);
+      }
+      if (this.nightGainNode) {
+        this.nightGainNode.gain.setTargetAtTime(this.currentWeather === 'neon_night' ? 0.26 : 0.22, now, timeConstant);
       }
     } else {
       // Golden Hour (and the windless Backrooms)
@@ -420,7 +442,7 @@ class SoundtrackSynthesizer {
     }
 
     // Only synthesize droplets if rain volume bus is active
-    if (this.currentWeather === 'cozy_rain' || this.rainGainNode.gain.value > 0.005) {
+    if (this.currentWeather === 'cozy_rain' || this.currentWeather === 'cyber_storm' || this.rainGainNode.gain.value > 0.005) {
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();

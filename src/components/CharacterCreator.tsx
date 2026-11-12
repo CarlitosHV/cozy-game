@@ -45,6 +45,8 @@ import {
 } from '../game/character';
 import { COMPANION_POWERS } from '../game/companionPowers';
 import { isCompanionUnlocked, unlockLevelFor } from '../game/progress';
+import { SHIRT_PATTERNS, getPatternSwatchUrl } from '../game/patterns';
+import { isPatternUnlocked, subscribeDailyMissions } from '../game/dailyMissions';
 import { ConfirmDialog, ConfirmRequest } from './ConfirmDialog';
 import { FieldError, RequirementList } from './FieldHints';
 import { RecentChips, SuggestionList } from './RecentChips';
@@ -88,6 +90,7 @@ const FIELD_FOCUS: Partial<Record<keyof CharacterAppearance, CharacterPreviewFoc
   hairColor: 'head',
   outfitStyle: 'torso',
   sweaterColor: 'torso',
+  shirtPattern: 'torso',
   detailColor: 'torso',
   hatStyle: 'head',
   hatColor: 'head',
@@ -313,10 +316,12 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
   const [nameTouched, setNameTouched] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [recentNames, setRecentNames] = useState<string[]>(() => getRecent(RECENT_KEYS.characterNames));
+  const [, setMissionTick] = useState(0);
   const lastKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     onFocusChange?.('full');
+    return subscribeDailyMissions(() => setMissionTick((v) => v + 1));
   }, []);
 
   const focus = (next: CharacterPreviewFocus) => {
@@ -708,6 +713,77 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
               </Section>
               <Section title="Color de detalles" onFocus={() => focus('torso')}>
                 <Swatches label="Color de detalles" colors={CLOTH_COLORS} value={appearance.detailColor} onPick={(c) => set('detailColor', c)} />
+              </Section>
+              <Section
+                title="Patrón de tela"
+                aside={
+                  <span className="text-[10px] text-cozy-muted tabular-nums">
+                    {SHIRT_PATTERNS.filter((p) => !p.defaultUnlocked && isPatternUnlocked(p.id)).length}/{SHIRT_PATTERNS.filter((p) => !p.defaultUnlocked).length} desbloqueados
+                  </span>
+                }
+                onFocus={() => focus('torso')}
+              >
+                <div className="grid grid-cols-3 gap-2">
+                  {SHIRT_PATTERNS.map((p) => {
+                    const unlocked = isPatternUnlocked(p.id);
+                    const selected = (appearance.shirtPattern ?? 'liso') === p.id;
+                    const swatchUrl = getPatternSwatchUrl(p.id, appearance.sweaterColor, appearance.detailColor);
+                    if (!unlocked) {
+                      return (
+                        <div
+                          key={p.id}
+                          title={`${p.name}: Completa misiones diarias para desbloquearlo`}
+                          aria-disabled="true"
+                          className="flex flex-col items-center gap-1.5 p-2 rounded-xl border border-dashed border-cozy-line bg-cozy-panel-deep/65 opacity-75 text-center"
+                        >
+                          <div className="relative w-10 h-10 rounded-lg overflow-hidden border border-cozy-line/80 shrink-0">
+                            {swatchUrl ? (
+                              <img src={swatchUrl} alt={p.name} className="w-full h-full object-cover grayscale opacity-55" />
+                            ) : (
+                              <div className="w-full h-full" style={{ backgroundColor: appearance.sweaterColor }} />
+                            )}
+                            <span className="absolute inset-0 flex items-center justify-center bg-black/35 text-white">
+                              <Lock className="w-3.5 h-3.5" />
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-semibold text-cozy-muted leading-tight line-clamp-1">
+                            {p.name}
+                          </span>
+                          <span className="text-[9px] text-cozy-accent-deep/85 leading-none">
+                            Misión diaria
+                          </span>
+                        </div>
+                      );
+                    }
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => set('shirtPattern', p.id)}
+                        title={p.desc}
+                        className={`flex flex-col items-center gap-1.5 p-2 rounded-xl border text-center cursor-pointer transition-all active:scale-95 ${
+                          selected
+                            ? 'bg-[#fff1de] border-cozy-accent ring-1 ring-cozy-accent/40'
+                            : 'cozy-panel-soft hover:border-cozy-sky'
+                        }`}
+                      >
+                        <div className="w-10 h-10 rounded-lg overflow-hidden border border-black/10 shrink-0">
+                          {swatchUrl ? (
+                            <img src={swatchUrl} alt={p.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full" style={{ backgroundColor: appearance.sweaterColor }} />
+                          )}
+                        </div>
+                        <span className="text-[10px] font-bold text-cozy-ink leading-tight line-clamp-1">
+                          {p.name}
+                        </span>
+                        <span className="text-[9px] text-cozy-muted leading-none">
+                          {selected ? 'Equipado' : p.biomeHint}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </Section>
               <Section title="Para la cabeza" onFocus={() => focus('head')}>
                 <Chips options={hatStylesFor(body)} value={appearance.hatStyle} onPick={(v) => set('hatStyle', v)} />

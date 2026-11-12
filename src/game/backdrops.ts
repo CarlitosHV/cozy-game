@@ -652,6 +652,276 @@ function castle(g: THREE.Group, rng: Rng): Backdrop['update'] {
   };
 }
 
+// ======================================================================== Ciudad Neón
+function neon(g: THREE.Group, rng: Rng): Backdrop['update'] {
+  stars(g, rng, 900, 224, 0.05);
+
+  // Striped retro synthwave sun on the horizon
+  const sunTex = canvasTexture(256, 256, (ctx) => {
+    const gr = ctx.createLinearGradient(0, 20, 0, 236);
+    gr.addColorStop(0, '#fde047');
+    gr.addColorStop(0.45, '#fb7185');
+    gr.addColorStop(1, '#c026d3');
+    ctx.beginPath();
+    ctx.arc(128, 128, 118, 0, Math.PI * 2);
+    ctx.fillStyle = gr;
+    ctx.fill();
+    ctx.globalCompositeOperation = 'destination-out';
+    for (let y = 138; y < 244; y += 18) {
+      ctx.fillRect(0, y, 256, Math.min(11, 3 + Math.floor((y - 138) / 16)));
+    }
+  });
+  const sun = mesh(new THREE.CircleGeometry(34, 48), basic(0xffffff, { map: sunTex, transparent: true, depthWrite: false }), at(0.25, R + 12, 34));
+  sun.lookAt(0, 0, 0);
+  g.add(sun);
+  const sunGlow = glowSprite(glowTex('rgba(232,121,249,0.6)'), 140, 0.55);
+  sunGlow.position.copy(at(0.25, R + 16, 34));
+  g.add(sunGlow);
+
+  // Glowing neon skyline buildings around the horizon
+  const darkHull = basic(0x120624);
+  const cyanMat = basic(0x22d3ee);
+  const magentaMat = basic(0xe879f9);
+  const violetMat = basic(0x8b5cf6);
+  const pulses: THREE.Mesh[] = [];
+  for (let i = 0; i < 28; i++) {
+    const az = (i / 28) * Math.PI * 2 + rng() * 0.08;
+    const h = 36 + rng() * 68;
+    const w = 10 + rng() * 12;
+    const d = 10 + rng() * 10;
+    const pos = at(az, R + 6 + (i % 3) * 8, -42 + h / 2);
+    const b = mesh(new THREE.BoxGeometry(w, h, d), darkHull, pos);
+    b.lookAt(0, pos.y, 0);
+    g.add(b);
+    const trim = mesh(new THREE.BoxGeometry(w + 0.8, 1.4, d + 0.8), i % 3 === 0 ? cyanMat : i % 3 === 1 ? magentaMat : violetMat, new THREE.Vector3(pos.x, pos.y + h / 2 - 2.5, pos.z));
+    trim.lookAt(0, trim.position.y, 0);
+    g.add(trim);
+    pulses.push(trim);
+  }
+
+  // Horizon neon rings
+  const ringA = mesh(new THREE.TorusGeometry(R - 14, 0.45, 6, 96), basic(0x22d3ee, { transparent: true, opacity: 0.4 }), new THREE.Vector3(0, -34, 0));
+  ringA.rotation.x = Math.PI / 2;
+  const ringB = mesh(new THREE.TorusGeometry(R + 4, 0.45, 6, 96), basic(0xe879f9, { transparent: true, opacity: 0.35 }), new THREE.Vector3(0, -38, 0));
+  ringB.rotation.x = Math.PI / 2;
+  g.add(ringA, ringB);
+
+  return (_dt, time) => {
+    pulses.forEach((p, idx) => {
+      const s = 0.85 + Math.sin(time * 2.2 + idx * 0.7) * 0.15;
+      p.scale.set(1, s, 1);
+    });
+  };
+}
+
+// ======================================================================== Cyberpunk
+function cyberpunk(g: THREE.Group, rng: Rng): Backdrop['update'] {
+  const hull = basic(0x0a101d);
+  const hullMid = basic(0x131d31);
+  const cyan = basic(0x22d3ee);
+  const amber = basic(0xfacc15);
+  const crimson = basic(0xf43f5e);
+
+  // Brutalist cyberpunk megatowers & arcologies
+  const beams: THREE.Mesh[] = [];
+  for (let i = 0; i < 24; i++) {
+    const az = (i / 24) * Math.PI * 2 + rng() * 0.08;
+    const h = 55 + rng() * 75;
+    const w = 13 + rng() * 14;
+    const pos = at(az, R + 8 + (i % 3) * 10, -45 + h / 2);
+    const tower = mesh(new THREE.BoxGeometry(w, h, w), i % 2 ? hull : hullMid, pos);
+    tower.lookAt(0, pos.y, 0);
+    g.add(tower);
+
+    // Lit neon sign bands
+    const bandColor = i % 3 === 0 ? cyan : i % 3 === 1 ? amber : crimson;
+    for (let k = 0; k < 2; k++) {
+      const sign = mesh(
+        new THREE.BoxGeometry(w * 0.82, 2.6, 0.6),
+        bandColor,
+        new THREE.Vector3(pos.x, pos.y + (k === 0 ? h * 0.22 : -h * 0.08), pos.z)
+      );
+      sign.lookAt(0, sign.position.y, 0);
+      sign.translateZ(w / 2 + 0.4);
+      g.add(sign);
+    }
+
+    // Sweeping searchlight beams on tall towers
+    if (i % 4 === 0) {
+      const beam = mesh(
+        new THREE.ConeGeometry(14, 120, 12, 1, true),
+        basic(i % 8 === 0 ? 0x22d3ee : 0xf43f5e, { transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }),
+        new THREE.Vector3(pos.x, pos.y + h / 2 + 56, pos.z)
+      );
+      beam.rotation.z = 0.22 * (i % 2 ? 1 : -1);
+      g.add(beam);
+      beams.push(beam);
+    }
+  }
+
+  // Drifting aerial sky-traffic lights
+  const traffic: { m: THREE.Mesh; az: number; r: number; y: number; sp: number }[] = [];
+  for (let i = 0; i < 18; i++) {
+    const m = mesh(new THREE.BoxGeometry(0.9, 0.6, 4.2), i % 2 ? cyan : amber);
+    const az = rng() * Math.PI * 2;
+    const r = R - 25 + rng() * 20;
+    const y = -5 + rng() * 55;
+    m.position.copy(at(az, r, y));
+    g.add(m);
+    traffic.push({ m, az, r, y, sp: (0.04 + rng() * 0.05) * (i % 2 ? 1 : -1) });
+  }
+
+  return (dt, time) => {
+    beams.forEach((b, i) => (b.rotation.z = Math.sin(time * 0.6 + i) * 0.35));
+    for (const tr of traffic) {
+      tr.az += tr.sp * dt;
+      tr.m.position.copy(at(tr.az, tr.r, tr.y));
+      tr.m.rotation.y = tr.az + (tr.sp > 0 ? Math.PI / 2 : -Math.PI / 2);
+    }
+  };
+}
+
+// ======================================================================== Volcán Infernal
+function lava(g: THREE.Group, rng: Rng): Backdrop['update'] {
+  const basalt = basic(0x180e0d);
+  const rock = basic(0x281614);
+  const glow = basic(0xff5a1f);
+  const calderaGlow = glowSprite(glowTex('rgba(255,110,30,0.75)'), 190, 0.7);
+  calderaGlow.position.copy(at(0.4, R + 8, 52));
+  g.add(calderaGlow);
+
+  // Main erupting volcano cone on the horizon
+  const volc = new THREE.Group();
+  volc.position.copy(at(0.4, R + 12, -45));
+  volc.add(mesh(new THREE.ConeGeometry(78, 108, 12, 1, false), basalt, new THREE.Vector3(0, 54, 0)));
+  const crater = mesh(new THREE.CylinderGeometry(16, 18, 8, 12), glow, new THREE.Vector3(0, 104, 0));
+  volc.add(crater);
+  g.add(volc);
+
+  // Jagged obsidian crags around the horizon
+  for (let i = 0; i < 22; i++) {
+    const az = (i / 22) * Math.PI * 2 + rng() * 0.14;
+    if (Math.abs(az - 0.4) < 0.35) continue;
+    const h = 38 + rng() * 58;
+    const peak = mesh(new THREE.ConeGeometry(16 + rng() * 14, h, 6), i % 2 ? basalt : rock, at(az, R + 10, -45 + h / 2));
+    peak.rotation.y = rng() * 3;
+    g.add(peak);
+  }
+
+  // Rising glowing ember sparks in far distance
+  const sparks: { m: THREE.Mesh; base: THREE.Vector3; sp: number }[] = [];
+  for (let k = 0; k < 18; k++) {
+    const m = mesh(new THREE.OctahedronGeometry(0.9 + rng() * 0.8, 0), basic(k % 2 ? 0xff7b29 : 0xfacc15));
+    const base = at(rng() * Math.PI * 2, R - 20 + rng() * 16, -20 + rng() * 45);
+    m.position.copy(base);
+    g.add(m);
+    sparks.push({ m, base, sp: 4 + rng() * 6 });
+  }
+  return (dt, time) => {
+    calderaGlow.scale.setScalar(185 + Math.sin(time * 2.1) * 14);
+    for (const s of sparks) {
+      s.m.position.y += s.sp * dt;
+      if (s.m.position.y > 75) s.m.position.y = -35;
+    }
+  };
+}
+
+// ======================================================================== Cumbre Glacial
+function ice(g: THREE.Group, rng: Rng): Backdrop['update'] {
+  const iceDark = lambert(0x3b82c4, { flatShading: true });
+  const snowPeak = lambert(0xf0f9ff, { flatShading: true });
+  for (let i = 0; i < 24; i++) {
+    const az = (i / 24) * Math.PI * 2 + rng() * 0.12;
+    const h = 48 + rng() * 65;
+    const r = 20 + rng() * 16;
+    const m = mesh(new THREE.ConeGeometry(r, h, 6), iceDark, at(az, R + 10, -45 + h / 2));
+    const cap = mesh(new THREE.ConeGeometry(r * 0.45, h * 0.35, 6), snowPeak, at(az, R + 10, -45 + h * 0.82));
+    g.add(m, cap);
+  }
+
+  // Aurora Borealis glowing ribbons high in the sky
+  const auroras: THREE.Mesh[] = [];
+  for (let k = 0; k < 3; k++) {
+    const rib = mesh(
+      new THREE.TorusGeometry(R + 4 - k * 8, 2.2, 6, 64, Math.PI * 0.85),
+      basic(k === 0 ? 0x34d399 : k === 1 ? 0x38bdf8 : 0xa78bfa, { transparent: true, opacity: 0.38, depthWrite: false }),
+      new THREE.Vector3(0, 62 + k * 9, 0)
+    );
+    rib.rotation.x = Math.PI / 2 - 0.18;
+    rib.rotation.z = k * 0.85;
+    g.add(rib);
+    auroras.push(rib);
+  }
+  return (_dt, time) => {
+    auroras.forEach((a, i) => {
+      a.rotation.z += 0.0005 * (i % 2 ? 1 : -1);
+      (a.material as THREE.MeshBasicMaterial).opacity = 0.28 + Math.sin(time * 0.8 + i * 1.4) * 0.12;
+    });
+  };
+}
+
+// ======================================================================== Dunas Doradas
+function desert(g: THREE.Group, rng: Rng): Backdrop['update'] {
+  const sand = lambert(0xd99b4e, { flatShading: true });
+  const sandLight = lambert(0xf0bd72, { flatShading: true });
+  // Distant golden pyramids
+  for (let i = 0; i < 6; i++) {
+    const az = (i / 6) * Math.PI * 2 + 0.3;
+    const h = 44 + (i % 3) * 20;
+    const p = mesh(new THREE.ConeGeometry(38 + (i % 2) * 14, h, 4), i % 2 ? sand : sandLight, at(az, R + 8, -42 + h / 2));
+    p.rotation.y = Math.PI / 4;
+    g.add(p);
+  }
+  // Rolling desert dunes ring
+  for (let i = 0; i < 18; i++) {
+    const az = (i / 18) * Math.PI * 2 + rng() * 0.16;
+    const dune = mesh(new THREE.SphereGeometry(34 + rng() * 20, 14, 10), i % 2 ? sandLight : sand, at(az, R - 4, -38));
+    dune.scale.set(1.5, 0.38, 1);
+    g.add(dune);
+  }
+  // Twin desert suns
+  const sunA = mesh(new THREE.CircleGeometry(15, 32), basic(0xfef08a), at(0.6, R + 16, 68));
+  sunA.lookAt(0, 0, 0);
+  const sunB = mesh(new THREE.CircleGeometry(8.5, 24), basic(0xfb923c), at(0.82, R + 16, 52));
+  sunB.lookAt(0, 0, 0);
+  g.add(sunA, sunB);
+  const sunHalo = glowSprite(glowTex('rgba(253,224,71,0.55)'), 120, 0.55);
+  sunHalo.position.copy(at(0.65, R + 14, 64));
+  g.add(sunHalo);
+  return () => {};
+}
+
+// ======================================================================== Reino Dulce
+function candy(g: THREE.Group, rng: Rng): Backdrop['update'] {
+  const pastels = [0xf9a8d4, 0x93c5fd, 0xfde047, 0x86efac, 0xd8b4fe];
+  // Pastel frosting hills
+  for (let i = 0; i < 16; i++) {
+    const az = (i / 16) * Math.PI * 2 + rng() * 0.12;
+    const hill = mesh(new THREE.SphereGeometry(32 + rng() * 14, 16, 12), lambert(pastels[i % pastels.length]), at(az, R + 2, -38));
+    hill.scale.y = 0.6;
+    g.add(hill);
+  }
+  // Giant horizon lollipops
+  const lollis: THREE.Group[] = [];
+  for (let i = 0; i < 8; i++) {
+    const az = (i / 8) * Math.PI * 2 + 0.2;
+    const lolli = new THREE.Group();
+    lolli.position.copy(at(az, R - 8, -32));
+    lolli.add(mesh(new THREE.CylinderGeometry(1.4, 1.4, 52, 10), basic(0xfff8f1), new THREE.Vector3(0, 26, 0)));
+    const head = mesh(new THREE.CylinderGeometry(14, 14, 4, 24), lambert(pastels[(i + 1) % pastels.length]), new THREE.Vector3(0, 58, 0));
+    head.rotation.x = Math.PI / 2;
+    lolli.add(head);
+    lolli.lookAt(0, -32, 0);
+    g.add(lolli);
+    lollis.push(lolli);
+  }
+  return (_dt, time) => {
+    lollis.forEach((l, i) => {
+      l.rotation.z = Math.sin(time * 0.6 + i) * 0.05;
+    });
+  };
+}
+
 /** Builds the far scenery for a world (null for indoor worlds). */
 export function buildBackdrop(theme: ThemeId, rng: Rng): Backdrop | null {
   const group = new THREE.Group();
@@ -675,6 +945,24 @@ export function buildBackdrop(theme: ThemeId, rng: Rng): Backdrop | null {
       break;
     case 'castle':
       update = castle(group, rng);
+      break;
+    case 'neon':
+      update = neon(group, rng);
+      break;
+    case 'cyberpunk':
+      update = cyberpunk(group, rng);
+      break;
+    case 'lava':
+      update = lava(group, rng);
+      break;
+    case 'ice':
+      update = ice(group, rng);
+      break;
+    case 'desert':
+      update = desert(group, rng);
+      break;
+    case 'candy':
+      update = candy(group, rng);
       break;
     default:
       return null;

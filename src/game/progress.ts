@@ -17,8 +17,21 @@
  */
 import type { CompanionStyle } from './character';
 
-export type ThemeId = 'cozy' | 'cosmic' | 'swamp' | 'aero' | 'garden' | 'castle' | 'backrooms';
-/** The six open-air worlds (generated zones and boss arenas); the Backrooms have their own builder */
+export type ThemeId =
+  | 'cozy'
+  | 'cosmic'
+  | 'swamp'
+  | 'aero'
+  | 'garden'
+  | 'castle'
+  | 'neon'
+  | 'cyberpunk'
+  | 'lava'
+  | 'ice'
+  | 'desert'
+  | 'candy'
+  | 'backrooms';
+/** The twelve open-air worlds (generated zones, parkour & boss arenas); the Backrooms have their own builder */
 export type OutdoorThemeId = Exclude<ThemeId, 'backrooms'>;
 
 export interface LevelInfo {
@@ -28,12 +41,26 @@ export interface LevelInfo {
   theme: ThemeId;
   accent: string;
   generated: boolean;
-  /** Boss of this level (null on sandbox and handmade levels) */
+  /** Boss of this level (null on parkour, sandbox, and handmade levels) */
   boss: BossKind | null;
   totalCollectibles: number;
 }
 
-const THEME_ORDER: ThemeId[] = ['cozy', 'cosmic', 'swamp', 'aero', 'garden', 'castle'];
+/** World progression order from level 11 onwards (10 levels per world, after World 1 Aero at 6–10) */
+const WORLD_CYCLE: OutdoorThemeId[] = [
+  'neon',
+  'cyberpunk',
+  'lava',
+  'ice',
+  'desert',
+  'candy',
+  'castle',
+  'cosmic',
+  'swamp',
+  'garden',
+  'cozy',
+  'aero',
+];
 
 export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: string }> = {
   cozy: { name: 'Archipiélago Acogedor', desc: 'Islas flotantes, hongos y nubes al atardecer.', accent: '#f59e0b' },
@@ -42,6 +69,12 @@ export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: s
   aero: { name: 'Valle Aero', desc: 'Pradera brillante, cascadas y ciudad de cristal.', accent: '#38bdf8' },
   garden: { name: 'Jardín Gigante', desc: 'Eres diminuto: flores, hojas y gnomos traviesos.', accent: '#f472b6' },
   castle: { name: 'Castillo Embrujado', desc: 'Torres bajo la luna, vampiros, hombres lobo y gárgolas.', accent: '#ef4444' },
+  neon: { name: 'Ciudad Neón', desc: 'Autopistas luminosas, palmeras láser y neón nocturno.', accent: '#e879f9' },
+  cyberpunk: { name: 'Cyberpunk', desc: 'Megatorres de cromo, hologramas ácidos y lluvia eléctrica.', accent: '#22d3ee' },
+  lava: { name: 'Volcán Infernal', desc: 'Roca basáltica, grietas de magma, géiseres y ceniza ardiente.', accent: '#f97316' },
+  ice: { name: 'Cumbre Glacial', desc: 'Ventiscas, auroras boreales y plataformas de cristal helado.', accent: '#7dd3fc' },
+  desert: { name: 'Dunas Doradas', desc: 'Templos de arenisca, obeliscos dorados y soles gemelos.', accent: '#fbbf24' },
+  candy: { name: 'Reino Dulce', desc: 'Barquillos pastel, caramelos gigantes y nubes de algodón.', accent: '#fb7185' },
   backrooms: { name: 'Los Backrooms', desc: 'Cuartos amarillos sin fin, zumbido de lámparas y cosas que te siguen.', accent: '#d4b84a' },
 };
 
@@ -50,10 +83,10 @@ export const THEME_INFO: Record<ThemeId, { name: string; desc: string; accent: s
 // ---------------------------------------------------------------------------
 export interface DevLevelPick {
   level: number;
-  kind: 'sandbox' | 'boss' | 'backrooms';
+  kind: 'parkour' | 'sandbox' | 'boss' | 'backrooms';
   theme: ThemeId;
 }
-export const DEV_MAX_LEVEL = 61;
+export const DEV_MAX_LEVEL = 120;
 const DEV_KEY = 'cozy-dev-mode';
 let devOn = (() => {
   try {
@@ -88,19 +121,33 @@ export function getDevLevelPick(): DevLevelPick | null {
   return devPick;
 }
 
-/** Theme of any level: 1 to 6 in order (cozy, cosmic, swamp, aero, garden, castle), then looping smoothly. */
+/**
+ * Theme of any level:
+ * - Levels 1–5 are fixed (1 cozy, 2 cosmic, 3 swamp, 4 aero, 5 garden).
+ * - From level 6 onwards, levels are grouped into contiguous Worlds ("mundos"):
+ *   6–10 Valle Aero, 11–20 Ciudad Neón, 21–30 Cyberpunk, 31–40 Volcán Infernal,
+ *   41–50 Cumbre Glacial, 51–60 Dunas Doradas, 61–70 Reino Dulce, 71–80 Castillo, etc.
+ *   (with Backrooms anomalies at 15, 25, 35...).
+ */
 export function themeForLevel(level: number): ThemeId {
   if (devPick && devPick.level === level) return devPick.kind === 'backrooms' ? 'backrooms' : devPick.theme;
   if (isBackroomsLevel(level)) return 'backrooms';
-  const idx = Math.max(0, Math.floor(level) - 1);
-  return THEME_ORDER[idx % THEME_ORDER.length];
+  const n = Math.max(1, Math.floor(level));
+  if (n === 1) return 'cozy';
+  if (n === 2) return 'cosmic';
+  if (n === 3) return 'swamp';
+  if (n === 4) return 'aero';
+  if (n === 5) return 'garden';
+  if (n <= 10) return 'aero';
+  const block = Math.floor((n - 11) / 10);
+  return WORLD_CYCLE[block % WORLD_CYCLE.length];
 }
 
 // ---------------------------------------------------------------------------
-// Level generators: from level 5 on, each level is (at random, but always the same for a
-// given number) either a "Caja de arena" open zone or a "Lucha contra jefe" arena.
+// Level generators: from level 5 on, each level is either "Parkour" (Only Up style),
+// "Caja de arena" (open zone with orbs), "Lucha contra jefe" (every 10 levels), or Backrooms.
 // ---------------------------------------------------------------------------
-export type LevelKind = 'handmade' | 'sandbox' | 'boss' | 'backrooms';
+export type LevelKind = 'handmade' | 'parkour' | 'sandbox' | 'boss' | 'backrooms';
 export type BossKind = 'bird' | 'glitch' | 'ufo' | 'skeleton' | 'gnome' | 'dracula' | 'skinwalker';
 
 /** One boss per world. */
@@ -111,7 +158,12 @@ export const BOSS_FOR_THEME: Record<ThemeId, BossKind> = {
   swamp: 'skeleton',
   garden: 'gnome',
   castle: 'dracula',
-  // Levels 25, 45, 65…: the Skinwalker hunts you through the Backrooms
+  neon: 'glitch',
+  cyberpunk: 'ufo',
+  lava: 'skeleton',
+  ice: 'bird',
+  desert: 'gnome',
+  candy: 'glitch',
   backrooms: 'skinwalker',
 };
 
@@ -218,13 +270,21 @@ function mulberry(seed: number) {
   };
 }
 
-/** Handmade worlds 1-4; from 5 on, each level is randomly (but always the same) a sandbox or a boss fight. */
+/**
+ * Levels 1–4 are fixed handmade worlds; level 5 is fixed Jardín Gigante sandbox.
+ * From level 6 on: bosses appear strictly every 10 levels (10, 20, 30… — never back-to-back),
+ * levels 15, 25, 35… are the Backrooms, and all other levels rotate between complex non-linear
+ * procedural parkour courses and open sandbox zones.
+ */
 export function levelKind(level: number): LevelKind {
   if (level <= 4) return 'handmade';
   if (devPick && devPick.level === level) return devPick.kind;
-  // Every other Backrooms (25, 45, 65…) is the Skinwalker's hunting ground
-  if (isBackroomsLevel(level)) return level % 20 === 5 ? 'boss' : 'backrooms';
-  return mulberry(level * 7717 + 3 * 131)() < 0.3 ? 'boss' : 'sandbox';
+  if (level === 5) return 'sandbox';
+  if (level >= 10 && level % 10 === 0) return 'boss';
+  if (isBackroomsLevel(level)) return 'backrooms';
+  // Levels 6–9 showcase Only-Up Aero Parkour leading up to Boss 10; afterwards ~3/4 parkour & ~1/4 sandbox zones
+  if (level <= 9) return 'parkour';
+  return level % 4 === 0 ? 'sandbox' : 'parkour';
 }
 
 /** Levels 15, 25, 35… fall into the Backrooms. */
@@ -241,20 +301,29 @@ export function bossForLevel(level: number): BossKind | null {
 }
 
 /** Relics (crystals and acorns) in each kind of level — the generators place exactly these. */
-export const RELICS = { handmade: 12, zone: 25, boss: 8, backrooms: 12 } as const;
+export const RELICS = { handmade: 12, parkour: 12, zone: 25, boss: 8, backrooms: 12 } as const;
 
 export function levelTotalCollectibles(level: number): number {
   const kind = levelKind(level);
-  return kind === 'handmade' ? RELICS.handmade : kind === 'boss' ? RELICS.boss : kind === 'backrooms' ? RELICS.backrooms : RELICS.zone;
+  return kind === 'handmade'
+    ? RELICS.handmade
+    : kind === 'parkour'
+      ? RELICS.parkour
+      : kind === 'boss'
+        ? RELICS.boss
+        : kind === 'backrooms'
+          ? RELICS.backrooms
+          : RELICS.zone;
 }
 
 export function levelInfo(level: number): LevelInfo {
   const theme = themeForLevel(level);
   const t = THEME_INFO[theme];
   const boss = bossForLevel(level);
+  const kind = levelKind(level);
   return {
     id: level,
-    name: boss ? `Jefe: ${BOSS_INFO[boss].short} · ${t.name}` : t.name,
+    name: boss ? `Jefe: ${BOSS_INFO[boss].short} · ${t.name}` : kind === 'parkour' ? `Parkour · ${t.name}` : t.name,
     desc: boss ? BOSS_INFO[boss].desc : t.desc,
     theme,
     accent: t.accent,
@@ -371,6 +440,19 @@ export function levelHowTo(level: number, mode?: string): LevelHowTo {
         'Explora las hojas colosales, enredaderas y tallos trepadores',
         'Salta entre pétalos primaverales y evita las trampas de espinas',
         'Llega a la Gran Torre del Girasol y cruza el portal',
+      ],
+    };
+  }
+
+  if (levelKind(level) === 'parkour') {
+    return {
+      title: `Nivel ${level} · ${info.name}`,
+      goal: 'Supera la ruta sinuosa de subidas, bajadas y saltos hasta el portal de la cima',
+      steps: [
+        'La ruta no es recta: gira en curvas, desciende a cañones profundos y vuelve a escalar torres',
+        'Usa trampolines, corrientes ascendentes y plataformas móviles para avanzar',
+        'Explora bifurcaciones opcionales para reunir las 12 reliquias y bayas de impulso',
+        'Activa los santuarios intermedios y cruza el portal brillante al final',
       ],
     };
   }

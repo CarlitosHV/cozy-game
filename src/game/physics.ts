@@ -62,6 +62,12 @@ export class ParkourPhysics {
   private isRespawning: boolean = false;
   public isMovementLocked: boolean = false;
 
+  // Stamina system (prevents infinite sprinting)
+  public stamina: number = 100;
+  public readonly maxStamina: number = 100;
+  public isStaminaExhausted: boolean = false;
+  private staminaRegenDelay: number = 0;
+
   // Attached moving platform
   public currentPlatform: PlatformItem | null = null;
   private platformVelocity: THREE.Vector3 = new THREE.Vector3();
@@ -117,6 +123,9 @@ export class ParkourPhysics {
       this.isGrounded = true;
       this.knockbackTimer = 0;
       this.currentPlatform = null;
+      this.stamina = this.maxStamina;
+      this.isStaminaExhausted = false;
+      this.staminaRegenDelay = 0;
       if (playSound) {
         soundManager.playRespawnPuff();
       }
@@ -189,9 +198,33 @@ export class ParkourPhysics {
       this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - dt);
     }
 
-    // 2. Horizontal Movement relative to camera (Correct Screen-Space Orientation)
-    const maxSpeed = (input.sprint ? this.sprintSpeed : this.walkSpeed) * this.speedMultiplier;
+    // 2. Horizontal Movement & Stamina-Gated Sprinting
     const inputMagnitude = Math.min(1.0, Math.hypot(input.forward, input.right));
+    const isMoving = inputMagnitude > 0.05;
+    const isTryingSprint = input.sprint && isMoving;
+    const canSprint = !this.isStaminaExhausted && this.stamina > 0;
+    const effectiveSprint = isTryingSprint && canSprint;
+
+    if (effectiveSprint) {
+      this.stamina = Math.max(0, this.stamina - 22.0 * dt);
+      this.staminaRegenDelay = 0.55;
+      if (this.stamina <= 0) {
+        this.stamina = 0;
+        this.isStaminaExhausted = true;
+      }
+    } else {
+      if (this.staminaRegenDelay > 0) {
+        this.staminaRegenDelay = Math.max(0, this.staminaRegenDelay - dt);
+      } else if (this.stamina < this.maxStamina) {
+        const regenRate = this.isGrounded ? (isMoving ? 24.0 : 32.0) : 14.0;
+        this.stamina = Math.min(this.maxStamina, this.stamina + regenRate * dt);
+        if (this.isStaminaExhausted && this.stamina >= 25.0) {
+          this.isStaminaExhausted = false;
+        }
+      }
+    }
+
+    const maxSpeed = (effectiveSprint ? this.sprintSpeed : this.walkSpeed) * this.speedMultiplier;
 
     if (inputMagnitude > 0.05) {
       // Camera forward vector in XZ plane
@@ -591,7 +624,7 @@ export class ParkourPhysics {
 
     // Play footstep sounds periodically
     if (this.isGrounded && horizSpeed > 0.4) {
-      this.footstepTimer -= dt * (input.sprint ? 1.6 : 1.1);
+      this.footstepTimer -= dt * (effectiveSprint ? 1.6 : 1.1);
       if (this.footstepTimer <= 0) {
         soundManager.playFootstep();
         this.footstepTimer = 0.3;

@@ -386,6 +386,63 @@ export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextu
   addPlatform('ring_station', -2, 6.4, 52, 10, 9, 2, station);
   kit.addCheckpoint(2, 'Anillos de Saturno', new THREE.Vector3(-5.5, 6.4, 49.5), new THREE.Vector3(-2, 6.6, 53));
 
+  // Hard-to-find secret tucked under the west-back underside of ring_station:
+  // drop carefully off the west-front edge to find hidden dark asteroids & the secret alcove
+  addPlatform('secret_julio_step1', -8.8, 3.3, 48.5, 2.0, 2.0, 0.7, asteroid);
+  addPlatform('secret_julio_step2', -6.8, 1.8, 52.0, 1.9, 1.9, 0.7, asteroid);
+  addPlatform('secret_julio_alcove', -2.8, 0.2, 55.2, 3.0, 3.0, 0.8, crystal);
+  addPlatform('secret_julio_return', -0.4, 1.4, 57.4, 2.5, 2.5, 0.9, station);
+  kit.addBouncy('secret_julio_tramp', createStarTrampoline(), -0.4, 1.4, 57.4);
+
+  // Composite Cosmic Golden Pineapple & Monolith Plaque ("Julio Piña estuvo aquí")
+  const julioEggPos = new THREE.Vector3(-2.8, 0.95, 55.2);
+  const pineapple = new THREE.Group();
+  pineapple.position.set(-2.8, 0.2, 55.2);
+  const plinth = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.45, 0.55, 0.24, 8),
+    hullMat
+  );
+  plinth.position.y = 0.12;
+  const pineSpin = new THREE.Group();
+  pineSpin.position.y = 0.75;
+  const pineMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
+    emissive: 0xb45309,
+    emissiveIntensity: 0.45,
+    roughness: 0.3,
+    metalness: 0.6,
+    flatShading: true,
+  });
+  const pineBody = new THREE.Mesh(new THREE.DodecahedronGeometry(0.28, 0), pineMat);
+  pineBody.scale.set(0.88, 1.32, 0.88);
+  const leafMat = new THREE.MeshStandardMaterial({
+    color: 0x4ade80,
+    emissive: 0x15803d,
+    emissiveIntensity: 0.35,
+    roughness: 0.4,
+  });
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const frond = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.34, 5), leafMat);
+    frond.position.set(Math.cos(a) * 0.1, 0.38, Math.sin(a) * 0.1);
+    frond.rotation.z = -Math.cos(a) * 0.45;
+    frond.rotation.x = Math.sin(a) * 0.45;
+    pineSpin.add(frond);
+  }
+  const ringHalo = new THREE.Mesh(
+    new THREE.TorusGeometry(0.44, 0.025, 6, 20),
+    new THREE.MeshBasicMaterial({ color: 0x67e8f9 })
+  );
+  ringHalo.rotation.x = Math.PI / 2;
+  ringHalo.position.y = -0.35;
+  pineSpin.add(pineBody, ringHalo);
+  pineapple.add(plinth, pineSpin);
+  kit.addDecor(pineapple);
+  animators.push((_dt, time) => {
+    pineSpin.rotation.y = time * 1.1;
+    pineSpin.position.y = 0.78 + Math.sin(time * 2.2) * 0.08;
+  });
+
   addPlatform('ring_chunk_1', 4, 7.0, 59, 3, 3, 0.8, asteroid);
   addPlatform('ring_chunk_2', 8.5, 7.6, 62.5, 3, 3, 0.8, asteroid);
   addPlatform('ring_chunk_3', 12.5, 8.2, 66.5, 3, 3, 0.8, asteroid);
@@ -467,7 +524,7 @@ export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextu
   enemies.spawnUfo('ufo_2', new THREE.Vector3(2.5, 19.6, 107), 'z', 2.0);
   enemies.spawnAlienBlob('blob_3', new THREE.Vector3(2.5, summitY, 140), 'x', 3.0);
 
-  return kit.finish(
+  const world = kit.finish(
     summitPos,
     enemies,
     [
@@ -480,4 +537,13 @@ export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextu
     ],
     new THREE.Vector3(-3, summitY + 6.5, 135)
   );
+  world.easterEgg = {
+    position: julioEggPos,
+    radius: 1.2,
+    title: 'Julio Piña estuvo aquí',
+    message: 'Descubriste el rincón más escondido de la Ruta Cósmica bajo la estación de Saturno.',
+    badge: 'Secreto Cósmico',
+    variant: 'secret',
+  };
+  return world;
 }

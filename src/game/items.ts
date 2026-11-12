@@ -386,6 +386,7 @@ export class ItemSystem {
   public slots: (ItemType | null)[] = new Array(INVENTORY_SIZE).fill(null);
   public counts: number[] = new Array(INVENTORY_SIZE).fill(0);
   public superJumpLeft = 0;
+  public onPickup?: (type: ItemType) => void;
 
   private pickups: Pickup[] = [];
   private root: THREE.Object3D;
@@ -805,6 +806,7 @@ export class ItemSystem {
         soundManager.playCollectible();
         const extra = max !== undefined ? ` (${this.total(p.type)})` : '';
         this.emit(`Guardaste: ${info.name}${extra} (tecla ${slot + 1})`);
+        this.onPickup?.(p.type);
       }
     }
   }
