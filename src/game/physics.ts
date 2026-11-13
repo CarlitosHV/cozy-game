@@ -639,7 +639,11 @@ export class ParkourPhysics {
     }
 
     // Update animations on composite model
-    this.playerModel.updateAnimation(horizSpeed, this.isGrounded, dt, performance.now() * 0.001);
+    this.playerModel.updateAnimation(horizSpeed, this.isGrounded, dt, performance.now() * 0.001, {
+      velY: this.velocity.y,
+      isCrouching: input.crouch,
+      isSprinting: effectiveSprint,
+    });
 
     this.wasJumpPressed = input.jump;
   }
@@ -833,14 +837,21 @@ export class ParkourPhysics {
           plat.crumbleTimer = (plat.crumbleTimer ?? 1.6) - dt;
 
           if (plat.crumbleTimer > 0) {
-            // Wobble and sink under player's weight
+            // Wobble, tilt, and pulse fracture glow under player's weight
             const elapsed = 1.6 - plat.crumbleTimer;
-            const wobble = Math.sin(elapsed * 25) * 0.05;
+            const urgency = elapsed / 1.6;
+            const wobble = Math.sin(elapsed * (22 + urgency * 18)) * (0.04 + urgency * 0.035);
             plat.mesh.position.y = plat.originalY - elapsed * 0.2 + wobble;
+            plat.mesh.rotation.z = Math.sin(elapsed * 29) * (0.025 + urgency * 0.045);
+            plat.mesh.rotation.x = Math.cos(elapsed * 23) * (0.02 + urgency * 0.035);
             plat.position.y = plat.mesh.position.y;
+            if (plat.crumbleOverlayMat) {
+              plat.crumbleOverlayMat.emissiveIntensity = (0.35 + 0.55 * urgency) * (0.65 + 0.35 * Math.sin(elapsed * 24));
+            }
           } else {
             // Drop away fast
             plat.mesh.position.y -= 18.0 * dt;
+            plat.mesh.rotation.z += dt * 1.1;
             plat.position.y = -100; // remove collision
             plat.mesh.scale.multiplyScalar(Math.max(0, 1 - dt * 3));
 
@@ -849,8 +860,12 @@ export class ParkourPhysics {
               plat.isCrumbling = false;
               plat.crumbleTimer = 1.6;
               plat.mesh.position.y = plat.originalY;
+              plat.mesh.rotation.set(0, 0, 0);
               plat.position.y = plat.originalY;
               plat.mesh.scale.set(1, 1, 1);
+              if (plat.crumbleOverlayMat) {
+                plat.crumbleOverlayMat.emissiveIntensity = 0;
+              }
             }
           }
         }

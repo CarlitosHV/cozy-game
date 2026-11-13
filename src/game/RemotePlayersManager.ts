@@ -582,7 +582,10 @@ export class RemotePlayersManager {
         isGrounded = false;
       }
 
-      entity.model.updateAnimation(speed, isGrounded, dt, this.windTime);
+      entity.model.updateAnimation(speed, isGrounded, dt, this.windTime, {
+        velY: entity.anim === 'jump' ? 6.0 : entity.anim === 'fall' ? -8.0 : 0,
+        isSprinting: entity.anim === 'run',
+      });
     }
   }
 }

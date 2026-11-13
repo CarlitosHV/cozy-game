@@ -8,6 +8,12 @@ import { ProceduralTextures } from './textures';
 import { CharacterAppearance, DEFAULT_APPEARANCE } from './character';
 import { getClothingPatternTexture } from './patterns';
 
+export interface PlayerAnimOptions {
+  velY?: number;
+  isCrouching?: boolean;
+  isSprinting?: boolean;
+}
+
 export interface PlayerCharacterModel {
   group: THREE.Group;
   body: THREE.Mesh;
@@ -24,7 +30,13 @@ export interface PlayerCharacterModel {
   companionSprite: THREE.Group;
   shadow: THREE.Mesh;
   appearance: CharacterAppearance;
-  updateAnimation: (speed: number, isGrounded: boolean, dt: number, windTime: number) => void;
+  updateAnimation: (
+    speed: number,
+    isGrounded: boolean,
+    dt: number,
+    windTime: number,
+    options?: PlayerAnimOptions
+  ) => void;
 }
 
 /** Darkens/lightens a hex color by a factor (e.g. 0.8 = 20% darker). */
@@ -45,9 +57,27 @@ export function createPlayerCharacter(
   const isChica = look.bodyType === 'chica';
   const group = new THREE.Group();
 
-  // Head-level elements live in their own group so they bob together with the head
+  // Articulated upper-body, neck, and head pivots so torso lean moves outfits, arms, scarf,
+  // backpack and head cohesively while preserving exact world coordinates and boss compatibility
+  const torsoPivot = new THREE.Group();
+  torsoPivot.position.set(0, 0.36, 0);
+  group.add(torsoPivot);
+
+  const torsoContent = new THREE.Group();
+  torsoContent.position.set(0, -0.36, 0);
+  torsoPivot.add(torsoContent);
+
+  const headPivot = new THREE.Group();
+  headPivot.position.set(0, 0.84, 0);
+  torsoContent.add(headPivot);
+
+  const headOffset = new THREE.Group();
+  headOffset.position.set(0, -0.84, 0);
+  headPivot.add(headOffset);
+
+  // Head-level elements live in their own group so they bob and tilt together with the head
   const headGroup = new THREE.Group();
-  group.add(headGroup);
+  headOffset.add(headGroup);
 
   // Materials with varied roughness & PBR richness
   const skinVarLower = (look.skinVariant || '').toLowerCase();
@@ -191,7 +221,7 @@ export function createPlayerCharacter(
   const body = new THREE.Mesh(bodyGeom, sweaterMat);
   body.position.y = 0.55;
   body.castShadow = true;
-  group.add(body);
+  torsoContent.add(body);
 
   // Secondary outfit color (overall denim, poncho stripes, dress trim, hoodie pocket…)
   const detailMat = new THREE.MeshStandardMaterial({
@@ -208,12 +238,12 @@ export function createPlayerCharacter(
       const hem = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.035, 6, 20), detailMat);
       hem.rotation.x = Math.PI / 2;
       hem.position.y = 0.38;
-      group.add(hem);
+      torsoContent.add(hem);
 
       const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.1, 0.04), detailMat);
       pocket.position.set(0, 0.47, 0.2);
       pocket.rotation.x = -0.12;
-      group.add(pocket);
+      torsoContent.add(pocket);
 
       const cordMat = new THREE.MeshStandardMaterial({ color: 0xf4f1de, roughness: 0.9 });
       for (const side of [1, -1]) {
@@ -221,7 +251,7 @@ export function createPlayerCharacter(
         cord.position.set(0.045 * side, 0.69, 0.222);
         const tip = new THREE.Mesh(new THREE.SphereGeometry(0.012, 6, 6), cordMat);
         tip.position.set(0.045 * side, 0.625, 0.224);
-        group.add(cord, tip);
+        torsoContent.add(cord, tip);
       }
 
       // Resting hood draped naturally across the upper back behind the neck
@@ -236,7 +266,7 @@ export function createPlayerCharacter(
       hood.position.set(0, 0.73, -0.21);
       hood.rotation.x = -0.55;
       hood.castShadow = true;
-      group.add(hood);
+      torsoContent.add(hood);
       break;
     }
     case 'chaqueta': {
@@ -244,14 +274,14 @@ export function createPlayerCharacter(
       const band = new THREE.Mesh(new THREE.TorusGeometry(0.222, 0.04, 6, 22), detailMat);
       band.rotation.x = Math.PI / 2;
       band.position.y = 0.38;
-      group.add(band);
+      torsoContent.add(band);
 
       const zipperMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.3, metalness: 0.8 });
       const zipper = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.34, 0.012), zipperMat);
       zipper.position.set(0, 0.56, 0.222);
       const pull = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.04, 0.012), zipperMat);
       pull.position.set(0, 0.69, 0.232);
-      group.add(zipper, pull);
+      torsoContent.add(zipper, pull);
 
       for (const side of [1, -1]) {
         const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.02), detailMat);
@@ -264,7 +294,7 @@ export function createPlayerCharacter(
         snap.position.set(0.1 * side, 0.62, 0.228);
         const patch = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.1), detailMat);
         patch.position.set(0.215 * side, 0.7, 0);
-        group.add(pocket, flap, snap, patch);
+        torsoContent.add(pocket, flap, snap, patch);
       }
       break;
     }
@@ -273,18 +303,18 @@ export function createPlayerCharacter(
       const pants = new THREE.Mesh(new THREE.CylinderGeometry(0.232, 0.24, 0.16, 20), detailMat);
       pants.position.y = 0.42;
       pants.castShadow = true;
-      group.add(pants);
+      torsoContent.add(pants);
 
       const bib = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.17, 0.04), detailMat);
       bib.position.set(0, 0.56, 0.195);
-      group.add(bib);
+      torsoContent.add(bib);
 
       const bibPocket = new THREE.Mesh(
         new THREE.BoxGeometry(0.1, 0.06, 0.012),
         new THREE.MeshStandardMaterial({ color: shade(look.detailColor, 0.75), roughness: 0.85 })
       );
       bibPocket.position.set(0, 0.55, 0.218);
-      group.add(bibPocket);
+      torsoContent.add(bibPocket);
 
       for (const side of [1, -1]) {
         const strap = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.2, 0.025), detailMat);
@@ -294,7 +324,7 @@ export function createPlayerCharacter(
         backStrap.position.set(0.085 * side, 0.6, -0.215);
         const button = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8), goldButtonMat);
         button.position.set(0.085 * side, 0.635, 0.218);
-        group.add(strap, backStrap, button);
+        torsoContent.add(strap, backStrap, button);
       }
       break;
     }
@@ -311,30 +341,30 @@ export function createPlayerCharacter(
       );
       skirt.position.y = 0.355;
       skirt.castShadow = true;
-      group.add(skirt);
+      torsoContent.add(skirt);
 
       const trim = new THREE.Mesh(new THREE.TorusGeometry(0.338, 0.016, 6, 32), detailMat);
       trim.rotation.x = Math.PI / 2;
       trim.position.y = 0.225;
-      group.add(trim);
+      torsoContent.add(trim);
 
       const sash = new THREE.Mesh(new THREE.TorusGeometry(0.222, 0.026, 6, 24), detailMat);
       sash.rotation.x = Math.PI / 2;
       sash.position.y = 0.48;
-      group.add(sash);
+      torsoContent.add(sash);
 
       // Bow on the back of the sash
       for (const side of [1, -1]) {
         const loop = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), detailMat);
         loop.scale.set(1.1, 0.6, 0.4);
         loop.position.set(0.045 * side, 0.48, -0.24);
-        group.add(loop);
+        torsoContent.add(loop);
       }
 
       for (let i = 0; i < 3; i++) {
         const b = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), detailMat);
         b.position.set(0, 0.68 - i * 0.065, 0.218);
-        group.add(b);
+        torsoContent.add(b);
       }
       break;
     }
@@ -354,7 +384,7 @@ export function createPlayerCharacter(
       const poncho = new THREE.Mesh(new THREE.CylinderGeometry(R_TOP, R_BOT, H, 8, 1, true), ponchoMat);
       poncho.position.y = TOP_Y - H / 2;
       poncho.castShadow = true;
-      group.add(poncho);
+      torsoContent.add(poncho);
 
       for (const t of [0.45, 0.75]) {
         const band = 0.06;
@@ -363,7 +393,7 @@ export function createPlayerCharacter(
           detailMat
         );
         stripe.position.y = TOP_Y - H * t;
-        group.add(stripe);
+        torsoContent.add(stripe);
       }
 
       const fringeGeom = new THREE.BoxGeometry(0.018, 0.06, 0.018);
@@ -371,7 +401,7 @@ export function createPlayerCharacter(
         const a = (i / 24) * Math.PI * 2;
         const f = new THREE.Mesh(fringeGeom, detailMat);
         f.position.set(Math.sin(a) * (R_BOT - 0.01), TOP_Y - H - 0.025, Math.cos(a) * (R_BOT - 0.01));
-        group.add(f);
+        torsoContent.add(f);
       }
       break;
     }
@@ -382,7 +412,7 @@ export function createPlayerCharacter(
       const hem = new THREE.Mesh(hemGeom, sweaterMat);
       hem.rotation.x = Math.PI / 2;
       hem.position.y = 0.38;
-      group.add(hem);
+      torsoContent.add(hem);
 
       // Duffle coat wooden toggle buttons (3 wooden toggles with loops down the front)
       for (let i = 0; i < 3; i++) {
@@ -390,7 +420,7 @@ export function createPlayerCharacter(
         const toggle = new THREE.Mesh(toggleGeom, toggleMat);
         toggle.rotation.z = Math.PI / 2;
         toggle.position.set(0, 0.65 - i * 0.09, 0.22);
-        group.add(toggle);
+        torsoContent.add(toggle);
       }
       break;
     }
@@ -421,7 +451,7 @@ export function createPlayerCharacter(
     sideStripeL.position.set(0.21, 0.54, 0.04);
     const sideStripeR = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.24, 0.025), neonTrimMat);
     sideStripeR.position.set(-0.21, 0.54, 0.04);
-    group.add(collarRing, chestCore, sideStripeL, sideStripeR);
+    torsoContent.add(collarRing, chestCore, sideStripeL, sideStripeR);
   } else if (
     outfitVarLower.includes('royal') ||
     outfitVarLower.includes('king') ||
@@ -434,11 +464,11 @@ export function createPlayerCharacter(
       const epaulet = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.026, 0.1), goldButtonMat);
       epaulet.position.set(0.21 * side, 0.73, 0);
       epaulet.rotation.z = -0.22 * side;
-      group.add(epaulet);
+      torsoContent.add(epaulet);
     }
     const clasp = new THREE.Mesh(new THREE.OctahedronGeometry(0.032, 0), goldButtonMat);
     clasp.position.set(0, 0.68, 0.225);
-    group.add(clasp);
+    torsoContent.add(clasp);
   } else if (
     outfitVarLower.includes('astro') ||
     outfitVarLower.includes('space') ||
@@ -454,7 +484,7 @@ export function createPlayerCharacter(
       new THREE.MeshBasicMaterial({ color: glowHex })
     );
     led.position.set(0.03, 0.59, 0.236);
-    group.add(unit, led);
+    torsoContent.add(unit, led);
   }
 
   // 2. Primary: Head (headGroup is the bobbing pivot; head mesh sits at its origin offset)
@@ -463,7 +493,7 @@ export function createPlayerCharacter(
   const head = new THREE.Mesh(headGeom, skinMat);
   head.position.y = HEAD_Y;
   head.castShadow = true;
-  group.add(head);
+  headGroup.add(head);
 
   const hatVarLower = (look.hatVariant || '').toLowerCase();
   const hasFullHat =
@@ -1174,7 +1204,7 @@ export function createPlayerCharacter(
   const scarfRing = new THREE.Mesh(scarfRingGeom, scarfMat);
   scarfRing.position.set(0, 0.74, 0.01);
   scarfRing.rotation.x = Math.PI / 2 + 0.08;
-  group.add(scarfRing);
+  torsoContent.add(scarfRing);
 
   // Scarf tails with fringe detail
   const tailGeom1 = new THREE.BoxGeometry(0.085, 0.26, 0.02);
@@ -1186,7 +1216,7 @@ export function createPlayerCharacter(
   tailGeom2.translate(0, -0.11, 0);
   const scarfTail2 = new THREE.Mesh(tailGeom2, scarfMat);
   scarfTail2.position.set(-0.04, 0.71, -0.20);
-  group.add(scarfTail1, scarfTail2);
+  torsoContent.add(scarfTail1, scarfTail2);
 
   // 5. Articulated Arms & Cozy Mittens (Left & Right)
   const leftArm = new THREE.Group();
@@ -1214,7 +1244,7 @@ export function createPlayerCharacter(
   const leftThumb = new THREE.Mesh(thumbGeom, pompomMat);
   leftThumb.position.set(-0.035, -0.22, 0.03);
   leftArm.add(leftMitten, leftThumb);
-  group.add(leftArm);
+  torsoContent.add(leftArm);
 
   // Right arm (mirrored)
   const rightArm = new THREE.Group();
@@ -1233,7 +1263,7 @@ export function createPlayerCharacter(
   const rightThumb = new THREE.Mesh(thumbGeom, pompomMat);
   rightThumb.position.set(0.035, -0.22, 0.03);
   rightArm.add(rightMitten, rightThumb);
-  group.add(rightArm);
+  torsoContent.add(rightArm);
 
   // 6. Back Equipment: Wings, Jetpacks, Capes, or Detailed Adventurer Backpack
   const backWings: { pivot: THREE.Group; side: number }[] = [];
@@ -1270,7 +1300,7 @@ export function createPlayerCharacter(
         isCyber ? new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.7, roughness: 0.25 }) : brassMat
       );
       mount.position.set(0, 0.6, -0.22);
-      group.add(mount);
+      torsoContent.add(mount);
 
       for (const side of [1, -1]) {
         const pivot = new THREE.Group();
@@ -1294,7 +1324,7 @@ export function createPlayerCharacter(
           pivot.add(upper, lower);
         }
         pivot.rotation.y = -0.28 * side;
-        group.add(pivot);
+        torsoContent.add(pivot);
         backWings.push({ pivot, side });
       }
     } else if (
@@ -1311,7 +1341,7 @@ export function createPlayerCharacter(
       const flameMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
       const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.09), hullMat);
       bridge.position.set(0, 0.58, -0.21);
-      group.add(bridge);
+      torsoContent.add(bridge);
       for (const side of [1, -1]) {
         const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.34, 12), hullMat);
         tank.position.set(0.11 * side, 0.59, -0.26);
@@ -1323,7 +1353,7 @@ export function createPlayerCharacter(
         const flame = new THREE.Mesh(new THREE.ConeGeometry(0.042, 0.14, 10), flameMat);
         flame.rotation.x = Math.PI;
         flame.position.set(0.11 * side, 0.3, -0.26);
-        group.add(tank, cap, nozzle, flame);
+        torsoContent.add(tank, cap, nozzle, flame);
       }
     } else if (packVarLower.includes('cape') || packVarLower.includes('capa')) {
       const capeMat = new THREE.MeshStandardMaterial({
@@ -1337,7 +1367,7 @@ export function createPlayerCharacter(
       backCape.position.set(0, 0.74, -0.23);
       backCape.rotation.x = 0.16;
       backCape.castShadow = true;
-      group.add(backCape);
+      torsoContent.add(backCape);
     } else if (packVarLower.includes('turtle') || packVarLower.includes('caparazon') || packVarLower.includes('shell')) {
       const shellMat = new THREE.MeshStandardMaterial({
         color: look.backpackColor || 0x4d7c0f,
@@ -1351,7 +1381,7 @@ export function createPlayerCharacter(
       const rim = new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.025, 6, 20), rimMat);
       rim.scale.set(1, 1.2, 1);
       rim.position.set(0, 0.56, -0.19);
-      group.add(shell, rim);
+      torsoContent.add(shell, rim);
     } else {
       const customPackMat = look.backpackColor
         ? new THREE.MeshStandardMaterial({ color: packColorHex, roughness: 0.65, metalness: 0.1 })
@@ -1360,20 +1390,20 @@ export function createPlayerCharacter(
       const pack = new THREE.Mesh(packGeom, customPackMat);
       pack.position.set(0, 0.58, -0.22);
       pack.castShadow = true;
-      group.add(pack);
+      torsoContent.add(pack);
 
       // Backpack pocket pouch
       const pocketGeom = new THREE.BoxGeometry(0.22, 0.15, 0.06);
       const pocket = new THREE.Mesh(pocketGeom, customPackMat);
       pocket.position.set(0, 0.52, -0.32);
-      group.add(pocket);
+      torsoContent.add(pocket);
 
       // Chest harness straps wrapping around the front
       const strapLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
       strapLeft.position.set(0.12, 0.58, 0.22);
       const strapRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
       strapRight.position.set(-0.12, 0.58, 0.22);
-      group.add(strapLeft, strapRight);
+      torsoContent.add(strapLeft, strapRight);
 
       // Rolled sage-green camping bedroll strapped atop the backpack
       const rollGeom = new THREE.CylinderGeometry(0.065, 0.065, 0.32, 10);
@@ -1387,20 +1417,20 @@ export function createPlayerCharacter(
       const buckle2 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
       buckle2.position.set(-0.09, 0.78, -0.24);
       buckle2.rotation.y = Math.PI / 2;
-      group.add(bedroll, buckle1, buckle2);
+      torsoContent.add(bedroll, buckle1, buckle2);
 
       // Wooden water flask / canteen on side of pack
       const flaskGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.12, 8);
       const flask = new THREE.Mesh(flaskGeom, toggleMat);
       flask.position.set(-0.17, 0.54, -0.22);
-      group.add(flask);
+      torsoContent.add(flask);
     }
   } else {
     // Simple leather belt so the lantern still has somewhere to hang
     const belt = new THREE.Mesh(new THREE.TorusGeometry(0.215, 0.022, 6, 24), strapMat);
     belt.rotation.x = Math.PI / 2;
     belt.position.y = 0.44;
-    group.add(belt);
+    torsoContent.add(belt);
   }
 
   // Miniature brass lantern hanging on backpack hook (or belt)
@@ -1416,26 +1446,27 @@ export function createPlayerCharacter(
   const coreGeom = new THREE.SphereGeometry(0.03, 8, 8);
   const lanternCore = new THREE.Mesh(coreGeom, lanternCoreMat);
   lanternPost.add(cage, lanternCore);
-  group.add(lanternPost);
+  torsoContent.add(lanternPost);
 
-  // 7. Legs, Wool Socks & Hiking Boots
+  // 7. Legs, Wool Socks & Hiking Boots (hip pivots allow natural stride arcs + ankle flex)
   const bootGeom = new THREE.CapsuleGeometry(0.07, 0.14, 8, 8);
 
-  // Left boot group
+  const leftHipPivot = new THREE.Group();
+  leftHipPivot.position.set(0.12, 0.34, 0);
   const leftLeg = new THREE.Group();
   const leftBoot = new THREE.Mesh(bootGeom, bootMat);
   leftBoot.castShadow = true;
-  // Dark traction sole
   const leftSole = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.03, 0.22), soleMat);
   leftSole.position.y = -0.07;
-  // Cream wool sock cuff
   const leftSock = new THREE.Mesh(new THREE.TorusGeometry(0.072, 0.02, 6, 12), sockMat);
   leftSock.position.y = 0.08;
   leftSock.rotation.x = Math.PI / 2;
   leftLeg.add(leftBoot, leftSole, leftSock);
-  leftLeg.position.set(0.12, 0.14, 0);
+  leftLeg.position.set(0, -0.2, 0);
+  leftHipPivot.add(leftLeg);
 
-  // Right boot group
+  const rightHipPivot = new THREE.Group();
+  rightHipPivot.position.set(-0.12, 0.34, 0);
   const rightLeg = new THREE.Group();
   const rightBoot = new THREE.Mesh(bootGeom, bootMat);
   rightBoot.castShadow = true;
@@ -1445,9 +1476,10 @@ export function createPlayerCharacter(
   rightSock.position.y = 0.08;
   rightSock.rotation.x = Math.PI / 2;
   rightLeg.add(rightBoot, rightSole, rightSock);
-  rightLeg.position.set(-0.12, 0.14, 0);
+  rightLeg.position.set(0, -0.2, 0);
+  rightHipPivot.add(rightLeg);
 
-  group.add(leftLeg, rightLeg);
+  group.add(leftHipPivot, rightHipPivot);
 
   // 8. Floating Companion
   const companionSprite = new THREE.Group();
@@ -1894,99 +1926,217 @@ export function createPlayerCharacter(
   // Body proportions (height / build)
   group.scale.set(look.build, look.height, look.build);
 
-  // Animation cycle helper
+  // Smooth procedural animation state
   let walkCycle = 0;
-  const updateAnimation = (speed: number, isGrounded: boolean, dt: number, windTime: number) => {
-    if (isGrounded) {
-      // Ease the torso back from the airborne stretch
-      const k = Math.min(1, dt * 12);
-      body.scale.x += (1 - body.scale.x) * k;
-      body.scale.y += (1 - body.scale.y) * k;
-      body.scale.z += (1 - body.scale.z) * k;
+  let idleTime = 0;
+  let moveBlend = 0;
+  let sprintBlend = 0;
+  let crouchBlend = 0;
+  let airBlend = 0;
+  let velYSmoothed = 0;
+  let wasGrounded = true;
+  let prevVelY = 0;
+  let landSquash = 0;
 
-      if (speed > 0.1) {
-        walkCycle += speed * dt * 9.5;
-        // Legs stride
-        leftLeg.position.z = Math.sin(walkCycle) * 0.2;
-        rightLeg.position.z = -Math.sin(walkCycle) * 0.2;
-        leftLeg.position.y = 0.14 + Math.max(0, -Math.cos(walkCycle) * 0.11);
-        rightLeg.position.y = 0.14 + Math.max(0, Math.cos(walkCycle) * 0.11);
+  const updateAnimation = (
+    speed: number,
+    isGrounded: boolean,
+    dt: number,
+    windTime: number,
+    options?: PlayerAnimOptions
+  ) => {
+    const safeDt = Math.min(Math.max(dt, 0.0001), 0.05);
+    const rawVelY = options?.velY ?? (isGrounded ? 0 : -2.5);
+    const isCrouching = Boolean(options?.isCrouching);
+    const isMoving = speed > 0.15;
+    const isSprinting = Boolean(options?.isSprinting ?? speed > 7.4) && isMoving;
 
-        // Arms swing in counter-motion to legs!
-        leftArm.rotation.x = -Math.sin(walkCycle) * 0.65;
-        rightArm.rotation.x = Math.sin(walkCycle) * 0.65;
-        leftArm.rotation.z = 0.12;
-        rightArm.rotation.z = -0.12;
+    // Detect touchdown to trigger elastic landing compression
+    if (!wasGrounded && isGrounded) {
+      const impact = THREE.MathUtils.clamp(Math.abs(prevVelY) / 15.0, 0.2, 1.0);
+      landSquash = Math.max(landSquash, impact);
+    }
+    wasGrounded = isGrounded;
+    prevVelY = rawVelY;
 
-        body.position.y = 0.55 + Math.abs(Math.sin(walkCycle)) * 0.045;
-        head.position.y = HEAD_Y + Math.abs(Math.sin(walkCycle)) * 0.035;
-        body.rotation.z = Math.sin(walkCycle * 0.5) * 0.06;
+    // Smooth blend factors between locomotion states
+    moveBlend = THREE.MathUtils.damp(moveBlend, isMoving ? 1 : 0, 12, safeDt);
+    sprintBlend = THREE.MathUtils.damp(sprintBlend, isSprinting ? 1 : 0, 9, safeDt);
+    crouchBlend = THREE.MathUtils.damp(crouchBlend, isCrouching ? 1 : 0, 14, safeDt);
+    airBlend = THREE.MathUtils.damp(airBlend, isGrounded ? 0 : 1, 16, safeDt);
+    landSquash = THREE.MathUtils.damp(landSquash, 0, 11, safeDt);
+    velYSmoothed = THREE.MathUtils.damp(velYSmoothed, rawVelY, 14, safeDt);
 
-        // Lantern pendulum sway
-        lanternPost.rotation.z = Math.sin(walkCycle * 0.5) * 0.25;
-        lanternPost.rotation.x = 0.15 + Math.cos(walkCycle) * 0.1;
-      } else {
-        // Idle breathing
-        walkCycle += dt * 2.2;
-        leftLeg.position.z = 0;
-        rightLeg.position.z = 0;
-        leftLeg.position.y = 0.14;
-        rightLeg.position.y = 0.14;
-
-        // Arms rest softly at sides
-        leftArm.rotation.x = Math.sin(walkCycle) * 0.04;
-        rightArm.rotation.x = -Math.sin(walkCycle) * 0.04;
-        leftArm.rotation.z = 0.12;
-        rightArm.rotation.z = -0.12;
-
-        body.position.y = 0.55 + Math.sin(walkCycle) * 0.015;
-        head.position.y = HEAD_Y + Math.sin(walkCycle) * 0.02;
-        body.rotation.z = 0;
-        lanternPost.rotation.z = Math.sin(walkCycle * 0.8) * 0.06;
-      }
-    } else {
-      // In air: Joyful jump celebration pose!
-      // Arms raise up in the air!
-      leftArm.rotation.x = -1.9 + Math.sin(windTime * 4) * 0.1;
-      rightArm.rotation.x = -1.9 - Math.sin(windTime * 4) * 0.1;
-      leftArm.rotation.z = 0.35;
-      rightArm.rotation.z = -0.35;
-
-      leftLeg.position.y = 0.22;
-      rightLeg.position.y = 0.24;
-      leftLeg.position.z = -0.08;
-      rightLeg.position.z = 0.05;
-      body.scale.set(0.92, 1.12, 0.92);
-      lanternPost.rotation.x = -0.35;
+    idleTime += safeDt;
+    if (isMoving && isGrounded) {
+      // Natural step cadence (~3.7 steps/s walking, ~5.4 steps/s sprinting)
+      const cadenceMult = THREE.MathUtils.lerp(1.85, 1.65, sprintBlend);
+      walkCycle += speed * safeDt * cadenceMult;
+    } else if (!isGrounded) {
+      // Gentle decay/coast of stride phase in mid-air
+      walkCycle += Math.min(speed, 4.0) * safeDt * 0.55;
     }
 
-    // Everything attached to the head follows its bob
-    headGroup.position.y = head.position.y - HEAD_Y;
+    const strideAmp = THREE.MathUtils.clamp(speed / 3.4, 0.25, 1.0);
+    const swing = Math.sin(walkCycle);
+    const cosSwing = Math.cos(walkCycle);
+    const doubleStep = -Math.cos(walkCycle * 2); // -1 at mid-stance, +1 at float peak
+    const breath = Math.sin(idleTime * 2.1);
 
-    // Scarf fluttering reacting dynamically to movement & wind gusts
-    const trailAngle = (speed > 0.5 ? 0.65 : 0.2) + Math.sin(windTime * 6) * 0.28;
-    scarfTail1.rotation.x = trailAngle;
-    scarfTail1.rotation.y = Math.cos(windTime * 4.5) * 0.22;
-    scarfTail2.rotation.x = trailAngle * 0.92;
-    scarfTail2.rotation.y = -Math.sin(windTime * 5.0) * 0.22;
-    hatPompom.rotation.x = Math.sin(windTime * 3.5) * 0.12;
+    // --- 1. Grounded Pose Targets (Idle <-> Walk <-> Sprint + Crouch) ---
+    const hipAmp = THREE.MathUtils.lerp(0.58, 0.96, sprintBlend) * strideAmp * (1 - crouchBlend * 0.28);
+    const armAmp = THREE.MathUtils.lerp(0.52, 0.98, sprintBlend) * strideAmp * (1 - crouchBlend * 0.25);
+
+    const groundHipLX = -swing * hipAmp * moveBlend - crouchBlend * 0.34;
+    const groundHipRX = swing * hipAmp * moveBlend - crouchBlend * 0.34;
+    const liftAmp = THREE.MathUtils.lerp(0.05, 0.09, sprintBlend) * strideAmp * moveBlend;
+    const groundLegLY = -0.2 + Math.max(0, cosSwing) * liftAmp + crouchBlend * 0.05;
+    const groundLegRY = -0.2 + Math.max(0, -cosSwing) * liftAmp + crouchBlend * 0.05;
+    const groundAnkleLX = cosSwing * 0.26 * strideAmp * moveBlend + crouchBlend * 0.24;
+    const groundAnkleRX = -cosSwing * 0.26 * strideAmp * moveBlend + crouchBlend * 0.24;
+
+    const armPumpBase = THREE.MathUtils.lerp(-0.04, -0.34, sprintBlend) * moveBlend - crouchBlend * 0.22;
+    const groundArmLX =
+      armPumpBase + swing * armAmp * moveBlend + Math.sin(idleTime * 2.1 + 0.4) * 0.035 * (1 - moveBlend);
+    const groundArmRX =
+      armPumpBase - swing * armAmp * moveBlend - Math.sin(idleTime * 2.1 + 0.4) * 0.035 * (1 - moveBlend);
+    const groundArmSplay = 0.13 + sprintBlend * 0.07 * moveBlend + landSquash * 0.2 + crouchBlend * 0.08;
+
+    const groundBounce =
+      doubleStep * THREE.MathUtils.lerp(0.022, 0.046, sprintBlend) * strideAmp * moveBlend +
+      breath * 0.008 * (1 - moveBlend);
+    const groundTorsoY = 0.36 + groundBounce - crouchBlend * 0.14 - landSquash * 0.11;
+    const groundTorsoRotX =
+      THREE.MathUtils.lerp(0.09, 0.27, sprintBlend) * strideAmp * moveBlend +
+      0.02 * (1 - moveBlend) +
+      crouchBlend * 0.28 +
+      landSquash * 0.18;
+    const groundTorsoRotY = swing * THREE.MathUtils.lerp(0.06, 0.12, sprintBlend) * strideAmp * moveBlend;
+    const groundTorsoRotZ =
+      -swing * 0.04 * strideAmp * moveBlend + Math.sin(idleTime * 1.05) * 0.022 * (1 - moveBlend);
+
+    // --- 2. Airborne Pose Targets (Takeoff -> Apex -> Falling) ---
+    const upFactor = THREE.MathUtils.clamp(velYSmoothed / 8.5, 0, 1);
+    const fallFactor = THREE.MathUtils.clamp(-velYSmoothed / 12.0, 0, 1);
+    const apexFactor = Math.max(0, 1 - upFactor - fallFactor);
+
+    const airHipLX =
+      -0.62 * upFactor - 0.32 * apexFactor + (-0.36 + Math.sin(windTime * 9.5) * 0.26) * fallFactor;
+    const airHipRX =
+      0.32 * upFactor - 0.18 * apexFactor + (-0.26 - Math.sin(windTime * 9.5) * 0.26) * fallFactor;
+    const airLegLY = -0.2 + 0.07 * upFactor + 0.04 * apexFactor;
+    const airLegRY = -0.2 + 0.02 * upFactor + 0.04 * apexFactor;
+    const airAnkleLX = 0.32 * upFactor + 0.18 * apexFactor - 0.22 * fallFactor;
+    const airAnkleRX = -0.25 * upFactor + 0.12 * apexFactor - 0.22 * fallFactor;
+
+    const airArmLX =
+      -1.45 * upFactor - 0.72 * apexFactor + (-0.95 + Math.sin(windTime * 8) * 0.14) * fallFactor;
+    const airArmRX =
+      -1.05 * upFactor - 0.72 * apexFactor + (-0.95 - Math.sin(windTime * 8) * 0.14) * fallFactor;
+    const airArmSplay =
+      0.28 * upFactor + 0.45 * apexFactor + (0.62 + fallFactor * 0.32 + Math.cos(windTime * 7) * 0.07) * fallFactor;
+
+    const airTorsoY = 0.36 + 0.03 * upFactor;
+    const airTorsoRotX = -0.08 * upFactor + 0.04 * apexFactor - 0.11 * fallFactor;
+    const airTorsoRotY = 0.08 * upFactor;
+    const airTorsoRotZ = Math.sin(windTime * 6) * 0.04 * fallFactor;
+
+    // --- 3. Blend Grounded <-> Airborne and apply to Pivots ---
+    leftHipPivot.rotation.x = THREE.MathUtils.lerp(groundHipLX, airHipLX, airBlend);
+    rightHipPivot.rotation.x = THREE.MathUtils.lerp(groundHipRX, airHipRX, airBlend);
+    leftLeg.position.y = THREE.MathUtils.lerp(groundLegLY, airLegLY, airBlend);
+    rightLeg.position.y = THREE.MathUtils.lerp(groundLegRY, airLegRY, airBlend);
+    leftLeg.rotation.x = THREE.MathUtils.lerp(groundAnkleLX, airAnkleLX, airBlend);
+    rightLeg.rotation.x = THREE.MathUtils.lerp(groundAnkleRX, airAnkleRX, airBlend);
+
+    leftArm.rotation.x = THREE.MathUtils.lerp(groundArmLX, airArmLX, airBlend);
+    rightArm.rotation.x = THREE.MathUtils.lerp(groundArmRX, airArmRX, airBlend);
+    const armSplay = THREE.MathUtils.lerp(groundArmSplay, airArmSplay, airBlend);
+    leftArm.rotation.z = armSplay;
+    rightArm.rotation.z = -armSplay;
+
+    torsoPivot.position.y = THREE.MathUtils.lerp(groundTorsoY, airTorsoY, airBlend);
+    torsoPivot.rotation.x = THREE.MathUtils.lerp(groundTorsoRotX, airTorsoRotX, airBlend);
+    torsoPivot.rotation.y = THREE.MathUtils.lerp(groundTorsoRotY, airTorsoRotY, airBlend);
+    torsoPivot.rotation.z = THREE.MathUtils.lerp(groundTorsoRotZ, airTorsoRotZ, airBlend);
+
+    // Subtle squash-and-stretch on torso volume (landing compression + jump launch stretch + breathing)
+    const airStretchY = 1 + (0.09 * upFactor - 0.04 * fallFactor) * airBlend;
+    const airStretchXZ = 1 / Math.sqrt(airStretchY);
+    const squashY = 1 - landSquash * 0.14 * (1 - airBlend);
+    const squashXZ = 1 + landSquash * 0.11 * (1 - airBlend);
+    const breathScale = 1 + breath * 0.012 * (1 - moveBlend) * (1 - airBlend);
+    body.scale.set(
+      squashXZ * airStretchXZ * breathScale,
+      squashY * airStretchY * (1 + breath * 0.008 * (1 - moveBlend)),
+      squashXZ * airStretchXZ * breathScale
+    );
+
+    // Head counter-balances torso lean so the character always looks ahead naturally
+    const idleLookY = Math.sin(idleTime * 0.72) * 0.06 * (1 - moveBlend) * (1 - airBlend);
+    const idleLookX = Math.sin(idleTime * 1.35) * 0.025 * (1 - moveBlend) * (1 - airBlend);
+    headPivot.position.y = 0.84 + doubleStep * 0.01 * moveBlend * (1 - airBlend) - landSquash * 0.02;
+    headPivot.rotation.x =
+      -torsoPivot.rotation.x * 0.62 +
+      idleLookX +
+      (cosSwing * 0.025 * moveBlend * (1 - airBlend)) +
+      (0.12 * fallFactor - 0.08 * upFactor) * airBlend;
+    headPivot.rotation.y = -torsoPivot.rotation.y * 0.65 + idleLookY;
+    headPivot.rotation.z = -torsoPivot.rotation.z * 0.5;
+
+    // Lantern pendulum inertia
+    const targetLanternX =
+      0.08 +
+      (0.18 * sprintBlend + 0.08) * moveBlend +
+      Math.cos(walkCycle) * 0.11 * strideAmp * moveBlend -
+      THREE.MathUtils.clamp(velYSmoothed * 0.035, -0.35, 0.35) * airBlend;
+    const targetLanternZ =
+      swing * 0.22 * strideAmp * moveBlend + Math.sin(idleTime * 1.7) * 0.05 * (1 - moveBlend);
+    lanternPost.rotation.x = THREE.MathUtils.damp(lanternPost.rotation.x, targetLanternX, 12, safeDt);
+    lanternPost.rotation.z = THREE.MathUtils.damp(lanternPost.rotation.z, targetLanternZ, 12, safeDt);
+
+    // Scarf fluttering with dual-harmonic cloth motion reacting to speed & falling updraft
+    const speedFactor = THREE.MathUtils.clamp(speed / 9.0, 0, 1);
+    const trailAngle =
+      0.16 +
+      speedFactor * 0.68 +
+      fallFactor * 0.62 * airBlend +
+      Math.sin(windTime * 6.5) * 0.18 +
+      Math.sin(windTime * 11.2) * 0.08;
+    scarfTail1.rotation.x = THREE.MathUtils.damp(scarfTail1.rotation.x, trailAngle, 14, safeDt);
+    scarfTail1.rotation.y = Math.cos(windTime * 4.8) * (0.16 + speedFactor * 0.14);
+    scarfTail2.rotation.x = THREE.MathUtils.damp(scarfTail2.rotation.x, trailAngle * 0.9, 14, safeDt);
+    scarfTail2.rotation.y = -Math.sin(windTime * 5.4) * (0.16 + speedFactor * 0.14);
+
+    hatPompom.rotation.x = Math.sin(windTime * 3.5 + walkCycle * 0.5) * (0.08 + speedFactor * 0.12);
     if (floatingHalo) {
       floatingHalo.position.y = 1.29 + Math.sin(windTime * 3.2) * 0.02;
-      floatingHalo.rotation.z += dt * 0.8;
+      floatingHalo.rotation.z += safeDt * 0.8;
     }
     for (const bw of backWings) {
-      const flutter = Math.sin(windTime * (isGrounded ? 4 : 12)) * (isGrounded ? 0.08 : 0.26);
+      const flutter = Math.sin(windTime * (isGrounded ? 4.5 : 13)) * (isGrounded ? 0.08 : 0.26);
       bw.pivot.rotation.y = (-0.28 + flutter) * bw.side;
     }
     if (backCape) {
-      backCape.rotation.x = (speed > 0.5 ? 0.52 : 0.16) + Math.sin(windTime * 5) * 0.12;
+      const capeTarget =
+        0.14 +
+        speedFactor * 0.55 +
+        fallFactor * 0.52 * airBlend +
+        Math.sin(windTime * 5.2) * 0.1 +
+        Math.sin(windTime * 9.1) * 0.04;
+      backCape.rotation.x = THREE.MathUtils.damp(backCape.rotation.x, capeTarget, 12, safeDt);
     }
 
-    // Ponytail / pigtails swing with movement
+    // Ponytail / pigtails swing with stride & vertical inertia
     for (let i = 0; i < swingingHair.length; i++) {
       const h = swingingHair[i];
       const base = swingingHair.length === 1 ? 0.35 : 0;
-      h.rotation.x = base + (speed > 0.5 ? 0.45 : 0.05) + Math.sin(windTime * 5 + i) * 0.12 + (isGrounded ? 0 : -0.3);
+      const targetHairX =
+        base +
+        speedFactor * 0.42 +
+        Math.sin(windTime * 5.2 + i) * 0.1 +
+        (airBlend * THREE.MathUtils.clamp(-velYSmoothed * 0.045, -0.35, 0.55));
+      h.rotation.x = THREE.MathUtils.damp(h.rotation.x, targetHairX, 12, safeDt);
     }
 
     // Companion smooth floating orbit
@@ -1994,14 +2144,14 @@ export function createPlayerCharacter(
     companionSprite.position.y = 1.25 + Math.sin(windTime * 3.2) * 0.12;
     companionSprite.position.z = 0.15 + Math.cos(windTime * 2.5) * 0.08;
     if (companionSpinner) {
-      if (look.companion === 'nube') companionSpinner.rotation.z += dt * 1.5;
+      if (look.companion === 'nube') companionSpinner.rotation.z += safeDt * 1.5;
       else companionSpinner.rotation.y = Math.sin(windTime * 1.8) * 0.6;
     }
     for (let i = 0; i < companionWings.length; i++) {
       const flap = Math.sin(windTime * 30) * 0.7;
       companionWings[i].rotation.x = flap;
     }
-    companionAnim?.(windTime, dt);
+    companionAnim?.(windTime, safeDt);
   };
 
   if (isRemote) {

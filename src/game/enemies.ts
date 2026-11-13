@@ -175,7 +175,6 @@ export class EnemyManager {
     const helmet = new THREE.Mesh(helmetGeom, acornMat);
     helmet.position.set(0, 0.58, -0.02);
     helmet.rotation.x = -0.15;
-    helmet.castShadow = true;
     group.add(helmet);
 
     // Helmet acorn stem
@@ -229,11 +228,9 @@ export class EnemyManager {
     footGeom.rotateX(Math.PI / 2);
     const leftFoot = new THREE.Mesh(footGeom, bootMat);
     leftFoot.position.set(0.14, 0.08, 0.05);
-    leftFoot.castShadow = true;
 
     const rightFoot = new THREE.Mesh(footGeom, bootMat);
     rightFoot.position.set(-0.14, 0.08, 0.05);
-    rightFoot.castShadow = true;
     feet.add(leftFoot, rightFoot);
     group.add(feet);
 
@@ -324,6 +321,8 @@ export class EnemyManager {
         this.group.rotation.y = THREE.MathUtils.damp(this.group.rotation.y, targetRotY, 12, dt);
 
         this.group.position.copy(this.position);
+
+        if (!this.group.visible) return;
 
         // Animated waddle walk & leaf spin
         const waddleFreq = currentSpeed * 6.5;
@@ -609,6 +608,8 @@ export class EnemyManager {
         this.position.y = spawnPos.y + Math.sin(time * 2.8) * 0.18;
         this.group.position.copy(this.position);
 
+        if (!this.group.visible) return;
+
         // Wing flutter
         if (this.animParts.wings) {
           const flutterSpeed = this.isTelegraphing ? 25 : 10;
@@ -698,6 +699,7 @@ export class EnemyManager {
     const baseUpdate = enemy.update;
     enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
       baseUpdate.call(this, dt, time, playerPos);
+      if (!this.group.visible) return;
       // Glitchy jitter: random teleport-like offsets and texture tearing
       const glitching = Math.sin(time * 7.3 + spawnPos.x) > 0.6;
       core.position.x = glitching ? (Math.random() - 0.5) * 0.12 : 0;
@@ -791,6 +793,7 @@ export class EnemyManager {
     const baseUpdate = enemy.update;
     enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
       baseUpdate.call(this, dt, time, playerPos);
+      if (!this.group.visible) return;
       // Shudder harder while "inhaling" (telegraph) before the gust
       const shake = this.isTelegraphing ? 0.06 : 0.012;
       skin.position.set((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake, 0);
@@ -847,6 +850,7 @@ export class EnemyManager {
     const baseUpdate = enemy.update;
     enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
       baseUpdate.call(this, dt, time, playerPos);
+      if (!this.group.visible) return;
       skin.rotation.z = Math.sin(time * 2.2) * 0.12;
       lights.forEach((l, i) => (l.visible = Math.floor(time * 6 + i) % 2 === 0 || this.isTelegraphing));
     };
@@ -878,10 +882,10 @@ export class EnemyManager {
     const baseUpdate = enemy.update;
     enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
       baseUpdate.call(this, dt, time, playerPos);
+      if (!this.group.visible) return;
       const wob = Math.sin(time * 6 + spawnPos.x);
       jelly.scale.set(1 + wob * 0.06, 0.85 - wob * 0.06, 1 + wob * 0.06);
       bulb.position.x = Math.sin(time * 3) * 0.06;
-      // Pupil glances toward the player
       const dx = playerPos.x - this.position.x;
       pupil.position.x = THREE.MathUtils.clamp(dx * 0.02, -0.06, 0.06);
     };
@@ -925,6 +929,7 @@ export class EnemyManager {
     const baseUpdate = enemy.update;
     enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
       baseUpdate.call(this, dt, time, playerPos);
+      if (!this.group.visible) return;
       drips.forEach((d, i) => {
         const t = (time * 0.8 + i * 0.33) % 1;
         d.position.set(-0.25 + i * 0.25, 0.45 - t * 0.45, 0.3);
@@ -976,6 +981,7 @@ export class EnemyManager {
     const baseUpdate = enemy.update;
     enemy.update = function (this: CozyEnemy, dt: number, time: number, playerPos: THREE.Vector3) {
       baseUpdate.call(this, dt, time, playerPos);
+      if (!this.group.visible) return;
       strips.forEach((s, i) => (s.rotation.x = Math.sin(time * 5 + i) * 0.4));
       const flare = this.isTelegraphing ? 1.8 : 1;
       eyes.forEach((e) => e.scale.setScalar(flare + Math.sin(time * 8) * 0.15));
@@ -1009,8 +1015,8 @@ export class EnemyManager {
         const dy = playerPosition.y + 0.7 - pr.mesh.position.y;
         const dz = playerPosition.z - pr.mesh.position.z;
         if (dx * dx + dy * dy + dz * dz < (pr.radius + playerRadius + 0.25) ** 2) {
-          const dir = new THREE.Vector3(pr.velocity.x, 0, pr.velocity.z).normalize();
-          knock(dir, pr.force, 5.5);
+          this._playerPush.set(pr.velocity.x, 0, pr.velocity.z).normalize();
+          knock(this._playerPush, pr.force, 5.5);
           this.scene.remove(pr.mesh);
           this.projectiles.splice(i, 1);
         }
@@ -1048,15 +1054,14 @@ export class EnemyManager {
           const radialDist = Math.hypot(rx, ry, rz);
 
           if (radialDist <= coneRadiusAtDist + playerRadius * 0.55) {
-            const pushDir = this._gustDir.clone();
-            pushDir.y = 0;
-            if (pushDir.lengthSq() < 0.0001) pushDir.set(0, 0, 1);
-            pushDir.normalize();
+            this._playerPush.set(this._gustDir.x, 0, this._gustDir.z);
+            if (this._playerPush.lengthSq() < 0.0001) this._playerPush.set(0, 0, 1);
+            this._playerPush.normalize();
             const gust = 14.5 * (1 + 0.3 * this.hostility);
-            playerVelocity.x = pushDir.x * gust;
+            playerVelocity.x = this._playerPush.x * gust;
             playerVelocity.y = 4.6;
-            playerVelocity.z = pushDir.z * gust;
-            onPlayerKnockback(pushDir);
+            playerVelocity.z = this._playerPush.z * gust;
+            onPlayerKnockback(this._playerPush);
             soundManager.playSteamPuff();
             continue;
           }

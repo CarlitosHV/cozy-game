@@ -14,7 +14,7 @@ import {
   createVictoryPortal,
   VictoryPortalModel,
 } from './models';
-import { ProceduralTextures } from './textures';
+import { applyCrumblingTexture, ProceduralTextures } from './textures';
 import { CheckpointItem, PlatformItem, SolidObstacleCollider, WorldBuildResult } from './levels';
 import { ItemSpot } from './items';
 
@@ -135,6 +135,7 @@ export function createLevelKit(root: THREE.Object3D, textures: ProceduralTexture
     plat.type = 'crumbling';
     plat.crumbleTimer = 1.6;
     plat.isCrumbling = false;
+    applyCrumblingTexture(plat, textures);
   }
 
   function addUpdraft(id: string, x: number, y: number, z: number, height: number, size: number, tint?: number) {

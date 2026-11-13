@@ -20,7 +20,7 @@ import {
   createUpdraftVortex,
   createVictoryPortal,
 } from './models';
-import { ProceduralTextures } from './textures';
+import { applyCrumblingTexture, ProceduralTextures } from './textures';
 import { CheckpointItem, PlatformItem, SolidObstacleCollider, WorldBuildResult } from './levels';
 
 type Surface = 'meadow' | 'glass' | 'cliff' | 'roof' | 'white';
@@ -555,6 +555,7 @@ export function buildAeroWorld(root: THREE.Object3D, textures: ProceduralTexture
   crumble.type = 'crumbling';
   crumble.crumbleTimer = 1.6;
   crumble.isCrumbling = false;
+  applyCrumblingTexture(crumble, textures);
 
   addTower('tower_f', -4, 25.2, 131.5, 5, 5);
   // Rooftop air vent updraft to the summit

@@ -210,7 +210,7 @@ export class GameEngine {
       }
     }
 
-    this.updatePlatformCulling(true);
+    this.updateSceneCulling(true);
   }
 
   // Three.js core
@@ -491,6 +491,7 @@ export class GameEngine {
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(this.currentLevel);
+    this.buildWorldBoundsCache();
     this.ambience = new AmbientDecor(this.scene);
     {
       let saved: string | null = null;
@@ -857,9 +858,11 @@ export class GameEngine {
     this.companionPowers.setCompanion(look.companion, this.physics);
   }
 
+  private readonly _previewFwd = new THREE.Vector3();
+
   private frontFacingPreviewYaw(): number {
-    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.playerModel.group.quaternion);
-    return Math.atan2(fwd.x, fwd.z) + 0.16;
+    this._previewFwd.set(0, 0, 1).applyQuaternion(this.playerModel.group.quaternion);
+    return Math.atan2(this._previewFwd.x, this._previewFwd.z) + 0.16;
   }
 
   /** Controls the 3D Lobby camera framing (center hero, shop preview, creator, or orbit). */
@@ -1098,6 +1101,7 @@ export class GameEngine {
     this.levelRoot = new THREE.Group();
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(level);
+    this.buildWorldBoundsCache();
     this.ambience.build(this.world, level, themeForLevel(level));
     this.applyHostility();
     this.addCompanionShowcase();
@@ -1283,6 +1287,30 @@ export class GameEngine {
   private camRay = new THREE.Raycaster();
   private eyeW = [new THREE.Vector3(), new THREE.Vector3()];
   private eyeRay = new THREE.Raycaster();
+  private readonly _eyeMid = new THREE.Vector3();
+  private readonly _eyeDir = new THREE.Vector3();
+  private readonly _eyeProj = new THREE.Vector3();
+  private readonly _camPivotTmp = new THREE.Vector3();
+  private readonly _camDirTmp = new THREE.Vector3();
+  private readonly _camRightTmp = new THREE.Vector3();
+  private readonly _camUpTmp = new THREE.Vector3();
+  private readonly _camFromTmp = new THREE.Vector3();
+  private readonly _camHorizTmp = new THREE.Vector3();
+  private readonly _camSideTmp = new THREE.Vector3();
+  private readonly _camUpAxis = new THREE.Vector3(0, 1, 0);
+  private readonly _camProbeDirs = [
+    new THREE.Vector3(),
+    new THREE.Vector3(),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(),
+    new THREE.Vector3(),
+    new THREE.Vector3(),
+    new THREE.Vector3(),
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1),
+  ];
 
   /**
    * (HUD) The Skinwalker's eyeshine on screen, in CSS pixels, so it can be drawn over the darkness.
@@ -1293,11 +1321,12 @@ export class GameEngine {
     const s = this.combat.eyeShine(this.eyeW);
     if (!s) return null;
     const cam = this.camera.position;
-    const mid = this.eyeW[0].clone().add(this.eyeW[1]).multiplyScalar(0.5);
-    const dist = mid.distanceTo(cam);
+    this._eyeMid.copy(this.eyeW[0]).add(this.eyeW[1]).multiplyScalar(0.5);
+    const dist = this._eyeMid.distanceTo(cam);
     const colliders = this.world.cameraColliders;
     if (colliders?.length) {
-      this.eyeRay.set(cam, mid.clone().sub(cam).normalize());
+      this._eyeDir.copy(this._eyeMid).sub(cam).normalize();
+      this.eyeRay.set(cam, this._eyeDir);
       this.eyeRay.far = Math.max(0.1, dist - 0.35);
       if (this.eyeRay.intersectObjects(colliders, false).length) return null;
     }
@@ -1305,9 +1334,9 @@ export class GameEngine {
     const h = this.container.clientHeight;
     const pts: { x: number; y: number }[] = [];
     for (const p of this.eyeW) {
-      const v = p.clone().project(this.camera);
-      if (v.z > 1 || Math.abs(v.x) > 1.2 || Math.abs(v.y) > 1.2) return null;
-      pts.push({ x: ((v.x + 1) / 2) * w, y: ((1 - v.y) / 2) * h });
+      this._eyeProj.copy(p).project(this.camera);
+      if (this._eyeProj.z > 1 || Math.abs(this._eyeProj.x) > 1.2 || Math.abs(this._eyeProj.y) > 1.2) return null;
+      pts.push({ x: ((this._eyeProj.x + 1) / 2) * w, y: ((1 - this._eyeProj.y) / 2) * h });
     }
     return { pts, op: s.op, red: s.red, size: THREE.MathUtils.clamp((h * 0.4) / Math.max(dist, 1), 3, 8) };
   }
@@ -1316,56 +1345,58 @@ export class GameEngine {
   /** Pulls the camera in front of the first wall/ceiling between it and the player. */
   private keepCameraInside(followPos: THREE.Vector3) {
     const colliders = this.world.cameraColliders!;
-    const pivot = new THREE.Vector3(followPos.x, followPos.y + 1.1, followPos.z);
+    const pivot = this._camPivotTmp.set(followPos.x, followPos.y + 1.1, followPos.z);
     const cam = this.camera.position;
-    const dir = cam.clone().sub(pivot);
+    const dir = this._camDirTmp.copy(cam).sub(pivot);
     const dist = dir.length();
     if (dist < 0.3) return;
     dir.divideScalar(dist);
-    // A fat ray: the center and four rays around it (the camera's view has a width, so a thin ray
-    // let its edges slip into a wall or above the ceiling, and that wall vanished from view)
-    const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0));
+    const right = this._camRightTmp.crossVectors(dir, this._camUpAxis);
     if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
     right.normalize();
-    const up = new THREE.Vector3().crossVectors(right, dir).normalize();
+    const up = this._camUpTmp.crossVectors(right, dir).normalize();
     const R = 0.28;
     let safe = dist;
-    for (const [a, b] of [
+    const offsets = [
       [0, 0],
       [1, 0],
       [-1, 0],
       [0, 1],
       [0, -1],
-    ]) {
-      const from = pivot.clone().addScaledVector(right, a * R).addScaledVector(up, b * R);
-      this.camRay.set(from, dir);
+    ];
+    for (let i = 0; i < offsets.length; i++) {
+      const [a, b] = offsets[i];
+      this._camFromTmp.copy(pivot).addScaledVector(right, a * R).addScaledVector(up, b * R);
+      this.camRay.set(this._camFromTmp, dir);
       this.camRay.far = dist + 0.4;
       const hit = this.camRay.intersectObjects(colliders, false)[0];
       if (hit) safe = Math.min(safe, hit.distance - 0.4);
     }
     cam.copy(pivot).addScaledVector(dir, Math.max(0.3, safe));
-    // A wall right behind you (a corner, your back to the wall): instead of sliding into your head
-    // (all you saw was the inside of the cap), the camera rises over you and looks down
     if (safe < 1.6) {
-      this.camRay.set(pivot, new THREE.Vector3(0, 1, 0));
+      this.camRay.set(pivot, this._camUpAxis);
       this.camRay.far = 4;
       const roof = this.camRay.intersectObjects(colliders, false)[0];
       const room = roof ? roof.distance - 0.45 : 4;
       const lift = Math.max(0, Math.min(room, (1.6 - Math.max(0, safe)) * 1.3 + 0.35));
       cam.y += lift;
     }
-    // Still too close to a wall or the ceiling (e.g. sliding along a wall)? Push it away a little
     const MARGIN = 0.38;
-    const horiz = new THREE.Vector3(dir.x, 0, dir.z).normalize();
-    const side = new THREE.Vector3(-horiz.z, 0, horiz.x);
-    for (const d of [right, right.clone().negate(), new THREE.Vector3(0, 1, 0), dir, horiz, side, side.clone().negate(), new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)]) {
+    const horiz = this._camHorizTmp.set(dir.x, 0, dir.z).normalize();
+    const side = this._camSideTmp.set(-horiz.z, 0, horiz.x);
+    this._camProbeDirs[0].copy(right);
+    this._camProbeDirs[1].copy(right).negate();
+    this._camProbeDirs[3].copy(dir);
+    this._camProbeDirs[4].copy(horiz);
+    this._camProbeDirs[5].copy(side);
+    this._camProbeDirs[6].copy(side).negate();
+    for (let i = 0; i < this._camProbeDirs.length; i++) {
+      const d = this._camProbeDirs[i];
       this.camRay.set(cam, d);
       this.camRay.far = MARGIN;
       const hit = this.camRay.intersectObjects(colliders, false)[0];
       if (hit) cam.addScaledVector(d, -(MARGIN - hit.distance));
     }
-    // No room at all (low ceiling and walls all around): hide your character while the camera is
-    // that close, so it never shows the inside of the head
     this.hidePlayerForCamera(!this.isSpectating && cam.distanceTo(pivot) < 0.8);
   }
 
@@ -2722,7 +2753,11 @@ export class GameEngine {
         this.levelRoot.visible = false;
         this.ambience.setVisible(false);
         this.weatherSystem.cloudsSystem.setVisible(false);
+        this.weatherSystem.setParticlesVisible(false);
         this.itemSystem.setVisible(false);
+        if (this.renderer.shadowMap.enabled) {
+          this.renderer.shadowMap.autoUpdate = false;
+        }
         const sp = this.physics.position;
         this.lobbyShadowDisc.position.set(sp.x, sp.y + 0.015, sp.z);
         this.lobbyShadowDisc.visible = true;
@@ -2740,7 +2775,11 @@ export class GameEngine {
         this.levelRoot.visible = true;
         this.ambience.setVisible(true);
         this.weatherSystem.cloudsSystem.setVisible(true);
+        this.weatherSystem.setParticlesVisible(true);
         this.itemSystem.setVisible(true);
+        if (this.renderer.shadowMap.enabled) {
+          this.renderer.shadowMap.autoUpdate = true;
+        }
         this.lobbyShadowDisc.visible = false;
         this.renderer.setClearColor(0x000000, 1);
         this.renderer.render(this.scene, this.camera);
@@ -2859,9 +2898,9 @@ export class GameEngine {
       }
 
       this.playerModel.updateAnimation(0, true, dt, time);
-      this.weatherSystem.update(dt, this.physics.position, time);
-      this.world.levelUpdate?.(dt, time);
-      this.updateShowcase(time);
+      if (this.weatherSystem.isTransitioning) {
+        this.weatherSystem.update(dt, this.physics.position, time);
+      }
       return;
     }
 
@@ -2946,13 +2985,14 @@ export class GameEngine {
       this.dirLight.position.set(this.photoTarget.x + 25, this.photoTarget.y + 45, this.photoTarget.z + 20);
       this.dirLight.target.position.copy(this.photoTarget);
       this.dirLight.target.updateMatrixWorld();
+      this.updateSceneCulling();
       return;
     }
 
     // 2. Poll Input (Keyboard + Mobile Virtual Controls)
     this.updateCombinedInput();
 
-    // 3. Update Moving Platforms & Obstacles
+    // 3. Update Moving Platforms & Obstacles (simulation stays exact; skip pure visual updates on culled objects)
     this.physics.updateMovingPlatforms(time, dt);
     for (const obs of this.world.obstacles) {
       obs.update(time);
@@ -2969,12 +3009,13 @@ export class GameEngine {
     }
     if (this.world.steamVents) {
       for (const vent of this.world.steamVents) {
-        vent.update(dt);
+        if (vent.group.visible) vent.update(dt);
       }
     }
 
-    // 4. Update Bouncy Mushrooms and Updrafts
+    // 4. Update Bouncy Mushrooms and Updrafts (only when platform mesh is visible)
     for (const plat of this.world.platforms) {
+      if (!plat.mesh.visible) continue;
       if (plat.bouncyModel) {
         plat.bouncyModel.update(dt);
       }
@@ -2983,12 +3024,12 @@ export class GameEngine {
       }
     }
 
-    // 5. Update Shrines & Collectibles
+    // 5. Update Shrines & Collectibles (only when visible)
     for (const cp of this.world.checkpoints) {
-      cp.shrine.update(dt);
+      if (cp.shrine.group.visible) cp.shrine.update(dt);
     }
     for (const col of this.world.collectibles) {
-      col.update(dt);
+      if (!col.collected && col.group.visible) col.update(dt);
     }
 
     if (!this.easterEggFound && this.world.easterEgg) {
@@ -3245,8 +3286,7 @@ export class GameEngine {
       }
     }
 
-    // 7. Update Weather & Background Clouds
-    this.weatherSystem.update(dt, this.physics.position, time);
+    // 7. Darkness level (weather + clouds update after camera frustum step below)
     this.levelDarkness = Math.max(this.combat?.darkness ?? 0, this.world.hazards?.darkness ?? 0);
     this.applyDarkness(this.levelDarkness);
 
@@ -3393,10 +3433,12 @@ export class GameEngine {
     if (this.camera.position.distanceTo(this.targetLookAt) < 0.5) this.camera.lookAt(this.targetLookAt.x + Math.sin(this.cameraYaw) * 2, this.targetLookAt.y - 0.3, this.targetLookAt.z + Math.cos(this.cameraYaw) * 2);
     else this.camera.lookAt(this.targetLookAt);
 
-    // Fade out foliage or trees that block the camera view of the player
+    // Real 6-plane frustum + distance culling for all scene objects & ambience, then update weather/clouds with exact frustum
+    this.updateSceneCulling();
     this.updateTreeOcclusion(dt);
-    this.updatePlatformCulling();
 
+    const maxCloudDist = this.renderDistance === 50 ? 52 : this.renderDistance === 70 ? 84 : 160;
+    this.weatherSystem.update(dt, this.physics.position, time, this._frustum, this.camera.position, maxCloudDist * maxCloudDist);
     this.ambience.update(dt, time, followPos, this.camera.position, this.levelDarkness);
 
     // Follow light with player or spectated friend
@@ -3432,78 +3474,90 @@ export class GameEngine {
     }
   }
 
-  private lastCullCheck = 0;
-  private _camFwd = new THREE.Vector3();
+  private readonly _frustum = new THREE.Frustum();
+  private readonly _projScreenMatrix = new THREE.Matrix4();
+  private readonly _cullSphere = new THREE.Sphere();
+  private readonly _cullBox = new THREE.Box3();
+  private readonly _cullMin = new THREE.Vector3();
+  private readonly _cullMax = new THREE.Vector3();
+  private readonly _occVec = new THREE.Vector3();
+  private readonly _nowOccluded = new Set<THREE.Mesh>();
+  private decorBounds: { obj: THREE.Object3D; center: THREE.Vector3; radius: number }[] = [];
+
+  /** Precomputes tight world-space bounding spheres for static decorative groups once per level load. */
+  private buildWorldBoundsCache() {
+    this.decorBounds = [];
+    this.occludedMeshes.clear();
+    if (!this.world?.decorativeMeshes?.length) return;
+    const box = new THREE.Box3();
+    const sph = new THREE.Sphere();
+    this.levelRoot.updateMatrixWorld(true);
+    for (const obj of this.world.decorativeMeshes) {
+      box.setFromObject(obj);
+      if (box.isEmpty()) {
+        this.decorBounds.push({ obj, center: obj.position.clone(), radius: 4 });
+      } else {
+        box.getBoundingSphere(sph);
+        this.decorBounds.push({ obj, center: sph.center.clone(), radius: Math.max(1.5, sph.radius) });
+      }
+    }
+  }
 
   /**
-   * Distance and frustum culling:
-   * Hides distant platforms according to renderDistance setting (50%, 70%, 100%)
-   * and culls platforms that are behind the camera outside the player's immediate circle.
+   * Real 6-plane Frustum + Distance Culling:
+   * Never renders polygons outside camera FOV or beyond renderDistance for platforms,
+   * decorative props, collectibles, checkpoints, hazards, enemies, ambient decor chunks, and clouds.
    */
-  public updatePlatformCulling(force = false) {
-    if (!this.world || !this.world.platforms || !this.camera) return;
-    const now = performance.now();
-    if (!force && now - this.lastCullCheck < 40) return;
-    this.lastCullCheck = now;
+  public updateSceneCulling(_force = false) {
+    if (!this.world || !this.camera) return;
+
+    this.camera.updateMatrixWorld();
+    this._projScreenMatrix.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    this._frustum.setFromProjectionMatrix(this._projScreenMatrix);
 
     const pct = this.renderDistance;
-    // 50% = ~46m, 70% = ~76m, 100% = ~145m
-    const maxDist = pct === 50 ? 46 : pct === 70 ? 76 : 145;
+    const maxDist = pct === 50 ? 48 : pct === 70 ? 80 : 155;
     const maxDistSq = maxDist * maxDist;
 
     const camPos = this.camera.position;
     const playerPos = this.physics.position;
-    this.camera.getWorldDirection(this._camFwd);
 
+    // 1. Platforms (preserve currentPlatform & close safety perimeter; frustum-cull everything else)
     const platforms = this.world.platforms;
     const currentPlatform = this.physics.currentPlatform;
-    const len = platforms.length;
-
-    for (let i = 0; i < len; i++) {
+    for (let i = 0; i < platforms.length; i++) {
       const p = platforms[i];
       if (!p.mesh) continue;
 
-      // Never cull the platform the player is actively standing on
       if (p === currentPlatform) {
         if (!p.mesh.visible) p.mesh.visible = true;
         continue;
       }
 
-      // Big floors, walls and ceilings (the Backrooms) have their center far away: measure to the
-      // closest point of the box, not to its center, or the floor vanished in the middle of a jump
-      // (while you're in the air it's no longer "the platform you stand on")
       const sz = p.size;
       const rot = p.mesh.rotation.y;
       const turned = Math.abs(Math.sin(rot * 2)) > 0.01;
-      const hx = sz ? (turned ? Math.hypot(sz.x, sz.z) / 2 : (Math.abs(Math.cos(rot)) > 0.5 ? sz.x : sz.z) / 2) : 0;
-      const hz = sz ? (turned ? hx : (Math.abs(Math.cos(rot)) > 0.5 ? sz.z : sz.x) / 2) : 0;
+      const hx = sz ? (turned ? Math.hypot(sz.x, sz.z) * 0.5 : (Math.abs(Math.cos(rot)) > 0.5 ? sz.x : sz.z) * 0.5) : 0;
+      const hz = sz ? (turned ? hx : (Math.abs(Math.cos(rot)) > 0.5 ? sz.z : sz.x) * 0.5) : 0;
       const hy = sz ? sz.y : 0;
 
-      // 1. Distance check from player (squared distance for maximum performance)
       const dx = Math.max(0, Math.abs(p.position.x - playerPos.x) - hx);
       const dy = Math.max(0, Math.abs(p.position.y - playerPos.y) - hy) * 0.7;
       const dz = Math.max(0, Math.abs(p.position.z - playerPos.z) - hz);
-      const distSq = dx * dx + dy * dy + dz * dz;
-
-      if (distSq > maxDistSq) {
+      if (dx * dx + dy * dy + dz * dz > maxDistSq) {
         if (p.mesh.visible) p.mesh.visible = false;
         continue;
       }
 
-      // 2. Behind camera check ("ni hacia atrás")
-      // Only cull if outside the 8-meter safety circle around player/camera, and only if no part of
-      // the box is in front of the camera
       const cx = Math.max(0, Math.abs(p.position.x - camPos.x) - hx);
       const cy = Math.max(0, Math.abs(p.position.y - camPos.y) - hy);
       const cz = Math.max(0, Math.abs(p.position.z - camPos.z) - hz);
-      if (cx * cx + cy * cy + cz * cz > 64) {
-        // The box's corner furthest along the view direction
-        const fx = p.position.x + Math.sign(this._camFwd.x) * hx - camPos.x;
-        const fy = p.position.y + Math.sign(this._camFwd.y) * hy - camPos.y;
-        const fz = p.position.z + Math.sign(this._camFwd.z) * hz - camPos.z;
-        const fl = Math.hypot(fx, fy, fz) || 1;
-        const dot = (fx * this._camFwd.x + fy * this._camFwd.y + fz * this._camFwd.z) / fl;
-        if (dot < -0.15) {
+      if (cx * cx + cy * cy + cz * cz > 49) {
+        // Generous AABB around platform body + attached railings/trampolines/trees
+        this._cullMin.set(p.position.x - hx - 1.5, p.position.y - hy - 2.5, p.position.z - hz - 1.5);
+        this._cullMax.set(p.position.x + hx + 1.5, p.position.y + 4.2, p.position.z + hz + 1.5);
+        this._cullBox.set(this._cullMin, this._cullMax);
+        if (!this._frustum.intersectsBox(this._cullBox)) {
           if (p.mesh.visible) p.mesh.visible = false;
           continue;
         }
@@ -3511,13 +3565,97 @@ export class GameEngine {
 
       if (!p.mesh.visible) p.mesh.visible = true;
     }
+
+    // Helper for sphere-based frustum + distance culling
+    const testSphere = (x: number, y: number, z: number, radius: number): boolean => {
+      const dx = x - camPos.x;
+      const dy = y - camPos.y;
+      const dz = z - camPos.z;
+      const lim = maxDist + radius;
+      if (dx * dx + dy * dy + dz * dz > lim * lim) return false;
+      this._cullSphere.center.set(x, y, z);
+      this._cullSphere.radius = radius;
+      return this._frustum.intersectsSphere(this._cullSphere);
+    };
+
+    // 2. Decorative meshes (trees, gallows, arches, pillars, ruins)
+    for (let i = 0; i < this.decorBounds.length; i++) {
+      const d = this.decorBounds[i];
+      d.obj.visible = testSphere(d.center.x, d.center.y, d.center.z, d.radius);
+    }
+
+    // 3. Collectibles
+    const collectibles = this.world.collectibles;
+    for (let i = 0; i < collectibles.length; i++) {
+      const c = collectibles[i];
+      if (c.collected) continue;
+      const p = c.group.position;
+      c.group.visible = testSphere(p.x, p.y, p.z, 1.8);
+    }
+
+    // 4. Checkpoint shrines
+    const checkpoints = this.world.checkpoints;
+    for (let i = 0; i < checkpoints.length; i++) {
+      const g = checkpoints[i].shrine.group;
+      const p = g.position;
+      g.visible = testSphere(p.x, p.y + 1.2, p.z, 3.5);
+    }
+
+    // 5. Parkour hazards (pendulums, pinwheels, balance logs, steam vents)
+    const obstacles = this.world.obstacles;
+    for (let i = 0; i < obstacles.length; i++) {
+      const g = obstacles[i].group;
+      const p = g.position;
+      g.visible = testSphere(p.x, p.y - 1.5, p.z, 5.0);
+    }
+    if (this.world.pinwheels) {
+      const pins = this.world.pinwheels;
+      for (let i = 0; i < pins.length; i++) {
+        const g = pins[i].group;
+        const p = g.position;
+        g.visible = testSphere(p.x, p.y, p.z, 4.5);
+      }
+    }
+    if (this.world.balanceLogs) {
+      const logs = this.world.balanceLogs;
+      for (let i = 0; i < logs.length; i++) {
+        const g = logs[i].group;
+        const p = g.position;
+        g.visible = testSphere(p.x, p.y, p.z, 4.0);
+      }
+    }
+    if (this.world.steamVents) {
+      const vents = this.world.steamVents;
+      for (let i = 0; i < vents.length; i++) {
+        const g = vents[i].group;
+        const p = g.position;
+        g.visible = testSphere(p.x, p.y + 1.0, p.z, 3.5);
+      }
+    }
+
+    // 6. Enemies
+    if (this.world.enemyManager) {
+      const enemies = this.world.enemyManager.enemies;
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        const rad = e.type === 'zephyr_puff' ? 6.5 : 3.2;
+        e.group.visible = testSphere(e.position.x, e.position.y + 0.6, e.position.z, rad);
+      }
+    }
+
+    // 7. Spatial-chunked ambient decor, islands, puffs & flocks
+    this.ambience?.updateCulling(this._frustum, camPos, maxDist);
+  }
+
+  public updatePlatformCulling(force = false) {
+    this.updateSceneCulling(force);
   }
 
   private occludedMeshes = new Set<THREE.Mesh>();
 
   /** Fades out decorative tree foliage/trunks when they block the camera's view of the player. */
   private updateTreeOcclusion(dt: number) {
-    if (!this.world || !this.world.decorativeMeshes || this.world.decorativeMeshes.length === 0) return;
+    if (!this.decorBounds.length) return;
     const camPos = this.camera.position;
     const playerPos = this.physics.position;
     const playerY = playerPos.y + 1.1;
@@ -3528,11 +3666,27 @@ export class GameEngine {
     const segLenSq = camToP_x * camToP_x + camToP_y * camToP_y + camToP_z * camToP_z;
     if (segLenSq < 0.25) return;
 
-    const nowOccluded = new Set<THREE.Mesh>();
-    const meshPos = new THREE.Vector3();
+    const midX = (camPos.x + playerPos.x) * 0.5;
+    const midY = (camPos.y + playerY) * 0.5;
+    const midZ = (camPos.z + playerPos.z) * 0.5;
+    const halfSeg = Math.sqrt(segLenSq) * 0.5;
 
-    for (const rootObj of this.world.decorativeMeshes) {
-      rootObj.traverse((child) => {
+    const nowOccluded = this._nowOccluded;
+    nowOccluded.clear();
+    const meshPos = this._occVec;
+
+    for (let i = 0; i < this.decorBounds.length; i++) {
+      const d = this.decorBounds[i];
+      if (!d.obj.visible) continue;
+
+      // Fast broadphase: skip decorative groups far from the camera-to-player capsule
+      const maxCheckR = halfSeg + d.radius + 2.5;
+      const bx = d.center.x - midX;
+      const by = d.center.y - midY;
+      const bz = d.center.z - midZ;
+      if (bx * bx + by * by + bz * bz > maxCheckR * maxCheckR) continue;
+
+      d.obj.traverse((child) => {
         const mesh = child as THREE.Mesh;
         if (!mesh.isMesh || !mesh.geometry) return;
 
@@ -3541,7 +3695,6 @@ export class GameEngine {
         const toMesh_y = meshPos.y - camPos.y;
         const toMesh_z = meshPos.z - camPos.z;
 
-        // Projection fraction along camera-to-player line
         const proj = (toMesh_x * camToP_x + toMesh_y * camToP_y + toMesh_z * camToP_z) / segLenSq;
         if (proj > 0.12 && proj < 0.88) {
           const closeX = camPos.x + camToP_x * proj;
@@ -3555,6 +3708,8 @@ export class GameEngine {
         }
       });
     }
+
+    if (nowOccluded.size === 0 && this.occludedMeshes.size === 0) return;
 
     for (const mesh of nowOccluded) {
       this.occludedMeshes.add(mesh);

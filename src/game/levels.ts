@@ -30,7 +30,7 @@ import {
   UpdraftVortexModel,
   VictoryPortalModel,
 } from './models';
-import { ProceduralTextures } from './textures';
+import { applyCrumblingTexture, ProceduralTextures } from './textures';
 import { ItemSpot } from './items';
 import type { ItemType, ToolResult } from './items';
 import type { PuzzleData } from './puzzles';
@@ -59,6 +59,7 @@ export interface PlatformItem {
   isCrumbling?: boolean;
   crumbleTimer?: number;
   originalY?: number;
+  crumbleOverlayMat?: THREE.MeshStandardMaterial;
 }
 
 export interface CheckpointItem {
@@ -682,6 +683,7 @@ export function buildCozyParkourWorld(
   crumblePad.type = 'crumbling';
   crumblePad.crumbleTimer = 1.6;
   crumblePad.isCrumbling = false;
+  applyCrumblingTexture(crumblePad, textures);
 
   createPendulumGallows(-6.5, 29.8, 128.5, 3.4, 4.4);
   const pendulum2 = createSwingingObstacle(3.0, 0.8, 2.5, textures);

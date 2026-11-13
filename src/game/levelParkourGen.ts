@@ -245,19 +245,35 @@ export function generateParkourLevel(
     metalness: look.metalness,
   });
   const trimMat = new THREE.MeshBasicMaterial({ color: look.trim });
+  const archMat = new THREE.MeshStandardMaterial({
+    color: look.trim,
+    roughness: 0.3,
+    metalness: 0.5,
+    emissive: accent,
+    emissiveIntensity: 0.3,
+  });
+
+  // Shared unit geometries for procedural parkour structures (reused via mesh.scale)
+  const unitPostGeo = new THREE.CylinderGeometry(0.11, 0.14, 1, 8).translate(0, 0.5, 0);
+  const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
+  const unitPillarGeo = new THREE.CylinderGeometry(0.85, 1, 1, 10);
+  const unitRingGeo = new THREE.TorusGeometry(1.15, 0.075, 6, 18);
+  const unitArchGeo = new THREE.TorusGeometry(1, 0.05, 8, 28, Math.PI);
 
   const addGallowsPendulum = (x: number, y: number, z: number, span = 3.8, height = 4.6, phase = 0) => {
     const frame = new THREE.Group();
     frame.position.set(x, y, z);
-    const postGeo = new THREE.CylinderGeometry(0.11, 0.14, height, 8);
-    postGeo.translate(0, height / 2, 0);
-    const p1 = new THREE.Mesh(postGeo, frameMat);
+    const p1 = new THREE.Mesh(unitPostGeo, frameMat);
+    p1.scale.set(1, height, 1);
     p1.position.x = -span / 2;
-    const p2 = p1.clone();
+    const p2 = new THREE.Mesh(unitPostGeo, frameMat);
+    p2.scale.set(1, height, 1);
     p2.position.x = span / 2;
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(span + 0.5, 0.24, 0.24), frameMat);
+    const beam = new THREE.Mesh(unitBoxGeo, frameMat);
+    beam.scale.set(span + 0.5, 0.24, 0.24);
     beam.position.y = height;
-    const accentBar = new THREE.Mesh(new THREE.BoxGeometry(span + 0.1, 0.06, 0.26), trimMat);
+    const accentBar = new THREE.Mesh(unitBoxGeo, trimMat);
+    accentBar.scale.set(span + 0.1, 0.06, 0.26);
     accentBar.position.y = height - 0.1;
     frame.add(p1, p2, beam, accentBar);
     kit.addDecor(frame);
@@ -277,25 +293,23 @@ export function generateParkourLevel(
   const addSupportPillar = (x: number, topY: number, z: number, height: number, radius = 0.7) => {
     const g = new THREE.Group();
     g.position.set(x, topY - height / 2, z);
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.85, radius, height, 10), pillarMat);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(radius * 1.15, 0.08, 6, 18), trimMat);
+    const shaft = new THREE.Mesh(unitPillarGeo, pillarMat);
+    shaft.scale.set(radius, height, radius);
+    const ring = new THREE.Mesh(unitRingGeo, trimMat);
+    ring.scale.setScalar(radius);
     ring.rotation.x = Math.PI / 2;
     ring.position.y = height * 0.42;
-    const midRing = ring.clone();
+    const midRing = new THREE.Mesh(unitRingGeo, trimMat);
+    midRing.scale.setScalar(radius);
+    midRing.rotation.x = Math.PI / 2;
     midRing.position.y = 0;
     g.add(shaft, ring, midRing);
     kit.addDecor(g);
   };
 
   const addSkyArch = (x: number, y: number, z: number, yaw: number, radius = 4.4) => {
-    const archMat = new THREE.MeshStandardMaterial({
-      color: look.trim,
-      roughness: 0.3,
-      metalness: 0.5,
-      emissive: accent,
-      emissiveIntensity: 0.3,
-    });
-    const arch = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.22, 8, 28, Math.PI), archMat);
+    const arch = new THREE.Mesh(unitArchGeo, archMat);
+    arch.scale.setScalar(radius);
     arch.position.set(x, y + 0.35, z);
     arch.rotation.y = yaw + Math.PI / 2;
     arch.name = `pk_arch_${archN++}`;

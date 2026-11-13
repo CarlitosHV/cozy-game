@@ -401,6 +401,12 @@ interface Flock {
   birds: Bird[];
 }
 
+interface DecorChunk {
+  objs: THREE.InstancedMesh[];
+  center: THREE.Vector3;
+  radius: number;
+}
+
 export class AmbientDecor {
   private scene: THREE.Scene;
   private group = new THREE.Group();
@@ -411,13 +417,16 @@ export class AmbientDecor {
   private particles: THREE.Points | null = null;
   private particleBase: Float32Array | null = null;
   private particleSpan = 26;
-  private flocks: Flock[] = [];
-  private islands: { obj: THREE.Object3D; baseY: number; phase: number }[] = [];
+  private flocks: (Flock & { group?: THREE.Group })[] = [];
+  private islands: { obj: THREE.Object3D; baseY: number; phase: number; radius: number }[] = [];
   private puffs: { obj: THREE.Object3D; speed: number; radius: number; angle: number; y: number }[] = [];
   private waterfalls: THREE.Mesh[] = [];
+  private decorChunks: DecorChunk[] = [];
   private dot: THREE.CanvasTexture | null = null;
   private backdrop: Backdrop | null = null;
   private center = new THREE.Vector3();
+  private readonly _cullSphere = new THREE.Sphere();
+  private readonly _tmpColor = new THREE.Color();
   /** Backrooms mist (Alta only): wisps around you that creep in when the lights go out */
   private mist: MistWisp[] = [];
   private mistTex: THREE.CanvasTexture | null = null;
@@ -651,8 +660,8 @@ export class AmbientDecor {
   private instantiateDecorKinds(
     decorList: DecorKind[],
     count: number,
-    floors: PlatformItem[],
-    area: number,
+    _floors: PlatformItem[],
+    _area: number,
     pickFloor: () => PlatformItem,
     indoor: boolean,
     rng: () => number,
@@ -662,55 +671,124 @@ export class AmbientDecor {
     sc: THREE.Vector3,
     p: THREE.Vector3
   ) {
+    const CELL_XZ = 32;
+    const CELL_Y = 28;
+    const chunkMeshMap = new Map<string, { objs: THREE.InstancedMesh[]; minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }>();
+
     for (const kind of decorList) {
       const n = Math.round(count * kind.share);
       if (!n) continue;
-      const meshes = kind.parts.map((part) => {
-        const geo = part.geo();
-        return part.colors.map((c) => {
-          const mat = new THREE.MeshLambertMaterial({
-            color: c,
-            emissive: part.emissive ? c : 0x000000,
-            emissiveIntensity: part.emissive ?? 0,
-            transparent: part.opacity !== undefined,
-            opacity: part.opacity ?? 1,
-            depthWrite: part.opacity === undefined,
-          });
-          const im = new THREE.InstancedMesh(geo, mat, Math.ceil(n / part.colors.length));
-          im.count = 0;
-          return im;
-        });
-      });
+
+      // 1. Sample placements & partition into spatial grid chunks
+      const buckets = new Map<string, { mats: THREE.Matrix4[]; ci: number[]; minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }>();
 
       for (let i = 0; i < n; i++) {
         const f = pickFloor();
-        p.set(
-          f.position.x + (rng() - 0.5) * (f.size.x - 0.6),
-          f.position.y + 0.01 + (indoor ? i * 0.00002 : 0),
-          f.position.z + (rng() - 0.5) * (f.size.z - 0.6)
-        );
+        const px = f.position.x + (rng() - 0.5) * (f.size.x - 0.6);
+        const py = f.position.y + 0.01 + (indoor ? i * 0.00002 : 0);
+        const pz = f.position.z + (rng() - 0.5) * (f.size.z - 0.6);
+        p.set(px, py, pz);
         q.setFromEuler(e.set((rng() - 0.5) * kind.tilt, rng() * Math.PI * 2, (rng() - 0.5) * kind.tilt));
         const k = kind.scale[0] + rng() * (kind.scale[1] - kind.scale[0]);
         const st = kind.stretch ? kind.stretch[0] + rng() * (kind.stretch[1] - kind.stretch[0]) : 1;
         sc.set(k, k * st, k);
         m4.compose(p, q, sc);
-        const ci = Math.floor(rng() * 1000);
-        meshes.forEach((variants, pi) => {
-          const im = variants[(kind.parts[pi].colors.length === kind.parts[0].colors.length ? ci : ci + pi) % variants.length];
-          if (im.count < im.instanceMatrix.count) im.setMatrixAt(im.count++, m4);
-        });
+
+        const key = `${Math.floor(px / CELL_XZ)}_${Math.floor(py / CELL_Y)}_${Math.floor(pz / CELL_XZ)}`;
+        let b = buckets.get(key);
+        if (!b) {
+          b = { mats: [], ci: [], minX: px, maxX: px, minY: py, maxY: py, minZ: pz, maxZ: pz };
+          buckets.set(key, b);
+        } else {
+          if (px < b.minX) b.minX = px;
+          if (px > b.maxX) b.maxX = px;
+          if (py < b.minY) b.minY = py;
+          if (py > b.maxY) b.maxY = py;
+          if (pz < b.minZ) b.minZ = pz;
+          if (pz > b.maxZ) b.maxZ = pz;
+        }
+        b.mats.push(m4.clone());
+        b.ci.push(Math.floor(rng() * 1000));
       }
 
-      for (const variants of meshes) {
-        for (const im of variants) {
+      // 2. One shared geometry & one shared material per DecorPart across all chunks (using setColorAt)
+      const partAssets = kind.parts.map((part) => {
+        const geo = part.geo();
+        const isBright = part.emissive !== undefined && part.emissive >= 0.65;
+        const mat: THREE.Material = isBright
+          ? new THREE.MeshBasicMaterial({
+              color: 0xffffff,
+              transparent: part.opacity !== undefined,
+              opacity: part.opacity ?? 1,
+              depthWrite: part.opacity === undefined,
+            })
+          : new THREE.MeshLambertMaterial({
+              color: 0xffffff,
+              emissive: part.emissive ? part.colors[0] : 0x000000,
+              emissiveIntensity: part.emissive ? part.emissive * 0.45 : 0,
+              transparent: part.opacity !== undefined,
+              opacity: part.opacity ?? 1,
+              depthWrite: part.opacity === undefined,
+            });
+        return { part, geo, mat };
+      });
+
+      const part0ColorCount = kind.parts[0].colors.length;
+
+      buckets.forEach((b, key) => {
+        const mCount = b.mats.length;
+        let chunkEntry = chunkMeshMap.get(key);
+        if (!chunkEntry) {
+          chunkEntry = {
+            objs: [],
+            minX: b.minX,
+            maxX: b.maxX,
+            minY: b.minY,
+            maxY: b.maxY,
+            minZ: b.minZ,
+            maxZ: b.maxZ,
+          };
+          chunkMeshMap.set(key, chunkEntry);
+        } else {
+          if (b.minX < chunkEntry.minX) chunkEntry.minX = b.minX;
+          if (b.maxX > chunkEntry.maxX) chunkEntry.maxX = b.maxX;
+          if (b.minY < chunkEntry.minY) chunkEntry.minY = b.minY;
+          if (b.maxY > chunkEntry.maxY) chunkEntry.maxY = b.maxY;
+          if (b.minZ < chunkEntry.minZ) chunkEntry.minZ = b.minZ;
+          if (b.maxZ > chunkEntry.maxZ) chunkEntry.maxZ = b.maxZ;
+        }
+
+        partAssets.forEach(({ part, geo, mat }, pi) => {
+          const im = new THREE.InstancedMesh(geo, mat, mCount);
+          for (let j = 0; j < mCount; j++) {
+            im.setMatrixAt(j, b.mats[j]);
+            const colIdx = (part.colors.length === part0ColorCount ? b.ci[j] : b.ci[j] + pi) % part.colors.length;
+            this._tmpColor.setHex(part.colors[colIdx]);
+            im.setColorAt(j, this._tmpColor);
+          }
           im.instanceMatrix.needsUpdate = true;
+          if (im.instanceColor) im.instanceColor.needsUpdate = true;
           im.computeBoundingSphere();
           im.frustumCulled = true;
-          im.receiveShadow = true;
+          im.castShadow = false;
+          im.receiveShadow = false;
           this.group.add(im);
-        }
-      }
+          chunkEntry!.objs.push(im);
+        });
+      });
     }
+
+    chunkMeshMap.forEach((entry) => {
+      const cx = (entry.minX + entry.maxX) * 0.5;
+      const cy = (entry.minY + entry.maxY) * 0.5;
+      const cz = (entry.minZ + entry.maxZ) * 0.5;
+      const rad = Math.hypot(entry.maxX - cx, entry.maxY - cy, entry.maxZ - cz) + 1.5;
+      this.decorChunks.push({
+        objs: entry.objs,
+        center: new THREE.Vector3(cx, cy, cz),
+        radius: rad,
+      });
+    });
   }
 
   /** Far floating islands (some with waterfalls) around the world. */
@@ -721,42 +799,52 @@ export class AmbientDecor {
     const waterMat = new THREE.MeshBasicMaterial({ color: this.theme === 'swamp' ? 0x9bd36b : 0xbfe8ff, transparent: true, opacity: 0.55, depthWrite: false });
     const crystalMat = new THREE.MeshLambertMaterial({ color: 0xc084fc, emissive: 0x7c3aed, emissiveIntensity: 0.8, flatShading: true });
     const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+
+    // Shared unit geometries across all islands
+    const unitTopGeo = new THREE.CylinderGeometry(1, 0.85, 0.35, 9);
+    const unitUnderGeo = new THREE.ConeGeometry(0.85, 1.6, 9);
+    const isCrystalTop = this.theme === 'cosmic' || this.theme === 'neon' || this.theme === 'ice';
+    const isSpireTop = this.theme === 'castle' || this.theme === 'cyberpunk' || this.theme === 'lava' || this.theme === 'desert';
+    const isCloudTop = this.theme === 'aero' || this.theme === 'candy';
+    const unitTopperGeo = isCrystalTop
+      ? new THREE.OctahedronGeometry(0.6, 0).scale(1, 2.6, 1)
+      : isSpireTop
+        ? (this.theme === 'cyberpunk' ? new THREE.BoxGeometry(0.9, 3.8, 0.9) : new THREE.ConeGeometry(0.45, 4, 5))
+        : isCloudTop
+          ? new THREE.IcosahedronGeometry(1, 1).scale(1.4, 0.6, 1)
+          : new THREE.IcosahedronGeometry(1, 0);
+    const unitTopperMat = isCrystalTop ? crystalMat : isSpireTop ? rockMat : isCloudTop ? cloudMat : topMat;
+    const unitFallGeo = new THREE.PlaneGeometry(0.25, 3.5);
+
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2 + rng() * 0.4;
       const r = maxR + 45 + rng() * 55;
       const size = 4 + rng() * 9;
       const g = new THREE.Group();
-      const top = new THREE.Mesh(new THREE.CylinderGeometry(size, size * 0.85, size * 0.35, 9), topMat);
-      const under = new THREE.Mesh(new THREE.ConeGeometry(size * 0.85, size * 1.6, 9), rockMat);
+      const top = new THREE.Mesh(unitTopGeo, topMat);
+      top.scale.set(size, size, size);
+      const under = new THREE.Mesh(unitUnderGeo, rockMat);
+      under.scale.set(size, size, size);
       under.rotation.x = Math.PI;
       under.position.y = -size * 0.97;
       g.add(top, under);
-      // A few things on top, matching the world (round trees, crystals, spires, clouds)
+
       for (let k = 0; k < 2 + Math.floor(rng() * 3); k++) {
         const r0 = size * (0.15 + rng() * 0.12);
-        let tr: THREE.Mesh;
-        if (this.theme === 'cosmic' || this.theme === 'neon' || this.theme === 'ice') {
-          tr = new THREE.Mesh(new THREE.OctahedronGeometry(r0 * 0.6, 0).scale(1, 2.6, 1), crystalMat);
-          tr.position.y = size * 0.17 + r0 * 1.4;
-        } else if (this.theme === 'castle' || this.theme === 'cyberpunk' || this.theme === 'lava' || this.theme === 'desert') {
-          tr = new THREE.Mesh(
-            this.theme === 'cyberpunk' ? new THREE.BoxGeometry(r0 * 0.9, r0 * 3.8, r0 * 0.9) : new THREE.ConeGeometry(r0 * 0.45, r0 * 4, 5),
-            rockMat
-          );
-          tr.position.y = size * 0.17 + r0 * 1.9;
-        } else if (this.theme === 'aero' || this.theme === 'candy') {
-          tr = new THREE.Mesh(new THREE.IcosahedronGeometry(r0, 1).scale(1.4, 0.6, 1), cloudMat);
-          tr.position.y = size * 0.3;
-        } else {
-          tr = new THREE.Mesh(new THREE.IcosahedronGeometry(r0, 0), topMat);
-          tr.position.y = size * 0.35;
-        }
+        const tr = new THREE.Mesh(unitTopperGeo, unitTopperMat);
+        tr.scale.set(r0, r0, r0);
+        if (isCrystalTop) tr.position.y = size * 0.17 + r0 * 1.4;
+        else if (isSpireTop) tr.position.y = size * 0.17 + r0 * 1.9;
+        else if (isCloudTop) tr.position.y = size * 0.3;
+        else tr.position.y = size * 0.35;
         tr.position.x = (rng() - 0.5) * size;
         tr.position.z = (rng() - 0.5) * size;
         g.add(tr);
       }
+
       if (this.quality === 'high' && this.theme !== 'castle' && this.theme !== 'cosmic' && this.theme !== 'lava' && this.theme !== 'desert' && rng() < 0.45) {
-        const fall = new THREE.Mesh(new THREE.PlaneGeometry(size * 0.25, size * 3.5), waterMat);
+        const fall = new THREE.Mesh(unitFallGeo, waterMat);
+        fall.scale.set(size, size, 1);
         fall.position.set(0, -size * 1.6, size * 0.86);
         g.add(fall);
         this.waterfalls.push(fall);
@@ -765,12 +853,13 @@ export class AmbientDecor {
       g.position.set(center.x + Math.cos(a) * r, baseY, center.z + Math.sin(a) * r);
       g.rotation.y = rng() * Math.PI * 2;
       this.group.add(g);
-      this.islands.push({ obj: g, baseY, phase: rng() * Math.PI * 2 });
+      this.islands.push({ obj: g, baseY, phase: rng() * Math.PI * 2, radius: size * 2.2 });
     }
   }
 
   private buildFlock(center: THREE.Vector3, maxR: number, look: ThemeLook, rng: () => number, idx: number) {
     const mat = new THREE.MeshBasicMaterial({ color: look.bird, side: THREE.DoubleSide });
+    const bodyGeo = new THREE.SphereGeometry(0.08, 6, 4);
     const wingGeo = new THREE.BufferGeometry();
     const bat = this.theme === 'castle';
     wingGeo.setAttribute(
@@ -787,15 +876,13 @@ export class AmbientDecor {
     const birds: Bird[] = [];
     for (let i = 0; i < 6; i++) {
       const g = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 4), mat);
+      const body = new THREE.Mesh(bodyGeo, mat);
       body.scale.set(1, 1, 2.2);
       const wl = new THREE.Mesh(wingGeo, mat);
       const wr = new THREE.Mesh(wingGeo, mat);
       wr.scale.x = -1;
       g.add(body, wl, wr);
       g.position.set(((i % 3) - 1) * 1.4, Math.floor(i / 3) * 0.6, -Math.abs((i % 3) - 1) * 1.2 - Math.floor(i / 3) * 1.4);
-      const holder = new THREE.Group();
-      holder.add(g);
       birds.push({ mesh: g, wings: [wl, wr], phase: rng() * 6 });
     }
     const flockGroup = new THREE.Group();
@@ -807,20 +894,22 @@ export class AmbientDecor {
       speed: (0.05 + rng() * 0.04) * (rng() < 0.5 ? 1 : -1),
       angle: rng() * Math.PI * 2,
       birds,
+      group: flockGroup,
     });
-    (this.flocks[this.flocks.length - 1] as Flock & { group?: THREE.Group }).group = flockGroup;
   }
 
   /** Big soft cloud puffs drifting slowly around the world (high only). */
   private buildPuffs(center: THREE.Vector3, maxR: number, count: number, rng: () => number) {
     if (!count) return;
     const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, flatShading: true });
+    const sharedPuffGeo = new THREE.IcosahedronGeometry(1, 1);
     for (let i = 0; i < count; i++) {
       const g = new THREE.Group();
       for (let k = 0; k < 4; k++) {
-        const s = new THREE.Mesh(new THREE.IcosahedronGeometry(2 + rng() * 2.5, 1), mat);
+        const pr = 2 + rng() * 2.5;
+        const s = new THREE.Mesh(sharedPuffGeo, mat);
         s.position.set(k * 2.6 - 4, rng() * 1.2, (rng() - 0.5) * 2);
-        s.scale.y = 0.6;
+        s.scale.set(pr, pr * 0.6, pr);
         g.add(s);
       }
       this.group.add(g);
@@ -829,15 +918,84 @@ export class AmbientDecor {
     }
   }
 
+  /** Camera frustum + distance culling for spatial decor chunks, distant islands, flocks and puffs. */
+  public updateCulling(frustum: THREE.Frustum, camPos: THREE.Vector3, maxDist: number) {
+    if (this.quality === 'low' || !this.group.visible) return;
+
+    for (let i = 0; i < this.decorChunks.length; i++) {
+      const ch = this.decorChunks[i];
+      const dx = ch.center.x - camPos.x;
+      const dy = ch.center.y - camPos.y;
+      const dz = ch.center.z - camPos.z;
+      const maxR = maxDist + ch.radius;
+      let show = dx * dx + dy * dy + dz * dz <= maxR * maxR;
+      if (show) {
+        this._cullSphere.center.copy(ch.center);
+        this._cullSphere.radius = ch.radius;
+        show = frustum.intersectsSphere(this._cullSphere);
+      }
+      for (let j = 0; j < ch.objs.length; j++) {
+        ch.objs[j].visible = show;
+      }
+    }
+
+    for (let i = 0; i < this.islands.length; i++) {
+      const isl = this.islands[i];
+      const pos = isl.obj.position;
+      const dx = pos.x - camPos.x;
+      const dy = pos.y - camPos.y;
+      const dz = pos.z - camPos.z;
+      const maxR = maxDist + isl.radius + 45;
+      let show = dx * dx + dy * dy + dz * dz <= maxR * maxR;
+      if (show) {
+        this._cullSphere.center.copy(pos);
+        this._cullSphere.radius = isl.radius;
+        show = frustum.intersectsSphere(this._cullSphere);
+      }
+      isl.obj.visible = show;
+    }
+
+    for (let i = 0; i < this.puffs.length; i++) {
+      const p = this.puffs[i];
+      const pos = p.obj.position;
+      const dx = pos.x - camPos.x;
+      const dy = pos.y - camPos.y;
+      const dz = pos.z - camPos.z;
+      const maxR = maxDist + 30;
+      let show = dx * dx + dy * dy + dz * dz <= maxR * maxR;
+      if (show) {
+        this._cullSphere.center.copy(pos);
+        this._cullSphere.radius = 11;
+        show = frustum.intersectsSphere(this._cullSphere);
+      }
+      p.obj.visible = show;
+    }
+
+    for (let i = 0; i < this.flocks.length; i++) {
+      const g = this.flocks[i].group;
+      if (!g) continue;
+      const pos = g.position;
+      const dx = pos.x - camPos.x;
+      const dy = pos.y - camPos.y;
+      const dz = pos.z - camPos.z;
+      const maxR = maxDist + 12;
+      let show = dx * dx + dy * dy + dz * dz <= maxR * maxR;
+      if (show) {
+        this._cullSphere.center.copy(pos);
+        this._cullSphere.radius = 6;
+        show = frustum.intersectsSphere(this._cullSphere);
+      }
+      g.visible = show;
+    }
+  }
+
   update(dt: number, time: number, focus: THREE.Vector3, cam?: THREE.Vector3, dark = 0) {
-    if (this.quality === 'low') return;
+    if (this.quality === 'low' || !this.group.visible) return;
     if (this.mist.length) this.updateMist(dt, time, focus, cam, dark);
-    // The far scenery travels with you, like the sky
     if (this.backdrop) {
       this.backdrop.group.position.copy(focus);
       this.backdrop.update(dt, time);
     }
-    // Particles live in a box around you (wrapping around as you move)
     if (this.particles && this.particleBase) {
       const attr = this.particles.geometry.getAttribute('position') as THREE.BufferAttribute;
       const arr = attr.array as Float32Array;
@@ -852,7 +1010,6 @@ export class AmbientDecor {
         if (motion === 'fall') y = base[i + 1] - ((time * 0.6 + ph) % (S * 0.6));
         else if (motion === 'rise') y = base[i + 1] + ((time * 0.9 + ph) % (S * 0.6));
         else y += Math.sin(time * 0.8 + ph) * 0.6;
-        // wrap into the box centered on the player
         x = THREE.MathUtils.euclideanModulo(x - focus.x + S, S * 2) - S + focus.x;
         z = THREE.MathUtils.euclideanModulo(z - focus.z + S, S * 2) - S + focus.z;
         y = THREE.MathUtils.euclideanModulo(y + 2, S * 0.6) - 2 + focus.y;
@@ -865,9 +1022,10 @@ export class AmbientDecor {
     }
     for (const f of this.flocks) {
       f.angle += f.speed * dt;
-      const g = (f as Flock & { group?: THREE.Group }).group;
+      const g = f.group;
       if (!g) continue;
       g.position.set(f.center.x + Math.cos(f.angle) * f.radius, f.center.y + Math.sin(time * 0.3 + f.radius) * 2, f.center.z + Math.sin(f.angle) * f.radius);
+      if (!g.visible) continue;
       g.rotation.y = -f.angle + (f.speed > 0 ? Math.PI : 0);
       for (const b of f.birds) {
         const flap = Math.sin(time * (this.theme === 'castle' ? 16 : 9) + b.phase) * 0.7;
@@ -876,9 +1034,11 @@ export class AmbientDecor {
       }
     }
     for (const isl of this.islands) {
+      if (!isl.obj.visible) continue;
       isl.obj.position.y = isl.baseY + Math.sin(time * 0.25 + isl.phase) * 1.2;
     }
     for (const w of this.waterfalls) {
+      if (!w.parent?.visible) continue;
       (w.material as THREE.MeshBasicMaterial).opacity = 0.45 + Math.sin(time * 4 + w.id) * 0.08;
     }
     for (const p of this.puffs) {
@@ -893,15 +1053,21 @@ export class AmbientDecor {
   }
 
   private clear() {
+    const geos = new Set<THREE.BufferGeometry>();
+    const mats = new Set<THREE.Material>();
     this.group.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.geometry) m.geometry.dispose();
+      if (m.geometry) geos.add(m.geometry);
       const mat = m.material as THREE.Material | THREE.Material[] | undefined;
       for (const x of Array.isArray(mat) ? mat : mat ? [mat] : []) {
-        const map = (x as THREE.MeshBasicMaterial).map;
-        if (map && map !== this.dot && map !== this.mistTex) map.dispose();
-        x.dispose();
+        mats.add(x);
       }
+    });
+    geos.forEach((g) => g.dispose());
+    mats.forEach((x) => {
+      const map = (x as THREE.MeshBasicMaterial).map;
+      if (map && map !== this.dot && map !== this.mistTex) map.dispose();
+      x.dispose();
     });
     this.group.clear();
     this.mist = [];
@@ -911,6 +1077,7 @@ export class AmbientDecor {
     this.islands = [];
     this.puffs = [];
     this.waterfalls = [];
+    this.decorChunks = [];
     this.backdrop = null;
   }
 

@@ -13,6 +13,7 @@ export interface ProceduralTextures {
   shadow: THREE.CanvasTexture;
   leaf: THREE.CanvasTexture;
   particleGlow: THREE.CanvasTexture;
+  cracked: THREE.CanvasTexture;
 }
 
 export function createProceduralTextures(maxAnisotropy: number = 4): ProceduralTextures {
@@ -239,6 +240,143 @@ export function createProceduralTextures(maxAnisotropy: number = 4): ProceduralT
 
   const particleGlowTex = new THREE.CanvasTexture(partCanvas);
 
+  // 9. Cracked / Fractured Overlay Texture for fragile crumbling platforms
+  const crackCanvas = document.createElement('canvas');
+  crackCanvas.width = 512;
+  crackCanvas.height = 512;
+  const kCtx = crackCanvas.getContext('2d')!;
+  kCtx.clearRect(0, 0, 512, 512);
+
+  // Deterministic pseudo-random generator for clean, repeatable cracks
+  let seed = 7919;
+  const rand = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+
+  // Subtle dusty fracture wash around fault lines
+  kCtx.lineCap = 'round';
+  kCtx.lineJoin = 'round';
+
+  const drawJaggedCrack = (
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    width: number,
+    depth: number,
+    highlight = true
+  ) => {
+    const segs = Math.max(4, Math.floor(Math.hypot(x2 - x1, y2 - y1) / 24));
+    const pts: [number, number][] = [[x1, y1]];
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    for (let i = 1; i < segs; i++) {
+      const t = i / segs;
+      const jitter = (rand() - 0.5) * 26 * (1 - Math.abs(t - 0.5) * 0.6);
+      pts.push([x1 + dx * t + nx * jitter, y1 + dy * t + ny * jitter]);
+    }
+    pts.push([x2, y2]);
+
+    const strokePath = (ox: number, oy: number, w: number, color: string) => {
+      kCtx.strokeStyle = color;
+      kCtx.lineWidth = w;
+      kCtx.beginPath();
+      kCtx.moveTo(pts[0][0] + ox, pts[0][1] + oy);
+      for (let i = 1; i < pts.length; i++) {
+        kCtx.lineTo(pts[i][0] + ox, pts[i][1] + oy);
+      }
+      kCtx.stroke();
+    };
+
+    if (highlight) {
+      // Crisp pale chipped bevel beside main crack so fractures pop on dark AND bright surfaces
+      strokePath(2.0, 2.0, width + 1.4, 'rgba(255, 245, 226, 0.42)');
+    }
+    strokePath(0, 0, width, 'rgba(22, 15, 11, 0.92)');
+
+    // Spawn secondary branching hairline cracks
+    if (depth > 0) {
+      for (let i = 1; i < pts.length - 1; i++) {
+        if (rand() < 0.58) {
+          const [bx, by] = pts[i];
+          const baseAng = Math.atan2(dy, dx) + (rand() > 0.5 ? 1 : -1) * (0.55 + rand() * 0.75);
+          const bLen = (35 + rand() * 75) * (depth === 2 ? 1.0 : 0.65);
+          drawJaggedCrack(
+            bx,
+            by,
+            bx + Math.cos(baseAng) * bLen,
+            by + Math.sin(baseAng) * bLen,
+            Math.max(1.4, width * 0.55),
+            depth - 1,
+            depth === 2
+          );
+        }
+      }
+    }
+  };
+
+  // Primary fracture hubs radiating across the platform surface
+  const hubs: [number, number][] = [
+    [145, 155],
+    [355, 185],
+    [250, 355],
+    [110, 405],
+    [405, 395],
+  ];
+
+  // Cross-fault lines connecting hubs and breaking out to borders
+  drawJaggedCrack(20, 45, 145, 155, 5.2, 2);
+  drawJaggedCrack(145, 155, 355, 185, 5.5, 2);
+  drawJaggedCrack(355, 185, 495, 110, 4.8, 2);
+  drawJaggedCrack(145, 155, 250, 355, 5.0, 2);
+  drawJaggedCrack(355, 185, 250, 355, 4.6, 1);
+  drawJaggedCrack(250, 355, 405, 395, 5.0, 2);
+  drawJaggedCrack(250, 355, 110, 405, 4.6, 2);
+  drawJaggedCrack(110, 405, 18, 488, 4.2, 1);
+  drawJaggedCrack(405, 395, 492, 482, 4.4, 1);
+  drawJaggedCrack(255, 14, 240, 168, 4.0, 1);
+
+  // Chipped triangular pits at main fracture junctions
+  for (const [hx, hy] of hubs) {
+    kCtx.fillStyle = 'rgba(18, 12, 9, 0.88)';
+    kCtx.beginPath();
+    const sides = 5;
+    for (let s = 0; s < sides; s++) {
+      const a = (s / sides) * Math.PI * 2 + rand() * 0.4;
+      const r = 6 + rand() * 8;
+      const px = hx + Math.cos(a) * r;
+      const py = hy + Math.sin(a) * r;
+      if (s === 0) kCtx.moveTo(px, py);
+      else kCtx.lineTo(px, py);
+    }
+    kCtx.closePath();
+    kCtx.fill();
+  }
+
+  // Scattered small debris flecks / chipped crumbs
+  for (let i = 0; i < 65; i++) {
+    const cx = 18 + rand() * 476;
+    const cy = 18 + rand() * 476;
+    const sz = 1.6 + rand() * 3.8;
+    kCtx.fillStyle = rand() > 0.35 ? 'rgba(26, 18, 13, 0.72)' : 'rgba(255, 242, 218, 0.38)';
+    kCtx.fillRect(cx, cy, sz, sz * (0.6 + rand() * 0.8));
+  }
+
+  // Subtle chipped edge framing so players spot fragile borders from a distance
+  kCtx.strokeStyle = 'rgba(24, 16, 12, 0.48)';
+  kCtx.lineWidth = 6;
+  kCtx.strokeRect(4, 4, 504, 504);
+
+  const crackedTex = new THREE.CanvasTexture(crackCanvas);
+  crackedTex.wrapS = THREE.RepeatWrapping;
+  crackedTex.wrapT = THREE.RepeatWrapping;
+  crackedTex.colorSpace = THREE.SRGBColorSpace;
+  crackedTex.anisotropy = maxAnisotropy;
+
   return {
     grass: grassTex,
     stone: stoneTex,
@@ -248,5 +386,60 @@ export function createProceduralTextures(maxAnisotropy: number = 4): ProceduralT
     shadow: shadowTex,
     leaf: leafTex,
     particleGlow: particleGlowTex,
+    cracked: crackedTex,
   };
+}
+
+/**
+ * Attaches a crisp procedural broken/cracked visual overlay onto any crumbling platform.
+ * Keeps each theme's base material while clearly telegraphing fragile falling platforms.
+ */
+export function applyCrumblingTexture(
+  plat: { size: THREE.Vector3; mesh: THREE.Object3D; crumbleOverlayMat?: THREE.MeshStandardMaterial },
+  textures: ProceduralTextures
+) {
+  if (plat.mesh.userData.hasCrumbleVisual) return;
+  plat.mesh.userData.hasCrumbleVisual = true;
+
+  const w = plat.size.x;
+  const h = plat.size.y;
+  const d = plat.size.z;
+  const bandH = Math.min(Math.max(h + 0.015, 0.2), 0.44);
+
+  const shellGeo = new THREE.BoxGeometry(w + 0.04, bandH, d + 0.04);
+  // Tile UVs softly proportional to platform footprint without cloning the shared CanvasTexture
+  const uv = shellGeo.getAttribute('uv') as THREE.BufferAttribute;
+  const norm = shellGeo.getAttribute('normal') as THREE.BufferAttribute;
+  const repX = Math.max(1, Math.round(w / 2.6));
+  const repZ = Math.max(1, Math.round(d / 2.6));
+  for (let i = 0; i < uv.count; i++) {
+    const ny = Math.abs(norm.getY(i));
+    if (ny > 0.5) {
+      uv.setXY(i, uv.getX(i) * repX, uv.getY(i) * repZ);
+    } else {
+      const nx = Math.abs(norm.getX(i));
+      uv.setXY(i, uv.getX(i) * (nx > 0.5 ? repZ : repX), uv.getY(i) * 0.55);
+    }
+  }
+  uv.needsUpdate = true;
+
+  const crackMat = new THREE.MeshStandardMaterial({
+    map: textures.cracked,
+    transparent: true,
+    opacity: 0.96,
+    roughness: 0.95,
+    metalness: 0.0,
+    emissive: new THREE.Color(0xff5a1f),
+    emissiveIntensity: 0,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3,
+    depthWrite: false,
+  });
+
+  const overlay = new THREE.Mesh(shellGeo, crackMat);
+  overlay.position.y = -bandH / 2 + 0.015;
+  overlay.renderOrder = 2;
+  plat.mesh.add(overlay);
+  plat.crumbleOverlayMat = crackMat;
 }

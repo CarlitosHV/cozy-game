@@ -233,8 +233,23 @@ export class WeatherSystem {
   // Rain droplet positions
   private rainCount = 1500;
   private rainPositions: Float32Array;
+  private readonly _sakuraDummy = new THREE.Object3D();
+  private particlesEnabled = true;
 
   public onTransitionChange?: (target: WeatherType, progress: number, finished: boolean) => void;
+
+  public setParticlesVisible(enabled: boolean) {
+    if (this.particlesEnabled === enabled) return;
+    this.particlesEnabled = enabled;
+    if (!enabled) {
+      this.rainParticles.visible = false;
+      this.sakuraParticles.visible = false;
+      this.pollenParticles.visible = false;
+      this.fireflyParticles.visible = false;
+      this.snowParticles.visible = false;
+      this.emberParticles.visible = false;
+    }
+  }
 
   constructor(
     scene: THREE.Scene,
@@ -457,7 +472,14 @@ export class WeatherSystem {
     return Math.max(0, Math.min(1, weight));
   }
 
-  public update(dt: number, playerCenter: THREE.Vector3, time?: number) {
+  public update(
+    dt: number,
+    playerCenter: THREE.Vector3,
+    time?: number,
+    frustum?: THREE.Frustum | null,
+    camPos?: THREE.Vector3 | null,
+    maxCloudDistSq?: number
+  ) {
     const animTime = time !== undefined ? time : performance.now() * 0.001;
 
     // Smooth transition tick
@@ -510,28 +532,21 @@ export class WeatherSystem {
       }
     }
 
-    // Animate procedural background clouds with synchronized speed & color blend
+    // Animate procedural background clouds with synchronized speed, color blend & camera culling
     this.cloudsSystem.animate(
       dt,
       animTime,
       this.currentWeather,
       this.isTransitioning ? this.targetWeather : undefined,
-      this.transitionProgress
+      this.transitionProgress,
+      frustum,
+      camPos,
+      maxCloudDistSq
     );
 
-    // Keep particles centered around player area
-    this.rainParticles.position.x = playerCenter.x;
-    this.rainParticles.position.z = playerCenter.z;
-    this.sakuraParticles.position.x = playerCenter.x;
-    this.sakuraParticles.position.z = playerCenter.z;
-    this.pollenParticles.position.x = playerCenter.x;
-    this.pollenParticles.position.z = playerCenter.z;
-    this.fireflyParticles.position.x = playerCenter.x;
-    this.fireflyParticles.position.z = playerCenter.z;
-    this.snowParticles.position.x = playerCenter.x;
-    this.snowParticles.position.z = playerCenter.z;
-    this.emberParticles.position.x = playerCenter.x;
-    this.emberParticles.position.z = playerCenter.z;
+    if (!this.particlesEnabled) {
+      return;
+    }
 
     // Calculate dynamic weather blend weights for particles
     const rainWeight = Math.max(this.getWeatherWeight('cozy_rain'), this.getWeatherWeight('cyber_storm') * 0.72);
@@ -545,12 +560,15 @@ export class WeatherSystem {
     const rainMat = this.rainParticles.material as THREE.PointsMaterial;
     const targetRainOpacity = rainWeight * 0.78;
     rainMat.opacity = THREE.MathUtils.damp(rainMat.opacity, targetRainOpacity, 5.0, dt);
-
-    if (rainMat.opacity > 0.01) {
+    const rainActive = rainMat.opacity > 0.01;
+    this.rainParticles.visible = rainActive;
+    if (rainActive) {
+      this.rainParticles.position.x = playerCenter.x;
+      this.rainParticles.position.z = playerCenter.z;
       const pos = this.rainPositions;
       for (let i = 0; i < this.rainCount; i++) {
-        pos[i * 3 + 1] -= dt * 26; // rapid vertical fall
-        pos[i * 3] += dt * 3.5;    // gentle wind angle
+        pos[i * 3 + 1] -= dt * 26;
+        pos[i * 3] += dt * 3.5;
         if (pos[i * 3 + 1] < -2) {
           pos[i * 3 + 1] = 32;
           pos[i * 3] = (Math.random() - 0.5) * 60;
@@ -564,9 +582,12 @@ export class WeatherSystem {
     const sakuraMat = this.sakuraParticles.material as THREE.MeshBasicMaterial;
     const targetSakuraOpacity = sakuraWeight * 0.88;
     sakuraMat.opacity = THREE.MathUtils.damp(sakuraMat.opacity, targetSakuraOpacity, 5.0, dt);
-
-    if (sakuraMat.opacity > 0.01) {
-      const dummy = new THREE.Object3D();
+    const sakuraActive = sakuraMat.opacity > 0.01;
+    this.sakuraParticles.visible = sakuraActive;
+    if (sakuraActive) {
+      this.sakuraParticles.position.x = playerCenter.x;
+      this.sakuraParticles.position.z = playerCenter.z;
+      const dummy = this._sakuraDummy;
       for (let i = 0; i < this.sakuraTransforms.length; i++) {
         const item = this.sakuraTransforms[i];
         item.pos.x += item.speed.x * dt;
@@ -595,19 +616,27 @@ export class WeatherSystem {
     const pollenMat = this.pollenParticles.material as THREE.PointsMaterial;
     const targetPollenOpacity = goldenWeight * 0.75 + sakuraWeight * 0.15;
     pollenMat.opacity = THREE.MathUtils.damp(pollenMat.opacity, targetPollenOpacity, 5.0, dt);
+    const pollenActive = pollenMat.opacity > 0.01;
+    this.pollenParticles.visible = pollenActive;
+    if (pollenActive) {
+      this.pollenParticles.position.x = playerCenter.x;
+      this.pollenParticles.position.z = playerCenter.z;
+    }
 
     // 4. Update Starlit Fireflies
     const fireflyMat = this.fireflyParticles.material as THREE.PointsMaterial;
     const targetFireflyOpacity = nightWeight * 0.88;
     fireflyMat.opacity = THREE.MathUtils.damp(fireflyMat.opacity, targetFireflyOpacity, 5.0, dt);
-
-    if (fireflyMat.opacity > 0.01) {
-      const time = performance.now() * 0.001;
+    const fireflyActive = fireflyMat.opacity > 0.01;
+    this.fireflyParticles.visible = fireflyActive;
+    if (fireflyActive) {
+      this.fireflyParticles.position.x = playerCenter.x;
+      this.fireflyParticles.position.z = playerCenter.z;
       const pos = this.fireflyPositions;
       for (let i = 0; i < this.fireflyCount; i++) {
-        pos[i * 3] += Math.sin(time + i) * dt * 0.4;
-        pos[i * 3 + 1] += Math.cos(time * 0.8 + i) * dt * 0.3;
-        pos[i * 3 + 2] += Math.sin(time * 0.6 + i * 2) * dt * 0.4;
+        pos[i * 3] += Math.sin(animTime + i) * dt * 0.4;
+        pos[i * 3 + 1] += Math.cos(animTime * 0.8 + i) * dt * 0.3;
+        pos[i * 3 + 2] += Math.sin(animTime * 0.6 + i * 2) * dt * 0.4;
       }
       this.fireflyParticles.geometry.attributes.position.needsUpdate = true;
     }
@@ -616,8 +645,11 @@ export class WeatherSystem {
     const snowMat = this.snowParticles.material as THREE.PointsMaterial;
     const targetSnowOpacity = snowWeight * 0.9;
     snowMat.opacity = THREE.MathUtils.damp(snowMat.opacity, targetSnowOpacity, 5.0, dt);
-
-    if (snowMat.opacity > 0.01) {
+    const snowActive = snowMat.opacity > 0.01;
+    this.snowParticles.visible = snowActive;
+    if (snowActive) {
+      this.snowParticles.position.x = playerCenter.x;
+      this.snowParticles.position.z = playerCenter.z;
       const pos = this.snowPositions;
       for (let i = 0; i < this.snowCount; i++) {
         pos[i * 3 + 1] -= dt * 4.5;
@@ -636,8 +668,11 @@ export class WeatherSystem {
     const emberMat = this.emberParticles.material as THREE.PointsMaterial;
     const targetEmberOpacity = emberWeight * 0.92;
     emberMat.opacity = THREE.MathUtils.damp(emberMat.opacity, targetEmberOpacity, 5.0, dt);
-
-    if (emberMat.opacity > 0.01) {
+    const emberActive = emberMat.opacity > 0.01;
+    this.emberParticles.visible = emberActive;
+    if (emberActive) {
+      this.emberParticles.position.x = playerCenter.x;
+      this.emberParticles.position.z = playerCenter.z;
       const pos = this.emberPositions;
       for (let i = 0; i < this.emberCount; i++) {
         pos[i * 3 + 1] += dt * (2.6 + (i % 5) * 0.45);
