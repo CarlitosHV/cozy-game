@@ -71,6 +71,7 @@ interface CharacterCreatorProps {
   portrait: boolean;
   onFocusChange?: (focus: CharacterPreviewFocus) => void;
   onZoom?: (delta: number) => void;
+  embeddedInLobby?: boolean;
 }
 
 const TAB_FOCUS: Record<Tab, CharacterPreviewFocus> = {
@@ -310,6 +311,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
   portrait,
   onFocusChange,
   onZoom,
+  embeddedInLobby = false,
 }) => {
   const [tab, setTab] = useState<Tab>('cuerpo');
   const [history, setHistory] = useState<CharacterAppearance[]>([]);
@@ -470,13 +472,17 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
 
   const panelPosition = portrait
     ? 'inset-x-0 bottom-0 max-h-[56%] rounded-t-3xl border-t'
-    : 'right-0 top-0 bottom-0 w-[min(390px,46vw)] border-l';
+    : embeddedInLobby
+      ? 'right-0 top-14 bottom-0 w-[min(390px,46vw)] border-l'
+      : 'right-0 top-0 bottom-0 w-[min(390px,46vw)] border-l';
 
   return (
     <div className="absolute inset-0 pointer-events-none text-cozy-ink">
       <div
         className={`absolute flex flex-col gap-1 ${
-          portrait ? 'top-4 inset-x-4 items-center text-center' : 'top-6 left-6 max-w-[40%]'
+          portrait
+            ? `${embeddedInLobby ? 'top-16' : 'top-4'} inset-x-4 items-center text-center`
+            : `${embeddedInLobby ? 'top-18' : 'top-6'} left-6 max-w-[40%]`
         }`}
       >
         <span className={`inline-flex items-center gap-1.5 ${portrait ? 'self-center' : 'self-start'} px-3 py-1 rounded-full cozy-chip text-[10px] tracking-wider text-cozy-accent-deep font-semibold`}>

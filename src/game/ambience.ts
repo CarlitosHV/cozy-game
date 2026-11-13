@@ -888,6 +888,10 @@ export class AmbientDecor {
     }
   }
 
+  public setVisible(visible: boolean) {
+    this.group.visible = visible;
+  }
+
   private clear() {
     this.group.traverse((o) => {
       const m = o as THREE.Mesh;

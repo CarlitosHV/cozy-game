@@ -5,7 +5,9 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { GameEngine, GameState, GameMode } from './game/GameEngine';
 import { GameHUD } from './components/GameHUD';
+import { BiomeBackdrop } from './components/BiomeBackdrop';
 import { WeatherType } from './audio/SoundtrackSynthesizer';
+import { getDevLevelPick, isLevelUnlocked, maxPlayableLevel, themeForLevel, ThemeId } from './game/progress';
 
 export default function App() {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -18,6 +20,18 @@ export default function App() {
   const [collectedCount, setCollectedCount] = useState<number>(0);
   const [totalCollectibles, setTotalCollectibles] = useState<number>(10);
   const [currentWeather, setCurrentWeather] = useState<WeatherType>('golden_hour');
+  const [lobbyTheme, setLobbyTheme] = useState<ThemeId>(() => {
+    const devPick = getDevLevelPick();
+    if (devPick) return devPick.theme;
+    try {
+      const saved = localStorage.getItem('cozy_last_level');
+      const parsed = saved ? parseInt(saved, 10) : maxPlayableLevel();
+      const lvl = parsed >= 1 && isLevelUnlocked(parsed) ? parsed : maxPlayableLevel();
+      return themeForLevel(lvl);
+    } catch {
+      return themeForLevel(maxPlayableLevel());
+    }
+  });
   const [isWeatherTransitioning, setIsWeatherTransitioning] = useState<boolean>(false);
   const [weatherNotice, setWeatherNotice] = useState<{
     weather: WeatherType;
@@ -218,6 +232,9 @@ export default function App() {
         setMaxStamina(max);
         setStaminaExhausted(exhausted);
       },
+      onLevelThemeChange: (_level, theme) => {
+        setLobbyTheme(theme);
+      },
     });
 
     engineRef.current = engine;
@@ -236,9 +253,11 @@ export default function App() {
       className="relative w-screen h-screen overflow-hidden bg-[#8eb8cb] select-none font-ui"
       style={{ width: '100vw', height: '100dvh' }}
     >
+      {gameState === 'title' && <BiomeBackdrop theme={lobbyTheme} />}
+
       <div
         ref={mountRef}
-        className="w-full h-full cursor-grab active:cursor-grabbing touch-none select-none"
+        className="relative z-10 w-full h-full cursor-grab active:cursor-grabbing touch-none select-none"
       />
 
       <GameHUD

@@ -20,7 +20,7 @@ import { buildAeroWorld } from './levelAero';
 import { buildCosmicWorld } from './levelCosmic';
 import { buildSwampWorld } from './levelSwamp';
 import { makeGlowTexture } from './levelKit';
-import { LEVELS, markLevelComplete, isDevMode, isCompanionUnlocked, isLevelUnlocked, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel, levelKind, getDevLevelPick, setDevLevelPick, DevLevelPick } from './progress';
+import { LEVELS, markLevelComplete, isDevMode, isCompanionUnlocked, isLevelUnlocked, maxPlayableLevel, themeForLevel, ThemeId, COMPANION_UNLOCKS, levelInfo, isBossLevel, levelKind, getDevLevelPick, setDevLevelPick, DevLevelPick } from './progress';
 
 /** Developer level picks shared with the party: world kind and theme as event numbers */
 const DEV_KINDS: DevLevelPick['kind'][] = ['sandbox', 'boss', 'backrooms'];
@@ -120,6 +120,8 @@ export interface GameEngineCallbacks {
   onFpsUpdate?: (fps: number) => void;
   /** Player sprint stamina bar updates */
   onStaminaChange?: (stamina: number, maxStamina: number, exhausted: boolean) => void;
+  /** Emitted when current level or dev-picked biome theme changes */
+  onLevelThemeChange?: (level: number, theme: ThemeId) => void;
 }
 
 /** Seconds the rest of the party has to reach the goal once someone finished */
@@ -247,8 +249,17 @@ export class GameEngine {
   private darkBase: { dir: number; hemi: number; fogDensity: number; fogColor: THREE.Color; exposure: number } | null = null;
 
   // Levels
-  public currentLevel: number = 1;
+  public currentLevel: number = (() => {
+    try {
+      const saved = localStorage.getItem('cozy_last_level');
+      const parsed = saved ? parseInt(saved, 10) : maxPlayableLevel();
+      return parsed >= 1 && isLevelUnlocked(parsed) ? parsed : maxPlayableLevel();
+    } catch {
+      return maxPlayableLevel();
+    }
+  })();
   private levelRoot!: THREE.Group;
+  private lobbyShadowDisc!: THREE.Mesh;
   /** Companion unlocked by the last victory (shown on the victory screen) */
   public lastUnlocked: CompanionStyle | null = null;
   private easterEggFound = false;
@@ -331,9 +342,11 @@ export class GameEngine {
   private lastReportedStamina: number = 100;
   private lastReportedExhausted: boolean = false;
 
-  // Character Creator preview (close-up turntable camera on the title screen)
+  // Character Creator & Lobby preview (close-up turntable camera on the title screen)
   public playerAppearance: CharacterAppearance = loadAppearance();
   public characterPreview: boolean = false;
+  public lobbyCameraMode: 'lobby_center' | 'lobby_shop' | 'creator' | 'orbit' = 'lobby_center';
+  private tempPreviewAppearance: CharacterAppearance | null = null;
   private previewBlend: number = 0;
   private previewYaw: number = 0;
   private previewPitch: number = 0.08;
@@ -349,6 +362,8 @@ export class GameEngine {
   private previewTargetPitch: number = PREVIEW_FOCUS.full.pitch;
   private previewIdleSpin: boolean = true;
   private previewSpinResumeAt: number = 0;
+  private previewViewOffsetX: number = 0;
+  private previewViewOffsetY: number = 0;
   private viewOffsetActive: boolean = false;
   private _orbitPos = new THREE.Vector3();
   private _orbitLook = new THREE.Vector3();
@@ -412,7 +427,7 @@ export class GameEngine {
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isSoftwareGl,
       powerPreference: 'high-performance',
-      alpha: false,
+      alpha: true,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -487,6 +502,11 @@ export class GameEngine {
     this.addCompanionShowcase();
     this.playerModel = createPlayerCharacter(this.textures, this.playerAppearance);
     this.scene.add(this.playerModel.group);
+
+    // Subtle ground contact shadow beneath character in image-backed lobby
+    this.lobbyShadowDisc = this.createLobbyShadowDisc();
+    this.lobbyShadowDisc.visible = false;
+    this.scene.add(this.lobbyShadowDisc);
 
     // 7. Physics Controller
     this.physics = new ParkourPhysics(this.world, this.playerModel);
@@ -708,10 +728,41 @@ export class GameEngine {
 
     // Report initial state
     this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
-    this.callbacks.onCheckpointChange('Pradera del Amanecer', 1, this.world.checkpoints.length || 3);
+    const cp0 = this.world.checkpoints[0];
+    this.callbacks.onCheckpointChange(cp0 ? cp0.name : 'Pradera del Amanecer', 1, this.world.checkpoints.length || 3);
+    this.callbacks.onLevelThemeChange?.(this.currentLevel, this.getActiveTheme());
 
     // Start render loop
     this.startLoop();
+  }
+
+  public getActiveTheme(): ThemeId {
+    return getDevLevelPick()?.theme ?? themeForLevel(this.currentLevel);
+  }
+
+  private createLobbyShadowDisc(): THREE.Mesh {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+      grad.addColorStop(0, 'rgba(15, 23, 42, 0.45)');
+      grad.addColorStop(0.55, 'rgba(15, 23, 42, 0.18)');
+      grad.addColorStop(1, 'rgba(15, 23, 42, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 128, 128);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const geom = new THREE.PlaneGeometry(2.6, 2.6);
+    geom.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+    });
+    return new THREE.Mesh(geom, mat);
   }
 
   /** Time trial budget: open-world & 2x longer Only-Up parkour courses get proportionally more time. */
@@ -721,7 +772,7 @@ export class GameEngine {
     if (orbs > 0) return 100 + orbs * 25;
     const platCount = this.world?.platforms.length ?? 0;
     if (platCount > 40) {
-      return Math.round(80 + Math.min(130, platCount * 1.45));
+      return Math.round(80 + Math.min(210, platCount * 1.45));
     }
     return 90;
   }
@@ -752,23 +803,19 @@ export class GameEngine {
 
   /**
    * Rebuilds the player's 3D model with a new look, keeping its place in the world.
-   * Called live by the Character Creator for every change.
+   * Called live by the Character Creator and Lobby Shop.
    */
-  public setPlayerAppearance(appearance: CharacterAppearance, persist: boolean = true) {
+  public setPlayerAppearance(
+    appearance: CharacterAppearance,
+    persist: boolean = true,
+    bypassLocks: boolean = false
+  ) {
+    this.tempPreviewAppearance = null;
     this.playerAppearance = { ...appearance };
-    if (!isCompanionUnlocked(this.playerAppearance.companion)) this.playerAppearance.companion = 'ninguno';
-    // The party sees the new look (and name) too
-    multiplayerClient.setLocalLook(this.playerAppearance);
-    const old = this.playerModel;
-    const next = createPlayerCharacter(this.textures, this.playerAppearance);
-    next.group.position.copy(old.group.position);
-    next.group.rotation.copy(old.group.rotation);
-    this.scene.remove(old.group);
-    disposePlayerCharacter(old);
-    this.scene.add(next.group);
-    this.playerModel = next;
-    this.physics.playerModel = next;
-    this.companionPowers.setCompanion(this.playerAppearance.companion, this.physics);
+    if (!bypassLocks && !isCompanionUnlocked(this.playerAppearance.companion)) {
+      this.playerAppearance.companion = 'ninguno';
+    }
+    this.rebuildPlayerModel(this.playerAppearance, !bypassLocks);
     if (persist) {
       saveAppearance(this.playerAppearance);
       if (apiClient.isAuthenticated()) {
@@ -777,15 +824,87 @@ export class GameEngine {
     }
   }
 
+  /** Temporarily renders a shop cosmetic on the 3D lobby character without saving. */
+  public setTempPreviewAppearance(temp: CharacterAppearance | null) {
+    if (!temp) {
+      if (!this.tempPreviewAppearance) return;
+      this.tempPreviewAppearance = null;
+      this.rebuildPlayerModel(this.playerAppearance, false);
+      return;
+    }
+    this.tempPreviewAppearance = { ...temp };
+    this.rebuildPlayerModel(this.tempPreviewAppearance, false);
+  }
+
+  private rebuildPlayerModel(look: CharacterAppearance, syncMultiplayer: boolean) {
+    if (syncMultiplayer) {
+      multiplayerClient.setLocalLook(look);
+    }
+    const old = this.playerModel;
+    const next = createPlayerCharacter(this.textures, look);
+    next.group.position.copy(old.group.position);
+    next.group.rotation.copy(old.group.rotation);
+    this.scene.remove(old.group);
+    disposePlayerCharacter(old);
+    this.scene.add(next.group);
+    this.playerModel = next;
+    this.physics.playerModel = next;
+    this.companionPowers.setCompanion(look.companion, this.physics);
+  }
+
+  private frontFacingPreviewYaw(): number {
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.playerModel.group.quaternion);
+    return Math.atan2(fwd.x, fwd.z) + 0.16;
+  }
+
+  /** Controls the 3D Lobby camera framing (center hero, shop preview, creator, or orbit). */
+  public setLobbyCameraMode(mode: 'lobby_center' | 'lobby_shop' | 'creator' | 'orbit') {
+    const prevMode = this.lobbyCameraMode;
+    this.lobbyCameraMode = mode;
+    if (mode === 'orbit') {
+      this.characterPreview = false;
+      return;
+    }
+    const wasOff = !this.characterPreview;
+    this.characterPreview = true;
+    if (wasOff || prevMode === 'orbit' || mode === 'lobby_center' || mode === 'lobby_shop') {
+      if (wasOff || prevMode === 'orbit') {
+        this.previewYaw = this.frontFacingPreviewYaw();
+      }
+      this.previewZoom = 1;
+      this.previewIdleSpin = mode === 'creator';
+      if (mode === 'lobby_center') {
+        this.previewTargetLookY = 0.78;
+        this.previewTargetCamY = 0.96;
+        this.previewTargetDist = 3.05;
+        this.previewTargetPitch = 0.06;
+        this.previewPitchUser = 0;
+        if (wasOff) {
+          this.previewLookY = 0.78;
+          this.previewCamY = 0.96;
+          this.previewBaseDistance = 3.05;
+          this.previewPitch = 0.06;
+        }
+      } else if (mode === 'lobby_shop') {
+        this.previewTargetLookY = 0.76;
+        this.previewTargetCamY = 0.94;
+        this.previewTargetDist = 2.65;
+        this.previewTargetPitch = 0.07;
+        this.previewPitchUser = 0;
+      } else {
+        this.setCharacterPreviewFocus('full', wasOff);
+      }
+    }
+  }
+
   /** Toggles the close-up turntable camera used while the Character Creator is open. */
   public setCharacterPreview(enabled: boolean) {
-    if (enabled && !this.characterPreview) {
-      this.previewYaw = this.playerModel.group.rotation.y + Math.PI + 0.35;
-      this.previewZoom = 1;
-      this.previewIdleSpin = true;
-      this.setCharacterPreviewFocus('full', true);
+    if (enabled) {
+      this.setLobbyCameraMode('creator');
+    } else {
+      this.characterPreview = false;
+      this.lobbyCameraMode = 'orbit';
     }
-    this.characterPreview = enabled;
   }
 
   /** Frames a body region while customizing (head, clothes, boots, companion…). */
@@ -808,11 +927,13 @@ export class GameEngine {
     }
   }
 
-  /** Manual zoom for the creator (wheel / pinch / UI buttons). */
+  /** Manual zoom for the creator/shop preview (wheel / pinch / UI buttons). */
   public adjustCharacterPreviewZoom(delta: number) {
     this.previewZoom = THREE.MathUtils.clamp(this.previewZoom + delta, 0.6, 1.85);
-    this.previewIdleSpin = false;
-    this.previewSpinResumeAt = performance.now() + 2200;
+    if (this.lobbyCameraMode === 'creator') {
+      this.previewIdleSpin = false;
+      this.previewSpinResumeAt = performance.now() + 2200;
+    }
   }
 
   /** Uses the companion's temporary power (key G or the HUD button). */
@@ -835,8 +956,12 @@ export class GameEngine {
   }
 
   private clearPreviewCamera() {
+    this.setTempPreviewAppearance(null);
     this.characterPreview = false;
+    this.lobbyCameraMode = 'orbit';
     this.previewBlend = 0;
+    this.previewViewOffsetX = 0;
+    this.previewViewOffsetY = 0;
     if (this.viewOffsetActive) {
       this.camera.clearViewOffset();
       this.viewOffsetActive = false;
@@ -990,6 +1115,7 @@ export class GameEngine {
     this.weatherSystem.setWeather(this.levelWeather(), 0.2);
     soundManager.setWeather(this.levelWeather(), 1.5);
     this.callbacks.onWeatherChange(this.levelWeather(), true);
+    this.callbacks.onLevelThemeChange?.(this.currentLevel, this.getActiveTheme());
     this.applyRenderDistance();
     if (!this.isSoftwareGl) {
       this.renderer.compile(this.scene, this.camera);
@@ -2098,7 +2224,7 @@ export class GameEngine {
     if (e.code !== 'Escape' && !this.pointerLocked && this.wantsPointerLock()) this.syncPointerLock();
 
     if (this.gameState === 'title') {
-      if (this.characterPreview) return;
+      if (this.characterPreview || this.lobbyCameraMode !== 'orbit') return;
       if (e.code === 'Space' || e.code === 'Enter') {
         this.startGame();
       }
@@ -2522,7 +2648,33 @@ export class GameEngine {
       this.lastWallTime = now;
 
       this.update(dt, elapsedTime, wallDt);
-      this.renderer.render(this.scene, this.camera);
+      if (this.gameState === 'title') {
+        this.levelRoot.visible = false;
+        this.ambience.setVisible(false);
+        this.weatherSystem.cloudsSystem.setVisible(false);
+        this.itemSystem.setVisible(false);
+        const sp = this.physics.position;
+        this.lobbyShadowDisc.position.set(sp.x, sp.y + 0.015, sp.z);
+        this.lobbyShadowDisc.visible = true;
+
+        const prevBg = this.scene.background;
+        const prevFog = this.scene.fog;
+        this.scene.background = null;
+        this.scene.fog = null;
+        this.renderer.setClearColor(0x000000, 0);
+        this.renderer.clear();
+        this.renderer.render(this.scene, this.camera);
+        this.scene.background = prevBg;
+        this.scene.fog = prevFog;
+      } else {
+        this.levelRoot.visible = true;
+        this.ambience.setVisible(true);
+        this.weatherSystem.cloudsSystem.setVisible(true);
+        this.itemSystem.setVisible(true);
+        this.lobbyShadowDisc.visible = false;
+        this.renderer.setClearColor(0x000000, 1);
+        this.renderer.render(this.scene, this.camera);
+      }
 
       // Real rendered game frames measurement
       fpsFrames++;
@@ -2554,10 +2706,15 @@ export class GameEngine {
       this._orbitPos.set(sp.x + camX, sp.y + 4.0, sp.z + camZ);
       this._orbitLook.set(sp.x, sp.y + 1.2, sp.z);
 
-      // Character Creator: blend smoothly into a close-up turntable around the player
-      this.previewBlend = THREE.MathUtils.damp(this.previewBlend, this.characterPreview ? 1 : 0, 4.0, dt);
+      // Character Creator & Lobby Hero framing: blend smoothly into close-up turntable around the player
+      this.previewBlend = THREE.MathUtils.damp(this.previewBlend, this.characterPreview ? 1 : 0, 5.0, dt);
       if (this.previewBlend > 0.001) {
-        if (!this.previewIdleSpin && performance.now() >= this.previewSpinResumeAt && !this.isMouseDragging) {
+        if (
+          this.lobbyCameraMode === 'creator' &&
+          !this.previewIdleSpin &&
+          performance.now() >= this.previewSpinResumeAt &&
+          !this.isMouseDragging
+        ) {
           this.previewIdleSpin = true;
         }
         if (this.characterPreview && this.previewIdleSpin && !this.isMouseDragging) {
@@ -2571,7 +2728,7 @@ export class GameEngine {
         const pitch = this.previewPitch + this.previewPitchUser;
 
         const p = this.physics.position;
-        const h = this.playerAppearance.height;
+        const h = (this.tempPreviewAppearance ?? this.playerAppearance).height;
         const w = this.container.clientWidth;
         const hgt = this.container.clientHeight;
         const portrait = hgt > w;
@@ -2591,12 +2748,37 @@ export class GameEngine {
         this.camera.position.lerpVectors(this._orbitPos, this._previewPos, e);
         this.camera.lookAt(this._orbitLook.lerp(this._previewLook, e));
 
-        if (portrait) {
-          this.camera.setViewOffset(w, hgt, 0, hgt * 0.27 * e, w, hgt);
-        } else {
-          this.camera.setViewOffset(w, hgt, w * 0.18 * e, 0, w, hgt);
+        let targetOffX = 0;
+        let targetOffY = 0;
+        if (this.characterPreview) {
+          if (this.lobbyCameraMode === 'creator') {
+            if (portrait) targetOffY = hgt * 0.27;
+            else targetOffX = w * 0.18;
+          } else if (this.lobbyCameraMode === 'lobby_shop') {
+            if (portrait) targetOffY = hgt * 0.24;
+            else targetOffX = -w * 0.25;
+          } else if (this.lobbyCameraMode === 'lobby_center') {
+            targetOffX = 0;
+            targetOffY = portrait ? -hgt * 0.04 : -hgt * 0.02;
+          }
         }
-        this.viewOffsetActive = true;
+        this.previewViewOffsetX = THREE.MathUtils.damp(this.previewViewOffsetX, targetOffX, 6.5, dt);
+        this.previewViewOffsetY = THREE.MathUtils.damp(this.previewViewOffsetY, targetOffY, 6.5, dt);
+
+        if (Math.abs(this.previewViewOffsetX * e) > 0.5 || Math.abs(this.previewViewOffsetY * e) > 0.5) {
+          this.camera.setViewOffset(
+            w,
+            hgt,
+            this.previewViewOffsetX * e,
+            this.previewViewOffsetY * e,
+            w,
+            hgt
+          );
+          this.viewOffsetActive = true;
+        } else if (this.viewOffsetActive) {
+          this.camera.clearViewOffset();
+          this.viewOffsetActive = false;
+        }
       } else {
         this.camera.position.copy(this._orbitPos);
         this.camera.lookAt(this._orbitLook);
@@ -2607,7 +2789,7 @@ export class GameEngine {
       }
 
       this.playerModel.updateAnimation(0, true, dt, time);
-      this.weatherSystem.update(dt, new THREE.Vector3(0, 0, 0), time);
+      this.weatherSystem.update(dt, this.physics.position, time);
       this.world.levelUpdate?.(dt, time);
       this.updateShowcase(time);
       return;

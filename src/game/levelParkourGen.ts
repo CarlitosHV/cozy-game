@@ -6,7 +6,8 @@
  * - Strong FNV-1a + Fisher-Yates seeding keyed by (level, themeId) plus per-theme opening
  *   signatures so Level 11 (Neon) and Level 21 (Cyberpunk) never share the same architecture.
  * - 12 distinct vertical & winding set-piece modules with randomized sub-variants.
- * - 2x longer & harder courses (8 modules for levels 6–15, 10 modules for 16+, climbing up to +96m)
+ * - Progressive length & challenge: early parkour levels (6–10) keep baseline 8-module size,
+ *   scaling up to +50% longer & harder at higher levels (up to 15 modules & +180m climb)
  *   with narrower pads, multi-crumble chains, double pendulums, pinwheels, and themed enemies.
  * - Theme-adhoc structural colors & materials (pillars, gallows frames, arches, podiums).
  */
@@ -180,7 +181,20 @@ export function generateParkourLevel(
   let ventN = 0;
   let archN = 0;
 
-  const MAX_Y = 96.0;
+  const moduleCount =
+    level <= 10 ? 8
+    : level <= 16 ? 9
+    : level <= 23 ? 10
+    : level <= 31 ? 11
+    : level <= 40 ? 12
+    : level <= 50 ? 13
+    : level <= 62 ? 14
+    : 15;
+  const extraSteps = level >= 32 ? 2 : level >= 18 ? 1 : 0;
+  const gapBoost = level <= 10 ? 0 : Math.min(0.28, ((level - 10) / 45) * 0.28);
+  const padShrink = level <= 10 ? 0 : Math.min(0.32, ((level - 10) / 45) * 0.32);
+
+  const MAX_Y = 180.0;
   const MIN_Y = -4.0;
   const clampY = (y: number) => THREE.MathUtils.clamp(y, MIN_Y, MAX_Y);
 
@@ -209,8 +223,9 @@ export function generateParkourLevel(
     });
   };
 
-  const spawnRelic = (x: number, y: number, z: number, forceAcorn?: boolean) => {
+  const spawnRelic = (x: number, y: number, z: number, forceAcorn?: boolean, secondary = false, modIdx = 0) => {
     if (collectN >= RELICS.parkour) return;
+    if (secondary && moduleCount >= 11 && modIdx % 2 === 1) return;
     const type = (forceAcorn ?? collectN % 2 === 1) ? 'golden_acorn' : 'sun_crystal';
     kit.addCollectible(`pk_col_${collectN++}`, type, x, y + 1.15, z);
   };
@@ -301,9 +316,10 @@ export function generateParkourLevel(
     nextD: number,
     deltaYaw: number
   ): { x: number; y: number; z: number; yaw: number } => {
+    const effGap = edgeGap + (edgeGap >= 1.8 && edgeGap <= 2.3 ? gapBoost : 0);
     const prevHalf = Math.max(curW, curD) * 0.41;
     const nextHalf = Math.max(nextW, nextD) * 0.41;
-    const stepDist = prevHalf + edgeGap + nextHalf;
+    const stepDist = prevHalf + effGap + nextHalf;
 
     const tryYaw = curYaw + deltaYaw;
     const targetY = clampY(curY + dy);
@@ -377,10 +393,10 @@ export function generateParkourLevel(
   items.push({ type: 'baya', pos: new THREE.Vector3(-3.9, 0.95, 2.9) });
 
   // =========================================================================
-  // 12 SHUFFLED & PARAMETERIZED ONLY-UP MODULES (2x LONGER & HARDER)
+  // SHUFFLED & PARAMETERIZED ONLY-UP MODULES (SCALING PROGRESSIVELY WITH LEVEL)
   // =========================================================================
   const buildModule = (mod: ModuleKind, modSign: number, idx: number) => {
-    const hardness = Math.min(1.45, 0.9 + diff * 0.22 + idx * 0.03);
+    const hardness = Math.min(1.6, 0.9 + diff * 0.28 + idx * 0.025 + (level > 15 ? 0.08 : 0));
 
     if (mod === 'spiral_tower') {
       const spireAngle = curYaw + modSign * (0.4 + rng() * 0.3);
@@ -388,23 +404,23 @@ export function generateParkourLevel(
       const cx = curX + Math.sin(spireAngle) * (curW * 0.45 + orbitR);
       const cz = curZ + Math.cos(spireAngle) * (curW * 0.45 + orbitR);
       const baseSpireY = curY;
-      addSupportPillar(cx, baseSpireY + 14.5, cz, 24, 1.3);
+      addSupportPillar(cx, baseSpireY + 14.5 + extraSteps * 1.4, cz, 24 + extraSteps * 2, 1.3);
 
       const startAngle = Math.atan2(curX - cx, curZ - cz);
-      const steps = 8 + Math.floor(rng() * 2); // 8 or 9 steps
-      const sweep = Math.PI * (1.65 + rng() * 0.35);
+      const steps = 8 + extraSteps + Math.floor(rng() * 2); // 8–9 early → up to 10–11 at high levels
+      const sweep = Math.PI * (1.65 + rng() * 0.35 + extraSteps * 0.2);
       for (let s = 1; s <= steps; s++) {
         const theta = startAngle + modSign * (s / steps) * sweep;
         const sx = cx + Math.sin(theta) * orbitR;
         const sz = cz + Math.cos(theta) * orbitR;
         const sy = clampY(baseSpireY + s * 1.2);
-        const pw = s % 4 === 0 ? 3.8 : 2.95 + rng() * 0.45;
+        const pw = Math.max(2.55, (s % 4 === 0 ? 3.8 : 2.95 + rng() * 0.45) - padShrink * 0.6);
         if (!overlapsPlaced(sx, sy, sz, pw, pw, 0.6)) {
           const p = addPlat(`spiral_${idx}_${s}`, sx, sy, sz, pw, pw, 1.0, s % 2 === 0 ? pick(padBuilders) : theme.deck, surf.pad);
           if (s === 4) {
             kit.makeMoving(p, 'y', 1.0, 1.0 + diff * 0.25);
-            spawnRelic(sx, sy + 1.0, sz);
-          } else if (s === 6) {
+            spawnRelic(sx, sy + 1.0, sz, undefined, true, idx);
+          } else if (s === 6 || (extraSteps >= 2 && s === 9)) {
             theme.walker(enemies, `pk_spw_${enemyN++}`, new THREE.Vector3(sx, sy, sz), 'x', 1.0);
           } else if (s === steps) {
             spawnRelic(sx, sy, sz);
@@ -448,28 +464,29 @@ export function generateParkourLevel(
 
     if (mod === 'switchback_scaffold') {
       let dir = modSign;
-      const legs = 7;
+      const legs = 7 + extraSteps;
       for (let s = 1; s <= legs; s++) {
         const turn = s % 2 === 0 ? dir * (1.35 + rng() * 0.25) : dir * (0.28 + rng() * 0.2);
         if (s % 2 === 0) dir = -dir;
-        const w = s === 3 ? 3.8 : 2.9 + rng() * 0.4;
-        const d = s === 3 ? 4.8 : 2.9 + rng() * 0.4;
+        const w = Math.max(2.5, (s === 3 ? 3.8 : 2.9 + rng() * 0.4) - padShrink * 0.6);
+        const d = Math.max(2.5, (s === 3 ? 4.8 : 2.9 + rng() * 0.4) - (s === 3 ? 0 : padShrink * 0.6));
         const pos = advanceCursor(2.1, 1.2, w, d, turn);
-        const builder = s === 3 ? theme.bridge : s === 5 ? theme.mover : pick(padBuilders);
+        const builder = s === 3 ? theme.bridge : s === 5 || s === 8 ? theme.mover : pick(padBuilders);
         const pl = addPlat(`swb_${idx}_${s}`, pos.x, pos.y, pos.z, w, d, 0.95, builder, s === 3 ? surf.deck : surf.pad);
-        if (s === 4) {
+        if (s === 4 || (extraSteps >= 1 && s === 7)) {
           kit.makeCrumbling(pl);
-        } else if (s === 5) {
+        } else if (s === 5 || s === 8) {
           kit.makeMoving(pl, Math.abs(Math.sin(pos.yaw)) > 0.65 ? 'z' : 'x', 1.4 + diff * 0.4, 0.95 * hardness);
         }
         if (s === 3) {
-          const vent = createSporeSteamVent(0.95, Math.max(2.0, 3.0 - diff * 0.45), new THREE.Vector3(pos.x, pos.y, pos.z), textures);
+          const vent = createSporeSteamVent(0.95, Math.max(1.85, 3.0 - diff * 0.5), new THREE.Vector3(pos.x, pos.y, pos.z), textures);
           root.add(vent.group);
           steamVents.push(vent);
           kit.registerCylinder(`pk_vent_${ventN++}`, pos.x, pos.y, pos.z, 0.6, 0.95);
-          spawnRelic(pos.x, pos.y, pos.z);
+          spawnRelic(pos.x, pos.y, pos.z, undefined, true, idx);
         } else if (s === legs) {
           spawnExtra('hopper', pos.x, pos.y, pos.z, 'x', 0.9);
+          spawnRelic(pos.x, pos.y, pos.z);
         }
       }
       return;
@@ -603,18 +620,18 @@ export function generateParkourLevel(
     }
 
     if (mod === 'arch_weave') {
-      const archSteps = 6;
+      const archSteps = 6 + extraSteps;
       for (let s = 1; s <= archSteps; s++) {
-        const w = s === 3 ? 5.2 : 3.2 + rng() * 0.45;
+        const w = s === 3 ? 5.2 : Math.max(2.65, 3.2 + rng() * 0.45 - padShrink * 0.7);
         const pos = advanceCursor(2.1, 1.2, w, w, modSign * (0.28 + rng() * 0.14));
         const pl = addPlat(`arch_${idx}_${s}`, pos.x, pos.y, pos.z, w, w, 1.05, s === 3 ? theme.big : pick(padBuilders), surf.pad);
-        if (s === 2 || s === 4 || s === 6) {
+        if (s === 2 || s === 4 || s === 6 || s === 8) {
           addSkyArch(pos.x, pos.y, pos.z, pos.yaw, 4.2);
         }
-        if (s === 5) kit.makeCrumbling(pl);
+        if (s === 5 || (extraSteps >= 2 && s === 7)) kit.makeCrumbling(pl);
         if (s === 3) {
           spawnExtra('shooter', pos.x + 1.3, pos.y, pos.z - 1.3, 'x', 0);
-          spawnRelic(pos.x - 1.1, pos.y, pos.z + 1.1);
+          spawnRelic(pos.x - 1.1, pos.y, pos.z + 1.1, undefined, true, idx);
         } else if (s === archSteps) {
           spawnRelic(pos.x, pos.y, pos.z);
         }
@@ -623,10 +640,11 @@ export function generateParkourLevel(
     }
 
     if (mod === 'crumble_ladder') {
-      // High-tension vertical crumbling climb (+10.5m) with tight tiny rest landings
-      for (let s = 1; s <= 7; s++) {
-        const isRest = s === 4 || s === 7;
-        const w = isRest ? 3.8 : 2.65 + rng() * 0.35;
+      // High-tension vertical crumbling climb (+10.5m to +13.5m) with tight tiny rest landings
+      const ladSteps = 7 + extraSteps;
+      for (let s = 1; s <= ladSteps; s++) {
+        const isRest = s === 4 || s === ladSteps;
+        const w = isRest ? 3.8 : Math.max(2.35, 2.65 + rng() * 0.35 - padShrink * 0.6);
         const swing = modSign * (s % 2 === 0 ? 0.38 : -0.22);
         const pos = advanceCursor(2.15, 1.32, w, w, swing);
         const pl = addPlat(
@@ -644,7 +662,7 @@ export function generateParkourLevel(
           kit.makeCrumbling(pl);
         } else if (s === 4) {
           spawnExtra('chaser', pos.x, pos.y, pos.z, 'z', 0.95);
-          spawnRelic(pos.x, pos.y, pos.z, true);
+          spawnRelic(pos.x, pos.y, pos.z, true, true, idx);
         } else {
           items.push({ type: 'baya', pos: new THREE.Vector3(pos.x, pos.y + 0.95, pos.z) });
           spawnRelic(pos.x, pos.y, pos.z);
@@ -708,9 +726,9 @@ export function generateParkourLevel(
 
     if (mod === 'ring_vaults') {
       // Sweeping banked ascent lined with glowing halo rings, steam vent & walker guard
-      const steps = 6;
+      const steps = 6 + extraSteps;
       for (let s = 1; s <= steps; s++) {
-        const w = s === 4 ? 4.8 : 3.1 + rng() * 0.4;
+        const w = s === 4 ? 4.8 : Math.max(2.6, 3.1 + rng() * 0.4 - padShrink * 0.7);
         const pos = advanceCursor(2.1, 1.25, w, w, modSign * (0.36 + rng() * 0.12));
         addPlat(`ringv_${idx}_${s}`, pos.x, pos.y, pos.z, w, w, 1.0, s === 4 ? theme.big : pick(padBuilders), surf.pad);
         if (s % 2 === 1) {
@@ -720,11 +738,11 @@ export function generateParkourLevel(
           kit.addDecor(halo);
         }
         if (s === 3) {
-          const vent = createSporeSteamVent(0.95, Math.max(2.0, 2.9 - diff * 0.4), new THREE.Vector3(pos.x, pos.y, pos.z), textures);
+          const vent = createSporeSteamVent(0.95, Math.max(1.85, 2.9 - diff * 0.45), new THREE.Vector3(pos.x, pos.y, pos.z), textures);
           root.add(vent.group);
           steamVents.push(vent);
           kit.registerCylinder(`pk_vent_${ventN++}`, pos.x, pos.y, pos.z, 0.6, 0.95);
-          spawnRelic(pos.x, pos.y, pos.z);
+          spawnRelic(pos.x, pos.y, pos.z, undefined, true, idx);
         } else if (s === 4) {
           theme.walker(enemies, `pk_rgw_${enemyN++}`, new THREE.Vector3(pos.x, pos.y, pos.z), 'x', 1.2);
         } else if (s === steps) {
@@ -735,34 +753,47 @@ export function generateParkourLevel(
     }
 
     // Default: 'floating_cluster' — compact asymmetric sky islands
-    for (let s = 1; s <= 6; s++) {
+    const clusterSteps = 6 + extraSteps;
+    for (let s = 1; s <= clusterSteps; s++) {
       const yawSwing = modSign * (s % 2 === 0 ? 0.58 : -0.26);
-      const w = s === 4 ? 4.4 : 2.9 + rng() * 0.45;
+      const w = s === 4 ? 4.4 : Math.max(2.5, 2.9 + rng() * 0.45 - padShrink * 0.6);
       const pos = advanceCursor(2.1, 1.25, w, w, yawSwing);
       const pl = addPlat(`cluster_${idx}_${s}`, pos.x, pos.y, pos.z, w, w, 1.0, s % 2 === 0 ? theme.deck : pick(padBuilders), surf.pad);
-      if (s === 3) {
+      if (s === 3 || (extraSteps >= 2 && s === 7)) {
         kit.makeMoving(pl, 'y', 1.0, 1.0 * hardness);
-        spawnRelic(pos.x, pos.y + 1.0, pos.z);
+        if (s === 3) spawnRelic(pos.x, pos.y + 1.0, pos.z, undefined, true, idx);
       } else if (s === 4) {
         spawnExtra('diver', pos.x, pos.y + 3.1, pos.z, 'x', 2.2);
         items.push({ type: 'baya', pos: new THREE.Vector3(pos.x, pos.y + 0.95, pos.z) });
-      } else if (s === 6) {
+      } else if (s === clusterSteps) {
         spawnRelic(pos.x, pos.y, pos.z);
       }
     }
   };
 
   // =========================================================================
-  // 2x LONGER MODULE PLAN: World-distinct opener + Fisher-Yates shuffle
+  // PROGRESSIVE MODULE PLAN: World-distinct opener + Fisher-Yates shuffle
   // =========================================================================
-  const moduleCount = level >= 16 ? 10 : 8;
   const openerPool = OPENING_MODULES_BY_THEME[themeId] || ALL_MODULES;
   const opener = openerPool[Math.floor(rng() * openerPool.length)];
   const remainingPool = shuffleInPlace(
     ALL_MODULES.filter((m) => m !== opener),
     rng
   );
-  const chosenModules: ModuleKind[] = [opener, ...remainingPool.slice(0, moduleCount - 1)];
+  const chosenModules: ModuleKind[] = [opener, ...remainingPool.slice(0, Math.min(moduleCount - 1, remainingPool.length))];
+  while (chosenModules.length < moduleCount) {
+    const prev = chosenModules[chosenModules.length - 1];
+    const extraPool = shuffleInPlace(
+      ALL_MODULES.filter((m) => m !== prev),
+      rng
+    );
+    for (const candidate of extraPool) {
+      if (chosenModules.length >= moduleCount) break;
+      if (candidate !== chosenModules[chosenModules.length - 1]) {
+        chosenModules.push(candidate);
+      }
+    }
+  }
 
   chosenModules.forEach((mod, idx) => {
     const modSign = idx % 2 === 0 ? turnSign : -turnSign;

@@ -342,20 +342,25 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
   else if (out.detailColor) out.scarfColor = out.detailColor;
 
   // Outfit & shirt style
-  if (oneOf(r.outfitStyle, outfitStylesFor(body))) {
+  const allowedOutfits = isRemote ? OUTFIT_STYLES : outfitStylesFor(body);
+  if (oneOf(r.outfitStyle, allowedOutfits)) {
     out.outfitStyle = r.outfitStyle;
-  } else if (typeof r.shirtStyle === 'string') {
-    const s = r.shirtStyle.toLowerCase();
-    if (s.includes('hoodie') || s.includes('sudadera')) out.outfitStyle = 'sudadera';
-    else if (s.includes('jacket') || s.includes('chaqueta')) out.outfitStyle = 'chaqueta';
-    else if (s.includes('overall') || s.includes('overol')) out.outfitStyle = 'overol';
-    else if (s.includes('dress') || s.includes('vestido')) out.outfitStyle = 'vestido';
-    else if (s.includes('poncho')) out.outfitStyle = 'poncho';
-    else out.outfitStyle = 'sueter';
+  } else {
+    const rawShirt = typeof r.shirtStyle === 'string' ? r.shirtStyle : typeof r.outfit === 'string' ? r.outfit : '';
+    if (rawShirt) {
+      const s = rawShirt.toLowerCase();
+      if (s.includes('hoodie') || s.includes('sudadera')) out.outfitStyle = 'sudadera';
+      else if (s.includes('jacket') || s.includes('chaqueta') || s.includes('neon') || s.includes('cyber')) out.outfitStyle = 'chaqueta';
+      else if (s.includes('overall') || s.includes('overol')) out.outfitStyle = 'overol';
+      else if (s.includes('dress') || s.includes('vestido') || s.includes('robe')) out.outfitStyle = 'vestido';
+      else if (s.includes('poncho')) out.outfitStyle = 'poncho';
+      else if (s.includes('sueter') || s.includes('sweater')) out.outfitStyle = 'sueter';
+    }
   }
 
   // Hair style
-  if (oneOf(r.hairStyle, hairStylesFor(body))) {
+  const allowedHair = isRemote ? HAIR_STYLES : hairStylesFor(body);
+  if (oneOf(r.hairStyle, allowedHair)) {
     out.hairStyle = r.hairStyle;
   } else if (typeof r.hairStyle === 'string') {
     const h = r.hairStyle.toLowerCase();
@@ -363,22 +368,23 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
     else if (h.includes('short_crop') || h.includes('crop') || h.includes('rapado') || h.includes('corto')) out.hairStyle = 'rapado';
     else if (h.includes('spike') || h.includes('puntas')) out.hairStyle = 'puntas';
     else if (h.includes('ponytail') || h.includes('coleta')) out.hairStyle = 'coleta';
-    else if (h.includes('braid') || h.includes('trenza')) out.hairStyle = 'trenzas';
+    else if (h.includes('braid') || h.includes('trenza') || h.includes('coletita')) out.hairStyle = 'trenzas';
     else if (h.includes('bun') || h.includes('chongo')) out.hairStyle = 'chongo';
     else if (h.includes('long') || h.includes('largo')) out.hairStyle = 'largo';
   }
 
   // Hat style
-  if (oneOf(r.hatStyle, hatStylesFor(body))) {
+  const allowedHats = isRemote ? HAT_STYLES : hatStylesFor(body);
+  if (oneOf(r.hatStyle, allowedHats)) {
     out.hatStyle = r.hatStyle;
   } else if (typeof r.hat === 'string') {
     const h = r.hat.toLowerCase();
     if (h === 'none' || h === 'ninguno') out.hatStyle = 'ninguno';
     else if (h.includes('beanie') || h.includes('gorro')) out.hatStyle = 'gorro';
-    else if (h.includes('cap') || h.includes('gorra')) out.hatStyle = 'gorra';
-    else if (h.includes('sunhat') || h.includes('sombrero')) out.hatStyle = 'sombrero';
-    else if (h.includes('flower') || h.includes('flores')) out.hatStyle = 'flores';
-    else if (h.includes('ear') || h.includes('orejas')) out.hatStyle = 'orejas';
+    else if (h.includes('cap') || h.includes('gorra') || h.includes('visor') || h.includes('helmet')) out.hatStyle = 'gorra';
+    else if (h.includes('sunhat') || h.includes('sombrero') || h.includes('explorador')) out.hatStyle = 'sombrero';
+    else if (h.includes('flower') || h.includes('flores') || h.includes('crown') || h.includes('corona')) out.hatStyle = 'flores';
+    else if (h.includes('ear') || h.includes('oreja')) out.hatStyle = 'orejas';
   }
 
   // Eyes
@@ -394,23 +400,56 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
   // Accessories
   if (oneOf(r.accessory, ACCESSORIES)) {
     out.accessory = r.accessory;
-  } else if (typeof r.glasses === 'string' && r.glasses !== 'none' && r.glasses !== 'ninguno') {
-    out.accessory = 'lentes';
+  } else if (typeof r.glasses === 'string') {
+    const g = r.glasses.toLowerCase();
+    if (g === 'none' || g === 'ninguno') out.accessory = 'ninguno';
+    else if (g.includes('freckle') || g.includes('pecas')) out.accessory = 'pecas';
+    else out.accessory = 'lentes';
   }
 
   // Companion
-  if (oneOf(r.companion, COMPANIONS)) {
-    if (isRemote || isCompanionUnlocked(r.companion)) {
-      out.companion = r.companion;
-    }
+  const mapCompanion = (val: unknown): CompanionStyle | null => {
+    if (oneOf(val, COMPANIONS)) return val;
+    if (typeof val !== 'string') return null;
+    const c = val.toLowerCase();
+    if (c === 'none' || c === 'ninguno') return 'ninguno';
+    if (c.includes('cloud') || c.includes('nube') || c.includes('nubi')) return 'nube';
+    if (c.includes('star') || c.includes('estrell')) return 'estrella';
+    if (c.includes('firefly') || c.includes('luciernaga') || c.includes('chispa')) return 'luciernaga';
+    if (c.includes('ladybug') || c.includes('catarina') || c.includes('mariquita')) return 'catarina';
+    if (c.includes('fairy') || c.includes('hada') || c.includes('lila')) return 'hada';
+    if (c.includes('serpent') || c.includes('snake') || c.includes('serpiente') || c.includes('quetsy')) return 'serpiente';
+    if (c.includes('moth') || c.includes('polilla')) return 'polilla';
+    return null;
+  };
+  const resolvedCompanion = mapCompanion(r.companion);
+  if (resolvedCompanion && (isRemote || isCompanionUnlocked(resolvedCompanion))) {
+    out.companion = resolvedCompanion;
   }
 
   // Cosmetic shirt pattern
   const rawPattern = r.shirtPattern ?? r.clothingPattern ?? r.pattern;
-  if (oneOf(rawPattern, SHIRT_PATTERNS)) {
-    if (isRemote || isPatternUnlocked(rawPattern)) {
-      out.shirtPattern = rawPattern;
-    }
+  const mapPattern = (val: unknown): ShirtPatternId | null => {
+    if (oneOf(val, SHIRT_PATTERNS)) return val;
+    if (typeof val !== 'string') return null;
+    const p = val.toLowerCase();
+    if (p.includes('liso') || p.includes('solid') || p === 'none') return 'liso';
+    if (p.includes('aero') || p.includes('stripe') || p.includes('raya')) return 'rayas_aero';
+    if (p.includes('constel') || p.includes('star') || p.includes('cosmic')) return 'constelacion';
+    if (p.includes('cyber') || p.includes('circuit')) return 'circuito_cyber';
+    if (p.includes('neon') || p.includes('grid') || p.includes('rejilla')) return 'rejilla_neon';
+    if (p.includes('flama') || p.includes('volcan') || p.includes('flame') || p.includes('lava')) return 'flama_volcan';
+    if (p.includes('cristal') || p.includes('glacial') || p.includes('ice')) return 'cristal_glacial';
+    if (p.includes('musgo') || p.includes('pantano') || p.includes('swamp')) return 'musgo_pantano';
+    if (p.includes('remolino') || p.includes('dulce') || p.includes('candy')) return 'remolino_dulce';
+    if (p.includes('corona') || p.includes('real') || p.includes('royal')) return 'corona_real';
+    if (p.includes('hoja') || p.includes('jardin') || p.includes('leaf')) return 'hoja_jardin';
+    if (p.includes('sol') || p.includes('desierto') || p.includes('sun')) return 'sol_desierto';
+    return null;
+  };
+  const resolvedPattern = mapPattern(rawPattern);
+  if (resolvedPattern && (isRemote || isPatternUnlocked(resolvedPattern))) {
+    out.shirtPattern = resolvedPattern;
   }
 
   // Backpack
@@ -423,6 +462,47 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
   out.height = clamp(r.height, 0.88, 1.12, out.height);
   out.build = clamp(r.build, 0.88, 1.15, out.build);
   return out;
+}
+
+/**
+ * Applies a backend cosmetic `appearance` or `appearancePatch` onto a base CharacterAppearance,
+ * mapping backend property names (shirtColor, pantsColor, shoesColor, hat, outfit, etc.) cleanly.
+ */
+export function applyBackendAppearancePatch(
+  base: CharacterAppearance,
+  patch: Record<string, unknown> | null | undefined,
+  bypassLocks: boolean = true
+): CharacterAppearance {
+  if (!patch || typeof patch !== 'object') return { ...base };
+  const merged: Record<string, unknown> = { ...base };
+  const isHex = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v);
+
+  // Copy direct & backend-aliased properties cleanly so they override `base`'s frontend fields
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined && v !== null) merged[k] = v;
+  }
+  if (isHex(patch.shirtColor)) merged.sweaterColor = patch.shirtColor;
+  if (isHex(patch.pantsColor)) merged.detailColor = patch.pantsColor;
+  if (isHex(patch.shoesColor)) merged.bootColor = patch.shoesColor;
+  if (isHex(patch.hatColor)) merged.hatColor = patch.hatColor;
+  if (isHex(patch.scarfColor)) merged.scarfColor = patch.scarfColor;
+  if (isHex(patch.skinColor)) merged.skinColor = patch.skinColor;
+  if (isHex(patch.hairColor)) merged.hairColor = patch.hairColor;
+
+  if (typeof patch.shirtStyle === 'string' || typeof patch.outfit === 'string') {
+    delete merged.outfitStyle;
+  }
+  if (typeof patch.hat === 'string' && !('hatStyle' in patch)) {
+    delete merged.hatStyle;
+  }
+  if (typeof patch.glasses === 'string' && !('accessory' in patch)) {
+    delete merged.accessory;
+  }
+  if (('pattern' in patch || 'clothingPattern' in patch) && !('shirtPattern' in patch)) {
+    delete merged.shirtPattern;
+  }
+
+  return sanitizeAppearance(merged, base.bodyType, bypassLocks);
 }
 
 // In-memory copy so switching characters still works when storage is blocked

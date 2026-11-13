@@ -35,6 +35,7 @@ interface DailyMissionsModalProps {
   onEquipPattern: (pattern: ShirtPatternId) => void;
   onClaimFeedback?: (message: string) => void;
   onClose: () => void;
+  embeddedInLobby?: boolean;
 }
 
 type ModalTab = 'missions' | 'patterns';
@@ -45,6 +46,7 @@ export const DailyMissionsModal: React.FC<DailyMissionsModalProps> = ({
   onEquipPattern,
   onClaimFeedback,
   onClose,
+  embeddedInLobby = false,
 }) => {
   const [tab, setTab] = useState<ModalTab>('missions');
   const [snapshot, setSnapshot] = useState<DailyMissionsSnapshot>(() => getDailyMissionsState());
@@ -68,7 +70,7 @@ export const DailyMissionsModal: React.FC<DailyMissionsModalProps> = ({
     }, 1000);
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === 'Escape') {
+      if (!embeddedInLobby && e.code === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
         onClose();
@@ -81,7 +83,7 @@ export const DailyMissionsModal: React.FC<DailyMissionsModalProps> = ({
       window.clearInterval(interval);
       window.removeEventListener('keydown', onKey, true);
     };
-  }, [open, onClose]);
+  }, [open, onClose, embeddedInLobby]);
 
   if (!open) return null;
 
@@ -118,36 +120,34 @@ export const DailyMissionsModal: React.FC<DailyMissionsModalProps> = ({
     return 'Recolección';
   };
 
-  return (
+  const panelContent = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 cozy-scrim pointer-events-auto animate-in fade-in duration-150"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="daily-missions-title"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      className={
+        embeddedInLobby
+          ? 'w-full max-w-3xl mx-auto h-full rounded-2xl cozy-panel flex flex-col overflow-hidden text-cozy-ink shadow-2xl border border-cozy-line/80'
+          : 'w-full max-w-lg max-h-[88dvh] rounded-[1.75rem] cozy-panel flex flex-col overflow-hidden text-cozy-ink shadow-2xl'
+      }
     >
-      <div className="w-full max-w-lg max-h-[88dvh] rounded-[1.75rem] cozy-panel flex flex-col overflow-hidden text-cozy-ink shadow-2xl">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-4 border-b border-cozy-line">
-          <div className="min-w-0">
-            <h2
-              id="daily-missions-title"
-              className="text-xl font-display font-bold text-cozy-ink leading-tight"
-            >
-              Misiones diarias
-            </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-cozy-muted">
-              <span className="inline-flex items-center gap-1 tabular-nums">
-                <Clock className="w-3.5 h-3.5 text-cozy-sky" />
-                Renovación en {formatResetCountdown(resetMs)}
-              </span>
-              <span className="tabular-nums font-semibold text-cozy-accent-deep">
-                {unlockedCount}/{unlockableTotal} patrones desbloqueados
-              </span>
-            </div>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-4 border-b border-cozy-line">
+        <div className="min-w-0">
+          <h2
+            id="daily-missions-title"
+            className="text-xl font-display font-bold text-cozy-ink leading-tight"
+          >
+            Misiones diarias
+          </h2>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-cozy-muted">
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <Clock className="w-3.5 h-3.5 text-cozy-sky" />
+              Renovación en {formatResetCountdown(resetMs)}
+            </span>
+            <span className="tabular-nums font-semibold text-cozy-accent-deep">
+              {unlockedCount}/{unlockableTotal} patrones desbloqueados
+            </span>
           </div>
+        </div>
+        {!embeddedInLobby && (
           <button
             type="button"
             onClick={onClose}
@@ -156,7 +156,8 @@ export const DailyMissionsModal: React.FC<DailyMissionsModalProps> = ({
           >
             <X className="w-4 h-4" />
           </button>
-        </div>
+        )}
+      </div>
 
         {/* Navigation Tabs */}
         <div className="flex gap-2 px-5 pt-3 pb-2" role="tablist">
@@ -391,6 +392,27 @@ export const DailyMissionsModal: React.FC<DailyMissionsModalProps> = ({
           )}
         </div>
       </div>
+  );
+
+  if (embeddedInLobby) {
+    return (
+      <div className="absolute inset-x-0 top-14 bottom-0 z-20 p-3 sm:p-5 pointer-events-auto overflow-hidden cozy-scrim animate-in fade-in duration-150">
+        {panelContent}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 cozy-scrim pointer-events-auto animate-in fade-in duration-150"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="daily-missions-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      {panelContent}
     </div>
   );
 };

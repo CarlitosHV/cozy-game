@@ -264,6 +264,12 @@ export class BackgroundCloudsSystem {
     }
   }
 
+  public setVisible(visible: boolean) {
+    for (const c of this.clouds) {
+      c.group.visible = visible;
+    }
+  }
+
   public dispose() {
     for (const c of this.clouds) {
       this.scene.remove(c.group);

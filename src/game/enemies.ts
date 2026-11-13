@@ -11,6 +11,9 @@ import { ProceduralTextures } from './textures';
 
 export type EnemyType = 'sproutling' | 'zephyr_puff' | 'chaser' | 'hopper' | 'shooter' | 'diver' | 'walker' | 'flyer';
 
+const GUST_CONE_RADIUS = 0.92;
+const GUST_CONE_LENGTH = 3.4;
+
 /** Pushes the player: direction (XZ), horizontal force and upward speed. */
 export type KnockFn = (dir: THREE.Vector3, force: number, up: number) => void;
 
@@ -67,6 +70,8 @@ export class EnemyManager {
 
   // Reusable collision vectors
   private _playerPush = new THREE.Vector3();
+  private _gustApex = new THREE.Vector3();
+  private _gustDir = new THREE.Vector3();
 
   /** Chispa's lure: while set, enemies stop to stare at it and don't push the player */
   public distractTarget: THREE.Vector3 | null = null;
@@ -438,18 +443,28 @@ export class EnemyManager {
     wings.add(leftWing, rightWing);
     body.add(wings);
 
-    // 5. Breeze Wind Vortex Cone (Visible when blowing)
-    const windConeGeom = new THREE.ConeGeometry(0.65, 2.2, 8, 1, true);
+    // 5. Breeze Wind Vortex Cone (exact visual match to gust hitbox)
+    const windConeGeom = new THREE.ConeGeometry(GUST_CONE_RADIUS, GUST_CONE_LENGTH, 14, 4, true);
     windConeGeom.rotateX(-Math.PI / 2);
-    windConeGeom.translate(0, 0, 1.1);
+    windConeGeom.translate(0, 0, GUST_CONE_LENGTH * 0.5);
     const windConeMat = new THREE.MeshBasicMaterial({
       color: 0xcbf3f0,
       transparent: true,
       opacity: 0,
       wireframe: true,
+      depthWrite: false,
     });
     const windCone = new THREE.Mesh(windConeGeom, windConeMat);
-    windCone.position.set(0, -0.06, 0.4);
+    windCone.position.set(0, -0.06, 0.45);
+    windCone.visible = false;
+    for (const frac of [0.28, 0.56, 0.85]) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(GUST_CONE_RADIUS * frac, 0.032, 6, 18),
+        windConeMat
+      );
+      ring.position.z = GUST_CONE_LENGTH * frac;
+      windCone.add(ring);
+    }
     body.add(windCone);
 
     group.add(body);
@@ -501,6 +516,7 @@ export class EnemyManager {
         this.squashTimer = 4.0;
         this.isBlowing = false;
         if (this.animParts.windCone) {
+          this.animParts.windCone.visible = false;
           (this.animParts.windCone.material as THREE.MeshBasicMaterial).opacity = 0;
         }
         soundManager.playEnemyBoop();
@@ -509,6 +525,9 @@ export class EnemyManager {
         if (this.isSquashed) {
           this.squashTimer -= dt;
           this.group.scale.set(1.4, 0.25, 1.4);
+          if (this.animParts.windCone) {
+            this.animParts.windCone.visible = false;
+          }
           if (this.squashTimer <= 0) {
             this.isSquashed = false;
             this.group.scale.set(1, 1, 1);
@@ -537,6 +556,7 @@ export class EnemyManager {
             this.animParts.cheeks.scale.set(1, 1, 1);
           }
           if (this.animParts.windCone) {
+            this.animParts.windCone.visible = false;
             (this.animParts.windCone.material as THREE.MeshBasicMaterial).opacity = 0;
           }
         } else if (cycle < 4.7) {
@@ -548,6 +568,10 @@ export class EnemyManager {
 
           if (this.animParts.cheeks) {
             this.animParts.cheeks.scale.set(puffScale, puffScale, puffScale);
+          }
+          if (this.animParts.windCone) {
+            this.animParts.windCone.visible = false;
+            (this.animParts.windCone.material as THREE.MeshBasicMaterial).opacity = 0;
           }
         } else {
           // 3. Blow Wind Gust!
@@ -563,8 +587,9 @@ export class EnemyManager {
 
           // Wind cone visuals
           if (this.animParts.windCone) {
+            this.animParts.windCone.visible = true;
             const windMat = this.animParts.windCone.material as THREE.MeshBasicMaterial;
-            windMat.opacity = 0.55 + Math.sin(time * 20) * 0.2;
+            windMat.opacity = 0.65 + Math.sin(time * 20) * 0.18;
             this.animParts.windCone.rotation.z += dt * 10;
           }
         }
@@ -995,24 +1020,46 @@ export class EnemyManager {
     for (const enemy of this.enemies) {
       if (enemy.isSquashed) continue;
 
-      // 1. Zephyr Puff Wind Gust Blast Check
+      // 1. Zephyr Puff Wind Gust Blast Check (strictly bounded to visible windCone funnel)
       if (!distracted && enemy.type === 'zephyr_puff' && enemy.isBlowing) {
-        const toPlayer = playerPosition.clone().sub(enemy.position);
-        const forward = new THREE.Vector3(0, 0, 1).applyEuler(enemy.group.rotation);
-        const dist = toPlayer.length();
-        const dirToPlayer = toPlayer.clone().normalize();
-        const dot = dirToPlayer.dot(forward);
+        const cone = enemy.animParts.windCone;
+        if (cone) {
+          enemy.group.updateMatrixWorld(true);
+          cone.getWorldPosition(this._gustApex);
+          cone.getWorldDirection(this._gustDir);
+        } else {
+          this._gustDir.set(0, 0, 1).applyEuler(enemy.group.rotation).normalize();
+          this._gustApex.copy(enemy.position).addScaledVector(this._gustDir, 0.45);
+        }
 
-        const gustRange = 4.5 + 1.5 * this.hostility;
-        if (dot > 0.45 && dist < gustRange && Math.abs(playerPosition.y - enemy.position.y) < 2.8) {
-          // Gale force wind knocks player off bridge!
-          const gust = 15.5 * (1 + 0.35 * this.hostility);
-          playerVelocity.x = forward.x * gust;
-          playerVelocity.y = 4.8;
-          playerVelocity.z = forward.z * gust;
-          onPlayerKnockback(forward);
-          soundManager.playSteamPuff();
-          continue;
+        const vx = playerPosition.x - this._gustApex.x;
+        const vy = (playerPosition.y + 0.65) - this._gustApex.y;
+        const vz = playerPosition.z - this._gustApex.z;
+        const along = vx * this._gustDir.x + vy * this._gustDir.y + vz * this._gustDir.z;
+
+        if (along >= -0.1 && along <= GUST_CONE_LENGTH + playerRadius * 0.4) {
+          const t = THREE.MathUtils.clamp(along / GUST_CONE_LENGTH, 0, 1);
+          const coneRadiusAtDist = t * GUST_CONE_RADIUS;
+          const rayY = this._gustApex.y + this._gustDir.y * along;
+          const closestPlayerY = THREE.MathUtils.clamp(rayY, playerPosition.y + 0.12, playerPosition.y + 1.25);
+          const rx = vx - this._gustDir.x * along;
+          const ry = closestPlayerY - rayY;
+          const rz = vz - this._gustDir.z * along;
+          const radialDist = Math.hypot(rx, ry, rz);
+
+          if (radialDist <= coneRadiusAtDist + playerRadius * 0.55) {
+            const pushDir = this._gustDir.clone();
+            pushDir.y = 0;
+            if (pushDir.lengthSq() < 0.0001) pushDir.set(0, 0, 1);
+            pushDir.normalize();
+            const gust = 14.5 * (1 + 0.3 * this.hostility);
+            playerVelocity.x = pushDir.x * gust;
+            playerVelocity.y = 4.6;
+            playerVelocity.z = pushDir.z * gust;
+            onPlayerKnockback(pushDir);
+            soundManager.playSteamPuff();
+            continue;
+          }
         }
       }
 
@@ -1090,6 +1137,7 @@ export class EnemyManager {
         enemy.isBlowing = false;
         enemy.isTelegraphing = false;
         if (enemy.animParts.windCone) {
+          enemy.animParts.windCone.visible = false;
           (enemy.animParts.windCone.material as THREE.MeshBasicMaterial).opacity = 0;
         }
         if (enemy.animParts.cheeks) enemy.animParts.cheeks.scale.set(1, 1, 1);

@@ -31,7 +31,7 @@ export function parTime(levelId: number): number {
   const kind = levelKind(levelId);
   if (kind === 'handmade') return 60 + levelId * 20;
   if (kind === 'boss') return 210;
-  return 170 + Math.min(120, levelId * 2);
+  return 170 + Math.min(190, levelId * 2.6);
 }
 
 export function starsForScore(score: number): number {

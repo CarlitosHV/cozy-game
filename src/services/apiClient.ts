@@ -42,12 +42,90 @@ export interface PlayerProfileData {
     completedLevels: number[];
     totalCollectiblesFound: number;
     unlockedCompanions: string[];
+    relicsBalance?: number;
   };
+  relicsBalance?: number;
+  unlockedItems?: string[];
   stats?: {
     totalPlayTimeSeconds: number;
     totalJumps: number;
     totalFalls: number;
   };
+}
+
+export type ShopCategory =
+  | 'skin'
+  | 'hat'
+  | 'outfit'
+  | 'pattern'
+  | 'glasses'
+  | 'backpack'
+  | 'hair'
+  | 'companion';
+
+export type ShopRarity = 'common' | 'rare' | 'epic' | 'legendary';
+
+export interface ShopCatalogCategory {
+  id: ShopCategory;
+  label: string;
+}
+
+export interface ShopItem {
+  id: string;
+  category: ShopCategory;
+  name: string;
+  description: string;
+  priceRelics: number;
+  rarity: ShopRarity;
+  previewColor: string;
+  appearancePatch: Record<string, unknown>;
+  owned: boolean;
+  equipped: boolean;
+  canAfford: boolean;
+}
+
+export interface ShopCatalogResponse {
+  currency: string;
+  relicsBalance: number;
+  categories: ShopCatalogCategory[];
+  totalItems: number;
+  items: ShopItem[];
+}
+
+export interface ShopPurchaseHistoryEntry {
+  itemId: string;
+  priceRelics: number;
+  purchasedAt: string;
+}
+
+export interface ShopInventoryResponse {
+  relicsBalance: number;
+  unlockedItems: string[];
+  equippedItems?: string[];
+  equipped?: string[];
+  appearance?: Record<string, unknown>;
+  purchaseHistory?: ShopPurchaseHistoryEntry[];
+}
+
+export interface ShopPurchaseResponse {
+  purchasedItem: {
+    id: string;
+    category: ShopCategory;
+    priceRelics: number;
+  };
+  relicsBalance: number;
+  relicsSpent: number;
+  unlockedItems: string[];
+  equipped: boolean;
+  appearance: Record<string, unknown>;
+  message?: string;
+}
+
+export interface ShopEquipResponse {
+  equippedItems?: string[];
+  equipped?: string[];
+  appearance: Record<string, unknown>;
+  message?: string;
 }
 
 export interface LeaderboardEntry {
@@ -274,7 +352,7 @@ class ApiClient {
   private async request<T>(
     endpoint: string,
     options: RequestInit = {},
-    requireAuth: boolean = false
+    requireAuth: boolean | 'optional' = false
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
     const headers: Record<string, string> = {
@@ -282,7 +360,8 @@ class ApiClient {
       ...((options.headers as Record<string, string>) || {}),
     };
 
-    if (requireAuth && this.accessToken) {
+    const sendAuth = Boolean(requireAuth && this.accessToken);
+    if (sendAuth && this.accessToken) {
       headers['Authorization'] = `Bearer ${this.accessToken}`;
     }
 
@@ -311,9 +390,16 @@ class ApiClient {
       if (!response.ok) {
         const raw = json?.message || json?.error || '';
         const code = json?.code || response.status.toString();
-        const err = new Error(typeof raw === 'string' ? raw : '');
-        (err as unknown as { code: string; status: number }).code = code;
-        (err as unknown as { status: number }).status = response.status;
+        const err = new Error(typeof raw === 'string' ? raw : '') as Error & {
+          code: string;
+          status: number;
+          details?: Record<string, unknown>;
+        };
+        err.code = code;
+        err.status = response.status;
+        if (json?.details && typeof json.details === 'object') {
+          err.details = json.details as Record<string, unknown>;
+        }
         throw err;
       }
 
@@ -977,6 +1063,88 @@ class ApiClient {
       data: RoomDetail;
     }>(`/rooms/${encodeURIComponent(roomId)}`, { method: 'GET' });
     return res.data ?? null;
+  }
+
+  // --- Shop & Cosmetics Endpoints (/api/v1/shop) ---
+
+  /**
+   * GET /api/v1/shop/catalog
+   * Sends Bearer token when signed in so owned/equipped/canAfford and relicsBalance are accurate.
+   */
+  public async getShopCatalog(params?: {
+    category?: string;
+    rarity?: string;
+    onlyOwned?: boolean;
+  }): Promise<ShopCatalogResponse> {
+    const query = new URLSearchParams();
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.rarity && params.rarity !== 'all') query.set('rarity', params.rarity);
+    if (params?.onlyOwned) query.set('onlyOwned', 'true');
+    const qs = query.toString();
+    const res = await this.request<{
+      status: string;
+      data: ShopCatalogResponse;
+    }>(
+      `/shop/catalog${qs ? `?${qs}` : ''}`,
+      { method: 'GET' },
+      this.accessToken ? 'optional' : false
+    );
+    return res.data ?? (res as unknown as ShopCatalogResponse);
+  }
+
+  /**
+   * GET /api/v1/shop/inventory
+   */
+  public async getShopInventory(): Promise<ShopInventoryResponse> {
+    const res = await this.request<{
+      status: string;
+      data: ShopInventoryResponse;
+    }>('/shop/inventory', { method: 'GET' }, true);
+    return res.data ?? (res as unknown as ShopInventoryResponse);
+  }
+
+  /**
+   * POST /api/v1/shop/purchase
+   */
+  public async purchaseShopItem(
+    itemId: string,
+    autoEquip: boolean = true
+  ): Promise<ShopPurchaseResponse> {
+    const res = await this.request<{
+      status: string;
+      message?: string;
+      data: ShopPurchaseResponse;
+    }>(
+      '/shop/purchase',
+      {
+        method: 'POST',
+        body: JSON.stringify({ itemId, autoEquip }),
+      },
+      true
+    );
+    const data = res.data ?? (res as unknown as ShopPurchaseResponse);
+    return { ...data, message: res.message || data.message };
+  }
+
+  /**
+   * POST /api/v1/shop/equip
+   */
+  public async equipShopItems(itemIds: string | string[]): Promise<ShopEquipResponse> {
+    const body = Array.isArray(itemIds) ? { itemIds } : { itemId: itemIds };
+    const res = await this.request<{
+      status: string;
+      message?: string;
+      data: ShopEquipResponse;
+    }>(
+      '/shop/equip',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+      true
+    );
+    const data = res.data ?? (res as unknown as ShopEquipResponse);
+    return { ...data, message: res.message || data.message };
   }
 
   // --- System Diagnostics (Specification 5) ---

@@ -45,15 +45,15 @@ export function difficultyForLevel(level: number): number {
   return Math.min(1, Math.max(0, (level - 5) / 35));
 }
 
-/** How many orbs are guarded by puzzles: 1 from level 5, 2 from 7, 3 from 12, 4 from 20. */
+/** How many orbs are guarded by puzzles: 1 from level 5, 2 from 7, 3 from 12, 4 from 20, 5 from 28. */
 export function puzzleCountForLevel(level: number): number {
   if (level < 5) return 0;
-  return 1 + (level >= 7 ? 1 : 0) + (level >= 12 ? 1 : 0) + (level >= 20 ? 1 : 0);
+  return 1 + (level >= 7 ? 1 : 0) + (level >= 12 ? 1 : 0) + (level >= 20 ? 1 : 0) + (level >= 28 ? 1 : 0);
 }
 
-/** Orbs to find: 3 until level 11, 4 until 15, then 5. */
+/** Orbs to find: 3 until level 11, 4 until 15, 5 until 27, then 6 at level 28+. */
 export function orbCountForLevel(level: number): number {
-  return level >= 16 ? 5 : level >= 12 ? 4 : 3;
+  return level >= 28 ? 6 : level >= 16 ? 5 : level >= 12 ? 4 : 3;
 }
 
 function mulberry32(seed: number) {
@@ -83,7 +83,7 @@ const STONE: Record<OutdoorThemeId, number> = {
   desert: 0xd9a05b,
   candy: 0xf472b6,
 };
-const ORB_COLORS = [0xf472b6, 0x38bdf8, 0xfacc15, 0x4ade80, 0xc084fc];
+const ORB_COLORS = [0xf472b6, 0x38bdf8, 0xfacc15, 0x4ade80, 0xc084fc, 0xfb7185];
 
 type Puzzle = 'rock' | 'vault' | 'thief' | 'stealth' | 'dungeon';
 type Explore = 'tower' | 'sky' | 'excursion';
@@ -397,10 +397,11 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   };
   const insideTile = (t: Tile, x: number, z: number, margin: number) => Math.abs(x - t.cx) <= T / 2 - margin && Math.abs(z - t.cz) <= T / 2 - margin;
 
-  /** Spiral tower of 7 pads; the orb waits on the top one. */
+  /** Spiral tower of 7–9 pads depending on level; the orb waits on the top one. */
   function tower(t: Tile): boolean {
     const R = 3.3;
     const step = 0.85 + 0.25 * diff;
+    const padCount = level >= 32 ? 9 : level >= 20 ? 8 : 7;
     for (const f of shuffle([...AX])) {
       for (const [ox, oz] of shuffle([
         [0, 0],
@@ -413,7 +414,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
         const cz = t.cz + oz;
         const spin = rng() < 0.5 ? 1 : -1;
         const pads: { x: number; z: number; top: number }[] = [];
-        for (let i = 0; i < 7; i++) {
+        for (let i = 0; i < padCount; i++) {
           const a = Math.PI + spin * i * (Math.PI / 2);
           // local forward = f, lateral = (f.z, -f.x)
           const u = Math.cos(a) * R;
@@ -428,7 +429,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
         pads.forEach((p, i) => ids.push(kit.addPlatform(`${id}_${i}`, p.x, p.top, p.z, 2.8, 2.8, 0.6, pick(padBuilders)).id));
         const last = pads[pads.length - 1];
         placeOrb(last.x, last.top, last.z);
-        const colH = 6 * step + 3;
+        const colH = (padCount - 1) * step + 3;
         const col = new THREE.Mesh(
           new THREE.CylinderGeometry(0.35, 0.35, colH, 10),
           new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.5, transparent: true, opacity: 0.55 })
@@ -595,7 +596,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
         n: 0,
         ids: [t.plat!.id],
       };
-      const n = 2 + Math.floor(diff * 2 + rng());
+      const n = 2 + Math.floor(diff * 3.5 + rng());
       const pool = [segHop, segMover, segCrumble, segBounce, segBridge, t.y > 1 ? segDescent : segHop];
       let last: ((F: Frame) => void) | null = null;
       for (let k = 0; k < n; k++) {
@@ -1221,7 +1222,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   kit.addCheckpoint(2, 'Puerta de la Fortaleza', new THREE.Vector3(1.5, 0, -9.0), new THREE.Vector3(-0.8, 0.2, -7.3));
   hint(new THREE.Vector3(0, 0, -R), 3, '¡La última parte! Sube por la espiral alrededor de la torre hasta la cima. Si caes, vuelves al último santuario');
 
-  const rounds = level >= 20 ? 3 : 2;
+  const rounds = level >= 30 ? 4 : level >= 18 ? 3 : 2;
   const legsN = rounds * 4;
   const DELTA = 1.8;
   const CORNERS = [

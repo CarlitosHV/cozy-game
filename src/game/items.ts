@@ -456,6 +456,12 @@ export class ItemSystem {
     }
   }
 
+  public setVisible(visible: boolean) {
+    for (const p of this.pickups) {
+      p.group.visible = visible && p.available;
+    }
+  }
+
   /** Empties the backpack and stops item effects (new game). */
   public clearInventory(ctx?: ItemUseContext) {
     this.slots.fill(null);

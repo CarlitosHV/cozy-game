@@ -76,8 +76,6 @@ import {
   levelInfo,
   levelHowTo,
   maxPlayableLevel,
-  highestCompleted,
-  nextCompanionUnlock,
   ThemeId,
   syncProgressFromBackend,
   isDevMode,
@@ -103,9 +101,7 @@ import type { ShirtPatternId } from '../game/patterns';
 import { WaitingRoom } from './WaitingRoom';
 import { IconAction } from './IconAction';
 import { EmptyState, HelpTip, TIPS } from './HelpTip';
-import { RecentChips, SuggestionList } from './RecentChips';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { getRecent, pushRecent, RECENT_KEYS } from '../ui/recentMemory';
 import { apiClient, User, PlayerProfileData, FriendUser } from '../services/apiClient';
 import {
   multiplayerClient,
@@ -118,19 +114,20 @@ import { INVENTORY_SIZE, ITEM_INFO, InventoryStatus, STACK_MAX, DURABILITY } fro
 import type { CombatStatus } from '../game/combat';
 import type { LevelHazardStatus } from '../game/levels';
 import type { ItemType } from '../game/items';
-import { CharacterCreator, COMPANION_ICONS } from './CharacterCreator';
+import { COMPANION_ICONS } from './CharacterCreator';
+import { ApexLobby } from './ApexLobby';
 import { ItemThumb } from './ItemThumb';
 import { RatingStars } from './RatingStars';
 import { bestRating } from '../game/rating';
 import { COMPANION_POWERS, CompanionPowerStatus } from '../game/companionPowers';
 import {
+  applyBackendAppearancePatch,
   BodyType,
   CharacterAppearance,
   CompanionStyle,
   COMPANIONS,
   loadAppearance,
   loadRoster,
-  sanitizeAppearance,
 } from '../game/character';
 import {
   PHOTO_FILTERS,
@@ -565,8 +562,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   });
 
   const [selectedMode, setSelectedMode] = useState<GameMode>('free');
-  type TitleStep = 'main' | 'select_level' | 'game_modes' | 'select_character';
-  const [titleStep, setTitleStep] = useState<TitleStep>('main');
   const [pendingLevel, setPendingLevel] = useState<number>(() => {
     const saved = localStorage.getItem('cozy_last_level');
     const parsed = saved ? parseInt(saved, 10) : maxPlayableLevel();
@@ -576,8 +571,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const saved = localStorage.getItem('cozy_last_mode') as GameMode;
     return saved === 'time_trial' || saved === 'chase' || saved === 'free' ? saved : 'free';
   });
-  const [previousTitleStep, setPreviousTitleStep] = useState<'main' | 'select_level' | 'game_modes'>('main');
-  const [titleDraftReady, setTitleDraftReady] = useState(false);
 
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showLevelBrief, setShowLevelBrief] = useState(false);
@@ -607,15 +600,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     }
     return null;
   });
-  const [levelListFilter, setLevelListFilter] = useState<'all' | 'done' | 'todo'>('all');
-  const [levelSearch, setLevelSearch] = useState('');
-  const [recentLevelSearches, setRecentLevelSearches] = useState<string[]>(() =>
-    getRecent(RECENT_KEYS.levelSearches)
-  );
   const [currentUser, setCurrentUser] = useState<User | null>(() => apiClient.getCurrentUser());
   // Developer panel: user name → "Modo desarrollador" → password (remembered in this browser)
   const [showDevPanel, setShowDevPanel] = useState(false);
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const [devAccess, setDevAccessState] = useState(() => hasDevAccess());
   const [devOn, setDevOn] = useState(() => hasDevAccess() && isDevMode());
   const [submittedRunKey, setSubmittedRunKey] = useState<string | null>(null);
@@ -626,10 +613,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [toastTone, setToastTone] = useState<'neutral' | 'success' | 'error'>('neutral');
   const [toastUndo, setToastUndo] = useState<(() => void) | null>(null);
   const toastTimerRef = useRef<number | null>(null);
-  const creatorSnapshotRef = useRef<CharacterAppearance | null>(null);
   const saveProgressAction = useAsyncAction();
   const photoAction = useAsyncAction();
-  const appearanceSaveAction = useAsyncAction();
   const [viewportNarrow, setViewportNarrow] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 900 : false
   );
@@ -669,79 +654,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     }
   }, [gameState, engine]);
 
-  useEffect(() => {
-    if (titleStep === 'select_character') setTitleDraftReady(true);
-  }, [titleStep]);
-
-  // Character Generator
-  const [showCreator, setShowCreator] = useState(false);
   const [appearance, setAppearance] = useState<CharacterAppearance>(() => engine?.playerAppearance ?? loadAppearance());
 
-  const openCreator = () => {
-    creatorSnapshotRef.current = { ...appearance };
-    setShowCreator(true);
-    engine?.setCharacterPreview(true);
-    engine?.setCharacterPreviewFocus('full', true);
-  };
-
-  const cancelCreator = () => {
-    const snap = creatorSnapshotRef.current;
-    if (snap) {
-      setAppearance(snap);
-      engine?.setPlayerAppearance(snap);
-    }
-    creatorSnapshotRef.current = null;
-    setShowCreator(false);
-    if (titleStep === 'select_character') {
-      engine?.setCharacterPreview(true);
-    } else {
-      engine?.setCharacterPreview(false);
-    }
-  };
-
-  const closeCreator = () => {
-    creatorSnapshotRef.current = null;
-    setShowCreator(false);
-    if (titleStep === 'select_character') {
-      engine?.setCharacterPreview(true);
-    } else {
-      engine?.setCharacterPreview(false);
-    }
-    if (apiClient.isAuthenticated()) {
-      void appearanceSaveAction
-        .run(
-          async () => {
-            await apiClient.updateAppearance(appearance);
-          },
-          {
-            silentSuccess: true,
-            errorMessage: (err) =>
-              friendlyError(
-                err,
-                'No se guardó el aspecto. Revisa tu conexión e inténtalo otra vez.'
-              ),
-          }
-        )
-        .then((result) => {
-          if (result.ok) {
-            showToast('Aspecto guardado', 2200, 'success');
-          } else {
-            showToast(
-              friendlyError(
-                result.error,
-                'No se guardó el aspecto. Revisa tu conexión e inténtalo otra vez.'
-              ),
-              2600,
-              'error'
-            );
-          }
-        });
-    }
-  };
-
-  const handleAppearanceChange = (next: CharacterAppearance) => {
+  const handleAppearanceChange = (next: CharacterAppearance, syncServer: boolean = true) => {
     setAppearance(next);
-    engine?.setPlayerAppearance(next);
+    engine?.setPlayerAppearance(next, true, true);
+    if (syncServer && apiClient.isAuthenticated()) {
+      apiClient.updateAppearance(next).catch(() => {});
+    }
   };
 
   // Chico / Chica: each keeps its own saved customization
@@ -754,7 +674,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const handleEquipPattern = (pattern: ShirtPatternId) => {
     const next: CharacterAppearance = { ...appearance, shirtPattern: pattern };
     setAppearance(next);
-    engine?.setPlayerAppearance(next);
+    engine?.setPlayerAppearance(next, true, true);
     if (apiClient.isAuthenticated()) {
       apiClient.updateAppearance(next).catch(() => {});
     }
@@ -773,14 +693,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       unsubCompleted();
     };
   }, []);
-
-  // The creator only lives on the title screen
-  useEffect(() => {
-    if (gameState !== 'title' && showCreator) {
-      setShowCreator(false);
-      engine?.setCharacterPreview(false);
-    }
-  }, [gameState, showCreator, engine]);
 
   const clearToast = () => {
     if (toastTimerRef.current !== null) {
@@ -822,8 +734,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     setShowAuthModal(false);
     setPendingLevel(levelId);
     setPendingMode('free');
-    setTitleStep('main');
-    setShowCreator(false);
+    engine.setTempPreviewAppearance(null);
+    engine.setLobbyCameraMode('orbit');
     engine.setCharacterPreview(false);
     engine.setPartyRoom(roomId, false);
     sessionStorage.setItem(
@@ -1125,19 +1037,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const shownPower: CompanionPowerStatus | null =
     bossAct && power ? { ...power, state: bossAct.cd > 0 ? 'hungry' : 'ready', timeLeft: bossAct.cd, duration: bossAct.cdMax } : power;
 
-  // Level selection on the title screen (the world behind the menu switches too)
-  // Default to the furthest level reached ("continue")
-  const [selectedLevel, setSelectedLevel] = useState<number>(() => maxPlayableLevel());
-  const pickLevel = (id: number) => {
-    setSelectedLevel(id);
-    engine?.loadLevel(id);
-  };
-  // Show the selected level behind the title menu once the engine exists
+  // Show the pending level's theme behind the lobby once the engine exists
   useEffect(() => {
-    if (engine && gameState === 'title' && engine.currentLevel !== selectedLevel && isLevelUnlocked(selectedLevel)) {
-      engine.loadLevel(selectedLevel);
+    if (engine && gameState === 'title' && engine.currentLevel !== pendingLevel && isLevelUnlocked(pendingLevel)) {
+      engine.loadLevel(pendingLevel);
     }
-  }, [engine, gameState]);
+  }, [engine, gameState, pendingLevel]);
 
   // Photo Mode Studio State
   const [photoFilter, setPhotoFilter] = useState<PhotoFilter>('natural');
@@ -1161,8 +1066,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       showSettingsModal ||
       showDailyMissions ||
       showAuthModal ||
+      showPartyModal ||
       showLeaderboardModal ||
-      showCreator ||
       showBackpack ||
       Boolean(confirmRequest) ||
       Boolean(capturedPhotoUrl) ||
@@ -1179,8 +1084,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showSettingsModal,
     showDailyMissions,
     showAuthModal,
+    showPartyModal,
     showLeaderboardModal,
-    showCreator,
     showBackpack,
     confirmRequest,
     capturedPhotoUrl,
@@ -1195,8 +1100,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showDailyMissions ||
     Boolean(easterEggData) ||
     showBackpack ||
-    showCreator ||
     showAuthModal ||
+    showPartyModal ||
     showLeaderboardModal ||
     Boolean(capturedPhotoUrl) ||
     Boolean(incomingInvite) ||
@@ -1259,22 +1164,37 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   const handleProfileSynced = (profile: PlayerProfileData) => {
     setCurrentUser(apiClient.getCurrentUser());
+    if (profile.progress?.maxUnlockedLevel) {
+      syncProgressFromBackend(
+        profile.progress.maxUnlockedLevel - 1,
+        profile.progress.unlockedCompanions
+      );
+      const nextLvl = profile.progress.maxUnlockedLevel;
+      if (pendingLevel < nextLvl && !getDevLevelPick()) {
+        setPendingLevel(nextLvl);
+        localStorage.setItem('cozy_last_level', String(nextLvl));
+        if (engine && gameState === 'title') engine.loadLevel(nextLvl);
+      }
+    } else if (profile.progress?.unlockedCompanions) {
+      syncProgressFromBackend(0, profile.progress.unlockedCompanions);
+    }
     if (profile.appearance && engine) {
       const saved = profile.appearance as Record<string, unknown>;
-      // Only a character saved by the game itself is complete; older profiles hold the server's
-      // default look and would replace the one you made. In that case upload yours instead.
-      const madeInGame = 'sweaterColor' in saved || 'outfitStyle' in saved || 'eyeStyle' in saved;
+      const madeInGame =
+        'sweaterColor' in saved ||
+        'outfitStyle' in saved ||
+        'eyeStyle' in saved ||
+        'shirtColor' in saved ||
+        'shirtStyle' in saved ||
+        'hat' in saved ||
+        'companion' in saved;
       if (madeInGame) {
-        const fullAppearance = sanitizeAppearance({ ...appearance, ...saved });
+        const fullAppearance = applyBackendAppearancePatch(appearance, saved, true);
         setAppearance(fullAppearance);
-        engine.setPlayerAppearance(fullAppearance);
+        engine.setPlayerAppearance(fullAppearance, true, true);
       } else if (apiClient.isAuthenticated()) {
         apiClient.updateAppearance(appearance).catch(() => {});
       }
-    }
-    if (profile.progress?.maxUnlockedLevel) {
-      syncProgressFromBackend(profile.progress.maxUnlockedLevel - 1);
-      setSelectedLevel(profile.progress.maxUnlockedLevel);
     }
     if (gameState === 'victory') {
       void submitVictoryRun(true);
@@ -1326,8 +1246,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     isMobileUi &&
     isPortraitPlay &&
     !dismissPortraitHint &&
-    !showCreator &&
-    (gameState === 'playing' || gameState === 'title');
+    gameState === 'playing';
 
   // Switch dynamically if user uses touch or keyboard
   useEffect(() => {
@@ -1523,8 +1442,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         e.preventDefault();
         if (saveProgressAction.busy) return;
         if (engine && isLevelUnlocked(engine.currentLevel + 1)) {
+          const nextLvl = engine.currentLevel + 1;
           setElapsedTime(0);
-          setSelectedLevel(engine.currentLevel + 1);
+          setPendingLevel(nextLvl);
+          localStorage.setItem('cozy_last_level', String(nextLvl));
           engine.goToNextLevel();
         } else {
           handleReturnToTitle();
@@ -1548,29 +1469,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         e.preventDefault();
         handleRestart(engine?.gameOverReason ? gameMode : 'time_trial');
         return;
-      }
-
-      if (
-        gameState === 'title' &&
-        titleStep === 'select_level' &&
-        !showCreator
-      ) {
-        const lvlMatch = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);
-        if (lvlMatch) {
-          const lvl = parseInt(lvlMatch[1], 10);
-          if (isLevelUnlocked(lvl)) {
-            e.preventDefault();
-            setPendingLevel(lvl);
-            engine?.loadLevel(lvl);
-            engine?.setCharacterPreview(true);
-            setPreviousTitleStep('select_level');
-            setTitleStep('select_character');
-          } else {
-            e.preventDefault();
-            showToast(`El nivel ${lvl} está bloqueado. Completa el nivel ${lvl - 1} para desbloquear.`, 2200, 'neutral');
-          }
-          return;
-        }
       }
 
       if (gameState === 'playing' && e.shiftKey) {
@@ -1636,7 +1534,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   }, [
     gameState,
     gameMode,
-    titleStep,
     photoFilter,
     photoFrame,
     capturedPhotoUrl,
@@ -1647,8 +1544,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showLobby,
     showLeaderboardModal,
     showAuthModal,
+    showPartyModal,
     showBackpack,
-    showCreator,
     confirmRequest,
     incomingInvite,
     inventory,
@@ -1711,21 +1608,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const targetLevel = levelToStart ?? pendingLevel;
     localStorage.setItem('cozy_last_mode', targetMode);
     localStorage.setItem('cozy_last_level', String(targetLevel));
-    setTitleDraftReady(false);
     setElapsedTime(0);
     runStartTimeRef.current = performance.now();
     setSubmittedRunKey(null);
     saveProgressAction.clearFeedback();
     if (engine) {
+      engine.setTempPreviewAppearance(null);
+      engine.setLobbyCameraMode('orbit');
       engine.setCharacterPreview(false);
       engine.startGame(targetMode, targetLevel);
     }
-  };
-
-  const resumeTitleDraft = () => {
-    engine?.loadLevel(pendingLevel);
-    engine?.setCharacterPreview(true);
-    setTitleStep('select_character');
   };
 
   const handleRestart = (modeToRestart?: GameMode) => {
@@ -1741,11 +1633,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     sessionStorage.removeItem('cozy_party_session');
     setPartyMembers([]);
     setElapsedTime(0);
-    setTitleStep('main');
-    setTitleDraftReady(false);
     multiplayerClient.leaveRoom();
     if (engine) {
-      engine.setCharacterPreview(false);
+      setPendingLevel(engine.currentLevel);
+      localStorage.setItem('cozy_last_level', String(engine.currentLevel));
+      engine.setTempPreviewAppearance(null);
       engine.returnToTitle();
     }
   };
@@ -1864,24 +1756,52 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {/* ======================================================== */}
-      {/* 1. TITLE SCREEN OVERLAY                                  */}
+      {/* 1. APEX-STYLE 3D LOBBY & COSMETICS SHOP                  */}
       {/* ======================================================== */}
-      {gameState === 'title' && showCreator && (
-        <CharacterCreator
+      {gameState === 'title' && (
+        <ApexLobby
+          engine={engine}
           appearance={appearance}
-          onChange={handleAppearanceChange}
-          onSwitchBody={handleSwitchBody}
-          onClose={closeCreator}
-          onCancel={cancelCreator}
+          currentUser={currentUser}
+          pendingLevel={pendingLevel}
+          pendingMode={pendingMode}
           portrait={isPortrait}
-          onFocusChange={(focus) => engine?.setCharacterPreviewFocus(focus)}
-          onZoom={(delta) => engine?.adjustCharacterPreviewZoom(delta)}
+          isFullscreen={isFullscreen}
+          toggleFullscreen={toggleFullscreen}
+          partyMembers={partyMembers}
+          rejoinSession={rejoinSession}
+          claimableMissions={claimableMissions}
+          devOn={devOn}
+          onPendingLevelChange={setPendingLevel}
+          onPendingModeChange={setPendingMode}
+          onStartGame={handleStartGame}
+          onAppearanceChange={handleAppearanceChange}
+          onSwitchBody={handleSwitchBody}
+          onEquipPattern={handleEquipPattern}
+          onOpenAuth={() => setShowAuthModal(true)}
+          onOpenParty={() => setShowPartyModal(true)}
+          onOpenLeaderboard={(lvl) => {
+            setLeaderboardLevelId(lvl);
+            setShowLeaderboardModal(true);
+          }}
+          onOpenHelp={() => setShowHelpModal(true)}
+          onOpenSettings={() => setShowSettingsModal(true)}
+          onOpenDevPanel={() => setShowDevPanel(true)}
+          onRejoinSession={(roomId, levelId) => {
+            setRejoinSession(null);
+            enterPartyRoom(levelId, roomId);
+          }}
+          onDismissRejoin={() => {
+            sessionStorage.removeItem('cozy_party_session');
+            setRejoinSession(null);
+          }}
+          onToast={showToast}
         />
       )}
 
       {(toastMessage || (gameState === 'playing' && weatherNotice && !toastMessage)) && (
         <div
-          className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-auto z-[70] transition-all duration-200 ease-out animate-in fade-in zoom-in-95 max-w-[min(92vw,24rem)]"
+          className="absolute top-16 left-1/2 -translate-x-1/2 pointer-events-auto z-[70] transition-all duration-200 ease-out animate-in fade-in zoom-in-95 max-w-[min(92vw,24rem)]"
         >
           <div
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-medium border ${
@@ -1929,634 +1849,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             >
               <X className="w-3 h-3" />
             </button>
-          </div>
-        </div>
-      )}
-
-      {gameState === 'title' && !showCreator && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto cozy-scrim text-cozy-ink p-3 sm:p-6 pt-safe pb-safe transition-opacity duration-500 overflow-y-auto font-ui">
-          {isMobileUi && toggleFullscreen && (
-            <div className="absolute top-safe right-0 pt-3 pr-3 pr-safe flex items-center gap-1.5 z-20">
-              <IconAction
-                label={UI.screenShort}
-                title={isFullscreen ? UI.exitFullscreen : UI.fullscreen}
-                compact
-                className="text-cozy-accent-deep"
-                onClick={() => {
-                  void runFullscreenToggle();
-                }}
-              >
-                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-              </IconAction>
-            </div>
-          )}
-          <div className="w-full max-w-sm rounded-[1.75rem] cozy-panel p-5 sm:p-6 flex flex-col my-auto transition-all animate-in fade-in zoom-in-95">
-
-            {titleStep === 'main' && (
-              <div className="flex flex-col items-center text-center gap-8">
-                <div className="space-y-2">
-                  <h1 className="font-display font-bold text-3xl sm:text-4xl text-cozy-ink tracking-wide">
-                    Cozy Leap
-                  </h1>
-                  <p className="text-sm text-cozy-muted">
-                    Islas cálidas y saltos suaves
-                  </p>
-                </div>
-
-                {rejoinSession && (
-                  <div className="w-full p-3 rounded-2xl bg-[#fff2db] border border-[#f0d4a3] text-stone-900 flex items-center justify-between gap-2 shadow-xs">
-                    <div className="flex items-center gap-2 text-left min-w-0">
-                      <Users className="w-4 h-4 text-amber-700 shrink-0" />
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold truncate">Sala multijugador previa</p>
-                        <p className="text-[10px] text-stone-600 truncate">Nivel {rejoinSession.levelId} · ¿Deseas volver a entrar?</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const s = rejoinSession;
-                          setRejoinSession(null);
-                          enterPartyRoom(s.levelId, s.roomId);
-                        }}
-                        className="px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-[11px] cursor-pointer shadow-xs active:scale-95 transition-all"
-                      >
-                        Volver
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          sessionStorage.removeItem('cozy_party_session');
-                          setRejoinSession(null);
-                        }}
-                        className="p-1 rounded-lg text-stone-500 hover:text-stone-800 cursor-pointer"
-                        title="Cerrar aviso"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="w-full flex flex-col gap-5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const lvl = maxPlayableLevel() > 1 ? maxPlayableLevel() : 1;
-                      setPendingLevel(lvl);
-                      setPendingMode('free');
-                      engine?.loadLevel(lvl);
-                      engine?.setCharacterPreview(true);
-                      setPreviousTitleStep('main');
-                      setTitleStep('select_character');
-                    }}
-                    className={`${BTN.primary} flex items-center justify-center gap-2`}
-                  >
-                    <Play className="w-5 h-5 fill-current" />
-                    <span>{maxPlayableLevel() > 1 ? UI.continue : UI.start}</span>
-                  </button>
-                  {maxPlayableLevel() > 1 && (
-                    <p className="text-[11px] text-cozy-muted -mt-3">
-                      Nivel {maxPlayableLevel()} · {levelInfo(maxPlayableLevel()).name}
-                    </p>
-                  )}
-
-                  <div className="w-full flex flex-col gap-2 pt-1">
-                    {maxPlayableLevel() > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPendingLevel(1);
-                          setPendingMode('free');
-                          engine?.loadLevel(1);
-                          engine?.setCharacterPreview(true);
-                          setPreviousTitleStep('main');
-                          setTitleStep('select_character');
-                        }}
-                        className={BTN.ghost}
-                      >
-                        {UI.newGame}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setTitleStep('select_level')}
-                      className={BTN.ghost}
-                    >
-                      {UI.selectLevel}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTitleStep('game_modes')}
-                      className={BTN.ghost}
-                    >
-                      {UI.gameModes}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={openCreator}
-                      className={`${BTN.ghost} inline-flex items-center justify-center gap-2`}
-                      data-testid="menu-customize"
-                    >
-                      <UserRound className="w-4 h-4" />
-                      Personalizar personaje
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowDailyMissions(true)}
-                      className={`${BTN.ghost} inline-flex items-center justify-center gap-2`}
-                      data-testid="menu-daily-missions"
-                    >
-                      <Gift className={`w-4 h-4 ${claimableMissions > 0 ? 'text-cozy-accent-deep' : ''}`} />
-                      <span>Misiones diarias</span>
-                      {claimableMissions > 0 && (
-                        <span className="text-[11px] font-bold text-cozy-accent-deep tabular-nums">
-                          · {claimableMissions} {claimableMissions === 1 ? 'lista' : 'listas'}
-                        </span>
-                      )}
-                    </button>
-                  </div>
-
-                  <div className="w-full pt-4 mt-1 border-t border-cozy-line flex items-center justify-center gap-4 text-xs text-cozy-muted">
-                    <button
-                      type="button"
-                      onClick={() => setShowHelpModal(true)}
-                      className="hover:text-cozy-ink cursor-pointer inline-flex items-center gap-1"
-                    >
-                      <HelpCircle className="w-3.5 h-3.5" />
-                      {UI.helpShort}
-                    </button>
-                    <span className="inline-flex items-center gap-0.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLeaderboardLevelId(engine?.currentLevel ?? pendingLevel ?? 1);
-                          setShowLeaderboardModal(true);
-                        }}
-                        className="hover:text-cozy-ink cursor-pointer"
-                      >
-                        {UI.rankingShort}
-                      </button>
-                      <HelpTip label={TIPS.ranking} />
-                    </span>
-                    <span className="relative inline-flex">
-                      <button
-                        type="button"
-                        onClick={() => setShowUserMenu((v) => !v)}
-                        aria-haspopup="menu"
-                        aria-expanded={showUserMenu}
-                        className="hover:text-cozy-ink cursor-pointer font-semibold inline-flex items-center gap-1"
-                      >
-                        {currentUser ? currentUser.displayName || currentUser.username : UI.enter}
-                        {devOn && (
-                          <span className="px-1 py-px rounded bg-sky-500 text-white text-[9px] font-bold leading-none tracking-wide">DEV</span>
-                        )}
-                      </button>
-                      {showUserMenu && (
-                        <>
-                          <button
-                            type="button"
-                            aria-label="Cerrar menú"
-                            className="fixed inset-0 z-40 cursor-default"
-                            onClick={() => setShowUserMenu(false)}
-                          />
-                          <div
-                            role="menu"
-                            className="absolute bottom-full right-0 mb-2 z-50 w-52 rounded-2xl cozy-panel p-1.5 flex flex-col shadow-xl text-left"
-                          >
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                setShowUserMenu(false);
-                                setShowAuthModal(true);
-                              }}
-                              className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-cozy-ink hover:bg-cozy-panel-deep/60 cursor-pointer"
-                            >
-                              <UserRound className="w-4 h-4 text-cozy-muted" />
-                              {currentUser ? 'Mi cuenta' : UI.enter}
-                            </button>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                setShowUserMenu(false);
-                                setShowDevPanel(true);
-                              }}
-                              className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-cozy-ink hover:bg-cozy-panel-deep/60 cursor-pointer"
-                            >
-                              <Bug className="w-4 h-4 text-cozy-sky" />
-                              Modo desarrollador
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {titleStep === 'select_level' && (
-              <div className="flex flex-col gap-5">
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => setTitleStep(previousTitleStep === 'game_modes' ? 'game_modes' : 'main')}
-                    className={BTN.back}
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                    <span>{UI.back}</span>
-                  </button>
-                  <span className="text-sm font-bold text-cozy-ink font-display">
-                    Elegir nivel · Modo {pendingMode === 'time_trial' ? 'Contrarreloj' : pendingMode === 'chase' ? 'Persecución' : 'Libre'}
-                  </span>
-                  <span className="w-10" />
-                </div>
-
-                {/* Mode Selector pills: let player choose mode directly while picking level */}
-                <div className="flex items-center gap-1.5 p-1 bg-cozy-panel-deep rounded-2xl border border-cozy-line">
-                  <button
-                    type="button"
-                    onClick={() => setPendingMode('free')}
-                    className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                      pendingMode === 'free' ? 'cozy-tab-active shadow-xs' : 'text-cozy-muted hover:text-cozy-ink'
-                    }`}
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Libre</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPendingMode('time_trial')}
-                    className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                      pendingMode === 'time_trial' ? 'cozy-tab-active shadow-xs' : 'text-cozy-muted hover:text-cozy-ink'
-                    }`}
-                  >
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>Contrarreloj</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPendingMode('chase')}
-                    className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                      pendingMode === 'chase' ? 'cozy-tab-active shadow-xs' : 'text-cozy-muted hover:text-cozy-ink'
-                    }`}
-                  >
-                    <Timer className="w-3.5 h-3.5" />
-                    <span>Persecución</span>
-                  </button>
-                </div>
-
-                {maxPlayableLevel() > 4 && (
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-cozy-soft" />
-                    <input
-                      type="search"
-                      value={levelSearch}
-                      onChange={(e) => setLevelSearch(e.target.value)}
-                      placeholder={UI.searchLevel}
-                      className="w-full pl-9 pr-3 py-2 rounded-xl cozy-input text-xs"
-                      aria-label={UI.searchLevel}
-                    />
-                    <SuggestionList
-                      query={levelSearch}
-                      options={Array.from({ length: maxPlayableLevel() }, (_, i) => {
-                        const id = i + 1;
-                        const info = levelInfo(id);
-                        return `Nivel ${id} · ${info.name}`;
-                      })}
-                      onPick={(value) => setLevelSearch(value)}
-                    />
-                  </div>
-                )}
-                {recentLevelSearches.length > 0 && (
-                  <RecentChips
-                    label={UI.recentSearches}
-                    items={recentLevelSearches}
-                    onPick={(value) => setLevelSearch(value)}
-                  />
-                )}
-
-                <div className="flex items-center gap-2">
-                  {(
-                    [
-                      { id: 'all' as const, label: 'Todos' },
-                      { id: 'todo' as const, label: 'Pendientes' },
-                      { id: 'done' as const, label: 'Hechos' },
-                    ] as const
-                  ).map((f) => (
-                    <button
-                      key={f.id}
-                      type="button"
-                      onClick={() => setLevelListFilter(f.id)}
-                      className={`px-2.5 py-1 rounded-xl text-[10px] font-bold cursor-pointer ${
-                        levelListFilter === f.id ? 'cozy-tab-active' : 'text-cozy-muted hover:text-cozy-ink'
-                      }`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-
-                {titleDraftReady && (
-                  <button
-                    type="button"
-                    onClick={resumeTitleDraft}
-                    className={`${BTN.secondary} flex items-center justify-center gap-2`}
-                  >
-                    <ArrowRight className="w-4 h-4" />
-                    <span>
-                      Seguir con nivel {pendingLevel}
-                      {pendingMode === 'time_trial'
-                        ? ' · Contrarreloj'
-                        : pendingMode === 'chase'
-                          ? ' · Persecución'
-                          : ''}
-                    </span>
-                  </button>
-                )}
-
-                <div className="flex flex-col gap-3 max-h-[48vh] overflow-y-auto pr-1">
-                  {(() => {
-                    const totalLevelsToShow = Math.max(5, maxPlayableLevel());
-                    const levels = Array.from({ length: totalLevelsToShow }, (_, i) => i + 1)
-                      .filter((lvl) => {
-                        const completed = isLevelCompleted(lvl);
-                        if (levelListFilter === 'done') return completed;
-                        if (levelListFilter === 'todo') return !completed;
-                        return true;
-                      })
-                      .filter((lvl) => {
-                        const q = levelSearch.trim().toLowerCase();
-                        if (!q) return true;
-                        const info = levelInfo(lvl);
-                        return (
-                          `nivel ${lvl}`.includes(q) ||
-                          String(lvl) === q ||
-                          info.name.toLowerCase().includes(q) ||
-                          info.desc.toLowerCase().includes(q)
-                        );
-                      });
-                    if (levels.length === 0) {
-                      return (
-                        <EmptyState
-                          title="Nada por aquí"
-                          body={
-                            levelSearch.trim()
-                              ? 'Ningún nivel coincide con tu búsqueda. Prueba otra palabra o limpia el filtro.'
-                              : 'Con este filtro no hay niveles. Elige Todos para ver la lista completa.'
-                          }
-                          actionLabel="Ver todos"
-                          onAction={() => {
-                            setLevelListFilter('all');
-                            setLevelSearch('');
-                          }}
-                        />
-                      );
-                    }
-                    return levels.map((lvl) => {
-                      const info = levelInfo(lvl);
-                      const completed = isLevelCompleted(lvl);
-                      const unlocked = isLevelUnlocked(lvl);
-
-                      if (!unlocked) {
-                        return (
-                          <div
-                            key={lvl}
-                            onClick={() =>
-                              showToast(
-                                `El nivel ${lvl} está bloqueado. Completa el nivel ${lvl - 1} para desbloquear.`,
-                                2200,
-                                'neutral'
-                              )
-                            }
-                            className="flex items-center gap-3 p-3.5 rounded-2xl bg-cozy-panel-deep/50 border border-cozy-line/50 text-left opacity-60 cursor-not-allowed group select-none transition-opacity hover:opacity-75"
-                          >
-                            <span className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 bg-stone-300/30 text-cozy-muted">
-                              <Lock className="w-4 h-4 text-cozy-soft" />
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm font-bold text-cozy-muted truncate">
-                                Nivel {lvl} · {info.name}
-                              </div>
-                              <div className="text-[10px] text-cozy-soft">
-                                Bloqueado · Completa el nivel {lvl - 1} para desbloquear
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <button
-                          key={lvl}
-                          onClick={() => {
-                            const label = `Nivel ${lvl} · ${info.name}`;
-                            setRecentLevelSearches(pushRecent(RECENT_KEYS.levelSearches, label));
-                            setPendingLevel(lvl);
-                            if (getDevLevelPick()) {
-                              // Back to the normal levels: forget the world picked in the developer panel
-                              setDevLevelPick(null);
-                              engine?.reloadLevel(lvl);
-                            }
-                            engine?.loadLevel(lvl);
-                            engine?.setCharacterPreview(true);
-                            setPreviousTitleStep('select_level');
-                            setTitleStep('select_character');
-                          }}
-                          className="flex items-center gap-3 p-3.5 rounded-2xl cozy-btn text-left cursor-pointer active:scale-[0.98] group"
-                        >
-                          <span
-                            className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm shrink-0"
-                            style={{ backgroundColor: `${info.accent}28`, color: info.accent }}
-                          >
-                            {lvl}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-bold text-cozy-ink truncate">{info.name}</div>
-                            {completed && (
-                              <div className="text-[10px] text-cozy-moss font-semibold">{UI.done}</div>
-                            )}
-                          </div>
-                          <ChevronRight className="w-4 h-4 text-cozy-soft shrink-0" />
-                        </button>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
-            )}
-
-            {titleStep === 'game_modes' && (
-              <div className="flex flex-col gap-6">
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => setTitleStep('main')}
-                    className={BTN.back}
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                    <span>{UI.back}</span>
-                  </button>
-                  <span className="text-sm font-bold text-cozy-ink font-display">{UI.gameModes}</span>
-                  <span className="w-10" />
-                </div>
-
-                <div className="flex flex-col gap-4">
-                  {titleDraftReady && (
-                    <button
-                      type="button"
-                      onClick={resumeTitleDraft}
-                      className={`${BTN.secondary} flex items-center justify-center gap-2`}
-                    >
-                      <ArrowRight className="w-4 h-4" />
-                      <span>
-                        Seguir con nivel {pendingLevel}
-                        {pendingMode === 'time_trial'
-                          ? ' · Contrarreloj'
-                          : pendingMode === 'chase'
-                            ? ' · Persecución'
-                            : ' · Libre'}
-                      </span>
-                    </button>
-                  )}
-                  {/* Bug fix & feature: Selecting a mode now takes the player to level select with that mode active */}
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setPendingMode('free');
-                        setPreviousTitleStep('game_modes');
-                        setTitleStep('select_level');
-                      }}
-                      className={`${BTN.primary} flex-1 flex items-center justify-center gap-2`}
-                    >
-                      <Sparkles className="w-4 h-4" />
-                      <span>Modo Libre</span>
-                    </button>
-                    <HelpTip label="Explora a tu propio ritmo sin límite de tiempo ni sombras acechadoras." side="bottom" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setPendingMode('time_trial');
-                        setPreviousTitleStep('game_modes');
-                        setTitleStep('select_level');
-                      }}
-                      className={`${BTN.secondary} flex-1 flex items-center justify-center gap-2`}
-                    >
-                      <Clock className="w-4 h-4" />
-                      <span>Contrarreloj</span>
-                    </button>
-                    <HelpTip label={TIPS.contrarreloj} side="bottom" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setPendingMode('chase');
-                        setPreviousTitleStep('game_modes');
-                        setTitleStep('select_level');
-                      }}
-                      className={`${BTN.secondary} flex-1 flex items-center justify-center gap-2`}
-                    >
-                      <Timer className="w-4 h-4" />
-                      <span>Persecución</span>
-                    </button>
-                    <HelpTip label={TIPS.persecucion} side="bottom" />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {titleStep === 'select_character' && (
-              <div className="flex flex-col gap-6">
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => {
-                      engine?.setCharacterPreview(false);
-                      setTitleStep(previousTitleStep);
-                    }}
-                    className={BTN.back}
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                    <span>{UI.back}</span>
-                  </button>
-                  <span className="text-sm font-bold text-cozy-ink font-display">{UI.pickCharacter}</span>
-                  <span className="w-10" />
-                </div>
-
-                <p className="text-xs text-cozy-muted text-center leading-relaxed -mt-2">
-                  Nivel {pendingLevel} · {levelInfo(pendingLevel).name}
-                  {' · '}
-                  {pendingMode === 'time_trial'
-                    ? 'Contrarreloj'
-                    : pendingMode === 'chase'
-                      ? 'Persecución'
-                      : 'Libre'}
-                </p>
-
-                <div className="grid grid-cols-2 gap-2 p-1 bg-cozy-panel-deep rounded-2xl border border-cozy-line">
-                  <button
-                    type="button"
-                    onClick={() => handleSwitchBody('chico')}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                      appearance.bodyType === 'chico'
-                        ? 'cozy-tab-active'
-                        : 'text-cozy-muted hover:text-cozy-ink'
-                    }`}
-                  >
-                    <span>Chico</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSwitchBody('chica')}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                      appearance.bodyType === 'chica'
-                        ? 'cozy-tab-active'
-                        : 'text-cozy-muted hover:text-cozy-ink'
-                    }`}
-                  >
-                    <span>Chica</span>
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0 text-left">
-                    <span
-                      className="w-11 h-11 rounded-xl flex items-center justify-center border border-cozy-line shadow-inner shrink-0"
-                      style={{ background: `linear-gradient(135deg, ${appearance.sweaterColor}, ${appearance.scarfColor})` }}
-                    >
-                      <UserRound className="w-5 h-5 text-white drop-shadow" />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="text-sm font-bold text-cozy-ink truncate">
-                        {appearance.name || (appearance.bodyType === 'chico' ? 'Viajero' : 'Viajera')}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={openCreator}
-                        className="text-[11px] font-semibold text-cozy-sky hover:text-cozy-ink cursor-pointer"
-                      >
-                        {UI.editLook}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleStartGame(pendingMode, pendingLevel)}
-                  className={`${BTN.primary} flex items-center justify-center gap-2 mt-1`}
-                >
-                  <Play className="w-5 h-5 fill-current" />
-                  <span>
-                    {previousTitleStep === 'main' && maxPlayableLevel() > 1 && pendingLevel === maxPlayableLevel()
-                      ? UI.continue
-                      : UI.start}
-                  </span>
-                </button>
-              </div>
-            )}
-
           </div>
         </div>
       )}
@@ -4260,8 +3552,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </button>
             )}
 
-            <div className="w-full flex flex-col gap-3">
-              {engine && isLevelUnlocked(engine.currentLevel + 1) ? (
+            <div className="w-full flex flex-col gap-2.5">
+              {engine && isLevelUnlocked(engine.currentLevel + 1) && (
                 <button
                   type="button"
                   disabled={saveProgressAction.busy}
@@ -4270,7 +3562,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     runStartTimeRef.current = performance.now();
                     setSubmittedRunKey(null);
                     saveProgressAction.clearFeedback();
-                    setSelectedLevel(engine.currentLevel + 1);
+                    const nextLvl = engine.currentLevel + 1;
+                    setPendingLevel(nextLvl);
+                    localStorage.setItem('cozy_last_level', String(nextLvl));
                     engine.goToNextLevel();
                   }}
                   className={`${BTN.primary} flex items-center justify-center gap-2`}
@@ -4279,23 +3573,22 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <span>{saveProgressAction.busy ? 'Guardando...' : 'Siguiente'}</span>
                   {!saveProgressAction.busy && <ArrowRight className="w-4 h-4 stroke-[2.5]" />}
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={saveProgressAction.busy}
-                  onClick={handleReturnToTitle}
-                  className={BTN.primary}
-                >
-                  {saveProgressAction.busy ? 'Guardando...' : UI.mainMenu}
-                </button>
               )}
               <button
                 type="button"
                 disabled={saveProgressAction.busy}
                 onClick={() => handleRestart(gameMode)}
-                className={BTN.ghost}
+                className={engine && isLevelUnlocked(engine.currentLevel + 1) ? BTN.ghost : BTN.primary}
               >
                 {UI.playAgain}
+              </button>
+              <button
+                type="button"
+                disabled={saveProgressAction.busy}
+                onClick={handleReturnToTitle}
+                className={BTN.ghost}
+              >
+                {saveProgressAction.busy ? 'Guardando...' : UI.mainMenu}
               </button>
               <div className="flex items-center justify-center gap-4 pt-0.5">
                 <button
@@ -4490,7 +3783,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             {/* TAB 2: COMPAÑEROS */}
             {helpTab === 'companions' && (
               <div className="flex flex-col gap-3 animate-in fade-in duration-150">
-                <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-700/40 text-xs text-amber-100/90 leading-relaxed">
+                <div className="p-3.5 rounded-2xl cozy-panel-soft border border-cozy-line text-xs text-cozy-ink leading-relaxed">
                   <strong className="text-cozy-accent-deep block mb-1">Poderes de tu compañero (Tecla G):</strong>
                   <ul className="list-disc list-inside space-y-1.5">
                     {Object.values(COMPANION_POWERS).map((p) =>
@@ -4501,8 +3794,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       ) : null
                     )}
                   </ul>
-                  <div className="mt-3 pt-2.5 border-t border-amber-600/30 text-[11px]">
-                    🍎 <strong>Recarga de energía:</strong> Después de activarlo, tu compañero queda hambriento. Dale una <strong>baya mágica</strong> desde la mochila para volver a usarlo.
+                  <div className="mt-3 pt-2.5 border-t border-cozy-line text-[11px] text-cozy-muted">
+                    🍎 <strong className="text-cozy-ink">Recarga de energía:</strong> Después de activarlo, tu compañero queda hambriento. Dale una <strong className="text-cozy-ink">baya mágica</strong> desde la mochila para volver a usarlo.
                   </div>
                 </div>
               </div>

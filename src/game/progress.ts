@@ -493,6 +493,7 @@ export function unlockLevelFor(c: CompanionStyle): number | undefined {
 
 interface ProgressData {
   highestCompleted: number;
+  unlockedCompanions?: CompanionStyle[];
 }
 
 const STORAGE_KEY = 'aether-leap-progress-v2';
@@ -500,12 +501,15 @@ const LEGACY_KEY = 'aether-leap-progress-v1';
 let cache: ProgressData | null = null;
 
 function read(): ProgressData {
-  const data: ProgressData = { highestCompleted: 0 };
+  const data: ProgressData = { highestCompleted: 0, unlockedCompanions: [] };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (typeof parsed?.highestCompleted === 'number') data.highestCompleted = Math.max(0, Math.floor(parsed.highestCompleted));
+      if (Array.isArray(parsed?.unlockedCompanions)) {
+        data.unlockedCompanions = parsed.unlockedCompanions.filter((c: unknown): c is CompanionStyle => typeof c === 'string');
+      }
     } else {
       // Migrate the first progress format ({ completed: [1, 2, …] })
       const legacy = window.localStorage.getItem(LEGACY_KEY);
@@ -563,15 +567,26 @@ export function isLevelCompleted(level: number): boolean {
   return level <= data().highestCompleted;
 }
 
+export function unlockShopCompanion(c: CompanionStyle): void {
+  if (!c || c === 'ninguno') return;
+  const d = data();
+  if (!d.unlockedCompanions) d.unlockedCompanions = [];
+  if (!d.unlockedCompanions.includes(c)) {
+    d.unlockedCompanions.push(c);
+    persist();
+  }
+}
+
 export function isCompanionUnlocked(c: CompanionStyle): boolean {
   if (c === 'ninguno' || devOn) return true;
+  if (data().unlockedCompanions?.includes(c)) return true;
   const lvl = unlockLevelFor(c);
   return lvl === undefined ? true : data().highestCompleted >= lvl;
 }
 
 /** Next companion still to earn (or null when all are unlocked). */
 export function nextCompanionUnlock(): { companion: CompanionStyle; level: number } | null {
-  return COMPANION_UNLOCKS.find((u) => data().highestCompleted < u.level) ?? null;
+  return COMPANION_UNLOCKS.find((u) => !isCompanionUnlocked(u.companion)) ?? null;
 }
 
 /** Marks a level as finished. Returns the companion unlocked by it for the first time, if any. */
@@ -586,9 +601,19 @@ export function markLevelComplete(level: number): CompanionStyle | null {
 }
 
 /** Synchronizes progress from backend API (sets highestCompleted = maxUnlockedLevel - 1) */
-export function syncProgressFromBackend(highestCompletedLvl: number): void {
+export function syncProgressFromBackend(highestCompletedLvl: number, companions?: string[]): void {
   const d = data();
   d.highestCompleted = Math.max(d.highestCompleted, highestCompletedLvl);
+  if (Array.isArray(companions)) {
+    for (const c of companions) {
+      if (typeof c === 'string' && c !== 'ninguno') {
+        if (!d.unlockedCompanions) d.unlockedCompanions = [];
+        if (!d.unlockedCompanions.includes(c as CompanionStyle)) {
+          d.unlockedCompanions.push(c as CompanionStyle);
+        }
+      }
+    }
+  }
   persist();
 }
 

@@ -49,6 +49,7 @@ export class ParkourPhysics {
   public onFallDeath: (() => void) | null = null;
   /** Last solid ground the player stood on (a little inward from the edge) */
   public lastSafePos: THREE.Vector3 = new THREE.Vector3(0, 0.2, 0);
+  private lastGroundedY: number = 0;
   private carryTimer: number = 0;
   private readonly carryDuration = 1.3;
   private carryFrom = new THREE.Vector3();
@@ -116,6 +117,7 @@ export class ParkourPhysics {
       }
       this.position.copy(targetPos);
       this.lastSafePos.copy(targetPos);
+      this.lastGroundedY = targetPos.y;
       // Keep the 3D model with the body (the title screen & character creator don't run physics)
       this.playerModel.group.position.copy(targetPos);
       this.carryTimer = 0;
@@ -400,16 +402,19 @@ export class ParkourPhysics {
     this.resolveSolidObstacleCollisions();
 
     // 7c. Remember the last safe ground (static islands only), nudged toward the island center
-    if (this.isGrounded && this.currentPlatform && this.currentPlatform.type === 'static') {
-      const plat = this.currentPlatform;
-      this.lastSafePos.copy(this.position);
-      const dx = plat.position.x - this.position.x;
-      const dz = plat.position.z - this.position.z;
-      const len = Math.hypot(dx, dz);
-      if (len > 0.001) {
-        const step = Math.min(len, 1.0);
-        this.lastSafePos.x += (dx / len) * step;
-        this.lastSafePos.z += (dz / len) * step;
+    if (this.isGrounded && this.currentPlatform) {
+      this.lastGroundedY = this.position.y;
+      if (this.currentPlatform.type === 'static') {
+        const plat = this.currentPlatform;
+        this.lastSafePos.copy(this.position);
+        const dx = plat.position.x - this.position.x;
+        const dz = plat.position.z - this.position.z;
+        const len = Math.hypot(dx, dz);
+        if (len > 0.001) {
+          const step = Math.min(len, 1.0);
+          this.lastSafePos.x += (dx / len) * step;
+          this.lastSafePos.z += (dz / len) * step;
+        }
       }
     }
 
@@ -597,7 +602,7 @@ export class ParkourPhysics {
       const cb = this.onRescue;
       this.onRescue = null;
       cb?.();
-    } else if (this.position.y < -9.0) {
+    } else if (this.position.y < -9.0 || this.shouldTriggerHighAltitudeFall()) {
       this.respawnAtCheckpoint();
       this.onFallDeath?.();
     }
@@ -637,6 +642,41 @@ export class ParkourPhysics {
     this.playerModel.updateAnimation(horizSpeed, this.isGrounded, dt, performance.now() * 0.001);
 
     this.wasJumpPressed = input.jump;
+  }
+
+  /** Fast void-fall detection at high altitudes when there is no platform underneath or near the falling player. */
+  private shouldTriggerHighAltitudeFall(): boolean {
+    if (this.isGrounded || this.velocity.y >= -8.0) return false;
+    const referenceY = Math.max(this.lastSafePos.y, this.lastGroundedY);
+    const dropFromSafe = referenceY - this.position.y;
+    const cp = this.world.checkpoints[this.currentCheckpointIndex];
+    const dropFromCp = (cp ? cp.spawnPos.y : 0) - this.position.y;
+    // Wait at least 11.5m so Catarina's 6.5m rescue and intentional ~6m drops never false-trigger
+    if (dropFromSafe < 11.5 && dropFromCp < 11.5) return false;
+
+    const px = this.position.x;
+    const py = this.position.y;
+    const pz = this.position.z;
+
+    for (const plat of this.world.platforms) {
+      if (plat.id === 'summit_shield') continue;
+      if (plat.type === 'crumbling' && plat.crumbleTimer !== undefined && plat.crumbleTimer <= 0) continue;
+      const topY = plat.position.y;
+      if (topY > py + 1.2) continue;
+
+      const halfW = plat.size.x * 0.5;
+      const halfD = plat.size.z * 0.5;
+      const dx = Math.max(0, Math.abs(px - plat.position.x) - halfW);
+      const dz = Math.max(0, Math.abs(pz - plat.position.z) - halfD);
+
+      // Floor directly underneath player within 28m (allows dropping onto lower courtyard / terrain, prevents falling onto distant early parkour floors far below)
+      if (topY >= py - 28.0 && dx <= 2.2 && dz <= 2.2) return false;
+
+      // Nearby platform within reach & vertical catch band
+      if (dx * dx + dz * dz <= 11.0 * 11.0 && topY >= py - 14.0) return false;
+    }
+
+    return true;
   }
 
   private resolvePlatformCollisions(input: PlayerInput) {
