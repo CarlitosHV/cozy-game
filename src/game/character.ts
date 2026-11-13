@@ -31,7 +31,7 @@ export interface CharacterAppearance {
   hatColor: string;
   outfitStyle: OutfitStyle;
   sweaterColor: string;
-  /** Cosmetic fabric pattern unlocked via Daily Missions */
+  /** Cosmetic fabric pattern unlocked via Daily Missions or Shop */
   shirtPattern?: ShirtPatternId;
   /** Secondary outfit color: overall denim, poncho stripes, dress trim, hoodie pocket */
   detailColor: string;
@@ -43,6 +43,17 @@ export interface CharacterAppearance {
   height: number;
   /** Horizontal scale, 0.88 – 1.15 */
   build: number;
+  /** Optional shop cosmetic variant identifiers & tints */
+  hatVariant?: string;
+  outfitVariant?: string;
+  glassesVariant?: string;
+  glassesColor?: string;
+  backpackVariant?: string;
+  backpackColor?: string;
+  hairVariant?: string;
+  skinVariant?: string;
+  accentGlowColor?: string;
+  equippedShopIds?: string[];
 }
 
 export const DEFAULT_APPEARANCE: CharacterAppearance = {
@@ -91,7 +102,7 @@ export const DEFAULT_CHICA: CharacterAppearance = {
 
 export function defaultAppearanceFor(body: BodyType): CharacterAppearance {
   const a = { ...(body === 'chica' ? DEFAULT_CHICA : DEFAULT_APPEARANCE) };
-  // Companions must be earned by finishing their level
+  // Companions must be earned by finishing their level or unlocked via shop
   if (!isCompanionUnlocked(a.companion)) a.companion = 'ninguno';
   return a;
 }
@@ -307,13 +318,32 @@ export interface CharacterRoster {
 const STORAGE_KEY = 'aether-leap-characters-v2';
 const LEGACY_KEY = 'aether-leap-character-v1';
 
+export function normalizeHexColor(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
+  const short = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(s);
+  if (short) {
+    return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`.toLowerCase();
+  }
+  return null;
+}
+
+function cleanVariant(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const s = v.trim().slice(0, 64);
+  if (!s || s.toLowerCase() === 'none' || s.toLowerCase() === 'ninguno' || s.toLowerCase() === 'false') {
+    return undefined;
+  }
+  return s;
+}
+
 /** Merges any partial/old stored data over the defaults so new fields never break. */
 export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote: boolean = false): CharacterAppearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const body: BodyType = forcedBody ?? (r.bodyType === 'chica' ? 'chica' : 'chico');
   const out: CharacterAppearance = defaultAppearanceFor(body);
   if (!raw || typeof raw !== 'object') return out;
-  const isHex = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v);
   const oneOf = <T extends string>(v: unknown, list: { id: T }[]): v is T =>
     typeof v === 'string' && list.some((o) => o.id === v);
   const clamp = (v: unknown, min: number, max: number, fallback: number) =>
@@ -323,68 +353,112 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
   else if (typeof r.name === 'string' && r.name.trim()) out.name = r.name.trim().slice(0, 24);
   else if (typeof r.playerName === 'string' && r.playerName.trim()) out.name = r.playerName.trim().slice(0, 24);
 
-  if (isHex(r.skinColor)) out.skinColor = r.skinColor;
-  if (isHex(r.hairColor)) out.hairColor = r.hairColor;
+  const skinHex = normalizeHexColor(r.skinColor);
+  if (skinHex) out.skinColor = skinHex;
+  const hairHex = normalizeHexColor(r.hairColor);
+  if (hairHex) out.hairColor = hairHex;
 
-  if (isHex(r.sweaterColor)) out.sweaterColor = r.sweaterColor;
-  else if (isHex(r.shirtColor)) out.sweaterColor = r.shirtColor;
+  const sweaterHex = normalizeHexColor(r.sweaterColor) ?? normalizeHexColor(r.shirtColor);
+  if (sweaterHex) out.sweaterColor = sweaterHex;
 
-  if (isHex(r.detailColor)) out.detailColor = r.detailColor;
-  else if (isHex(r.pantsColor)) out.detailColor = r.pantsColor;
+  const detailHex = normalizeHexColor(r.detailColor) ?? normalizeHexColor(r.pantsColor);
+  if (detailHex) out.detailColor = detailHex;
 
-  if (isHex(r.hatColor)) out.hatColor = r.hatColor;
-  else if (out.detailColor) out.hatColor = out.detailColor;
+  const hatHex = normalizeHexColor(r.hatColor);
+  if (hatHex) out.hatColor = hatHex;
+  else if (detailHex) out.hatColor = detailHex;
 
-  if (isHex(r.bootColor)) out.bootColor = r.bootColor;
-  else if (isHex(r.shoesColor)) out.bootColor = r.shoesColor;
+  const bootHex = normalizeHexColor(r.bootColor) ?? normalizeHexColor(r.shoesColor);
+  if (bootHex) out.bootColor = bootHex;
 
-  if (isHex(r.scarfColor)) out.scarfColor = r.scarfColor;
-  else if (out.detailColor) out.scarfColor = out.detailColor;
+  const scarfHex = normalizeHexColor(r.scarfColor);
+  if (scarfHex) out.scarfColor = scarfHex;
+  else if (detailHex) out.scarfColor = detailHex;
 
-  // Outfit & shirt style
-  const allowedOutfits = isRemote ? OUTFIT_STYLES : outfitStylesFor(body);
-  if (oneOf(r.outfitStyle, allowedOutfits)) {
+  const glassesHex = normalizeHexColor(r.glassesColor);
+  if (glassesHex) out.glassesColor = glassesHex;
+
+  const backpackHex = normalizeHexColor(r.backpackColor);
+  if (backpackHex) out.backpackColor = backpackHex;
+
+  const glowHex = normalizeHexColor(r.accentGlowColor) ?? normalizeHexColor(r.glowColor);
+  if (glowHex) out.accentGlowColor = glowHex;
+
+  // Outfit & shirt style (allow all valid base outfits so shop outfits never get stripped on reload)
+  const rawOutfitToken =
+    typeof r.outfitVariant === 'string'
+      ? r.outfitVariant
+      : typeof r.outfit === 'string'
+        ? r.outfit
+        : typeof r.shirtStyle === 'string'
+          ? r.shirtStyle
+          : '';
+
+  if (oneOf(r.outfitStyle, OUTFIT_STYLES)) {
     out.outfitStyle = r.outfitStyle;
-  } else {
-    const rawShirt = typeof r.shirtStyle === 'string' ? r.shirtStyle : typeof r.outfit === 'string' ? r.outfit : '';
-    if (rawShirt) {
-      const s = rawShirt.toLowerCase();
-      if (s.includes('hoodie') || s.includes('sudadera')) out.outfitStyle = 'sudadera';
-      else if (s.includes('jacket') || s.includes('chaqueta') || s.includes('neon') || s.includes('cyber')) out.outfitStyle = 'chaqueta';
-      else if (s.includes('overall') || s.includes('overol')) out.outfitStyle = 'overol';
-      else if (s.includes('dress') || s.includes('vestido') || s.includes('robe')) out.outfitStyle = 'vestido';
-      else if (s.includes('poncho')) out.outfitStyle = 'poncho';
-      else if (s.includes('sueter') || s.includes('sweater')) out.outfitStyle = 'sueter';
-    }
+  } else if (rawOutfitToken) {
+    const s = rawOutfitToken.toLowerCase();
+    if (s.includes('hoodie') || s.includes('sudadera')) out.outfitStyle = 'sudadera';
+    else if (
+      s.includes('jacket') ||
+      s.includes('chaqueta') ||
+      s.includes('neon') ||
+      s.includes('cyber') ||
+      s.includes('tech') ||
+      s.includes('ninja') ||
+      s.includes('astro') ||
+      s.includes('space')
+    ) {
+      out.outfitStyle = 'chaqueta';
+    } else if (s.includes('overall') || s.includes('overol')) out.outfitStyle = 'overol';
+    else if (s.includes('dress') || s.includes('vestido') || s.includes('robe') || s.includes('royal') || s.includes('mage') || s.includes('wizard')) {
+      out.outfitStyle = 'vestido';
+    } else if (s.includes('poncho') || s.includes('cape') || s.includes('capa')) out.outfitStyle = 'poncho';
+    else if (s.includes('sueter') || s.includes('sweater')) out.outfitStyle = 'sueter';
   }
+  const outfitVar = cleanVariant(r.outfitVariant ?? r.outfit ?? r.shirtStyle);
+  if (outfitVar) out.outfitVariant = outfitVar;
 
-  // Hair style
-  const allowedHair = isRemote ? HAIR_STYLES : hairStylesFor(body);
-  if (oneOf(r.hairStyle, allowedHair)) {
+  // Hair style (allow all valid hair styles so shop hairs never get stripped on reload)
+  if (oneOf(r.hairStyle, HAIR_STYLES)) {
     out.hairStyle = r.hairStyle;
-  } else if (typeof r.hairStyle === 'string') {
-    const h = r.hairStyle.toLowerCase();
-    if (h.includes('cozy_messy') || h.includes('messy') || h.includes('flequillo')) out.hairStyle = 'flequillo';
+  } else if (typeof r.hairStyle === 'string' || typeof r.hair === 'string') {
+    const h = String(r.hairStyle || r.hair).toLowerCase();
+    if (h.includes('cozy_messy') || h.includes('messy') || h.includes('flequillo') || h.includes('wave')) out.hairStyle = 'flequillo';
     else if (h.includes('short_crop') || h.includes('crop') || h.includes('rapado') || h.includes('corto')) out.hairStyle = 'rapado';
-    else if (h.includes('spike') || h.includes('puntas')) out.hairStyle = 'puntas';
+    else if (h.includes('spike') || h.includes('puntas') || h.includes('mohawk') || h.includes('neon')) out.hairStyle = 'puntas';
     else if (h.includes('ponytail') || h.includes('coleta')) out.hairStyle = 'coleta';
-    else if (h.includes('braid') || h.includes('trenza') || h.includes('coletita')) out.hairStyle = 'trenzas';
+    else if (h.includes('braid') || h.includes('trenza') || h.includes('coletita') || h.includes('twin')) out.hairStyle = 'trenzas';
     else if (h.includes('bun') || h.includes('chongo')) out.hairStyle = 'chongo';
-    else if (h.includes('long') || h.includes('largo')) out.hairStyle = 'largo';
+    else if (h.includes('long') || h.includes('largo') || h.includes('galaxy') || h.includes('cosmic')) out.hairStyle = 'largo';
   }
+  const hairVar = cleanVariant(r.hairVariant ?? (typeof r.hairStyle === 'string' && !oneOf(r.hairStyle, HAIR_STYLES) ? r.hairStyle : r.hair));
+  if (hairVar) out.hairVariant = hairVar;
+
+  // Skin variant
+  const skinVar = cleanVariant(r.skinVariant ?? r.skinStyle ?? r.skin);
+  if (skinVar) out.skinVariant = skinVar;
 
   // Hat style
-  const allowedHats = isRemote ? HAT_STYLES : hatStylesFor(body);
-  if (oneOf(r.hatStyle, allowedHats)) {
+  const rawHatStr = typeof r.hat === 'string' ? r.hat : '';
+  const hatVarToken = cleanVariant(r.hatVariant ?? (rawHatStr && rawHatStr !== 'none' && rawHatStr !== 'ninguno' ? rawHatStr : undefined));
+  if (oneOf(r.hatStyle, HAT_STYLES)) {
     out.hatStyle = r.hatStyle;
-  } else if (typeof r.hat === 'string') {
-    const h = r.hat.toLowerCase();
+  } else if (rawHatStr) {
+    const h = rawHatStr.toLowerCase();
     if (h === 'none' || h === 'ninguno') out.hatStyle = 'ninguno';
-    else if (h.includes('beanie') || h.includes('gorro')) out.hatStyle = 'gorro';
-    else if (h.includes('cap') || h.includes('gorra') || h.includes('visor') || h.includes('helmet')) out.hatStyle = 'gorra';
-    else if (h.includes('sunhat') || h.includes('sombrero') || h.includes('explorador')) out.hatStyle = 'sombrero';
-    else if (h.includes('flower') || h.includes('flores') || h.includes('crown') || h.includes('corona')) out.hatStyle = 'flores';
-    else if (h.includes('ear') || h.includes('oreja')) out.hatStyle = 'orejas';
+    else if (h.includes('beanie') || h.includes('gorro_cozy') || h === 'gorro') out.hatStyle = 'gorro';
+    else if (h.includes('cap') || h.includes('gorra') || h.includes('visor') || h.includes('helmet') || h.includes('casco') || h.includes('headphone') || h.includes('audifono')) out.hatStyle = 'gorra';
+    else if (h.includes('sunhat') || h.includes('sombrero') || h.includes('explorador') || h.includes('wizard') || h.includes('mago') || h.includes('witch') || h.includes('beret') || h.includes('boina')) out.hatStyle = 'sombrero';
+    else if (h.includes('flower') || h.includes('flores') || h.includes('crown') || h.includes('corona') || h.includes('halo')) out.hatStyle = 'flores';
+    else if (h.includes('ear') || h.includes('oreja') || h.includes('horn') || h.includes('cuerno')) out.hatStyle = 'orejas';
+    else out.hatStyle = 'sombrero';
+  }
+  if (out.hatStyle !== 'ninguno' && hatVarToken) {
+    out.hatVariant = hatVarToken;
+  } else if (rawHatStr.toLowerCase() === 'none' || rawHatStr.toLowerCase() === 'ninguno') {
+    out.hatStyle = 'ninguno';
+    out.hatVariant = undefined;
   }
 
   // Eyes
@@ -397,14 +471,21 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
     else out.eyeStyle = 'redondos';
   }
 
-  // Accessories
+  // Accessories / Glasses
+  const rawGlassesStr = typeof r.glasses === 'string' ? r.glasses : '';
+  const glassesVarToken = cleanVariant(r.glassesVariant ?? (rawGlassesStr && !['none', 'ninguno', 'pecas', 'freckles'].includes(rawGlassesStr.toLowerCase()) ? rawGlassesStr : undefined));
   if (oneOf(r.accessory, ACCESSORIES)) {
     out.accessory = r.accessory;
-  } else if (typeof r.glasses === 'string') {
-    const g = r.glasses.toLowerCase();
+  } else if (rawGlassesStr) {
+    const g = rawGlassesStr.toLowerCase();
     if (g === 'none' || g === 'ninguno') out.accessory = 'ninguno';
     else if (g.includes('freckle') || g.includes('pecas')) out.accessory = 'pecas';
     else out.accessory = 'lentes';
+  }
+  if (out.accessory === 'lentes' && glassesVarToken) {
+    out.glassesVariant = glassesVarToken;
+  } else if (out.accessory !== 'lentes') {
+    out.glassesVariant = undefined;
   }
 
   // Companion
@@ -453,15 +534,35 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
   }
 
   // Backpack
+  const rawPackStr = typeof r.backpack === 'string' ? r.backpack : '';
+  const packVarToken = cleanVariant(r.backpackVariant ?? (rawPackStr && !['none', 'ninguno', 'false', 'true'].includes(rawPackStr.toLowerCase()) ? rawPackStr : undefined));
   if (typeof r.backpack === 'boolean') {
     out.backpack = r.backpack;
   } else if (typeof r.backpack === 'string') {
-    out.backpack = r.backpack !== 'none' && r.backpack !== 'ninguno' && r.backpack !== 'false';
+    const b = r.backpack.toLowerCase();
+    out.backpack = b !== 'none' && b !== 'ninguno' && b !== 'false';
+  }
+  if (out.backpack && packVarToken) {
+    out.backpackVariant = packVarToken;
+  } else if (!out.backpack) {
+    out.backpackVariant = undefined;
+  }
+
+  if (Array.isArray(r.equippedShopIds)) {
+    out.equippedShopIds = r.equippedShopIds.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(0, 32);
+  } else if (Array.isArray(r.equippedItems)) {
+    out.equippedShopIds = r.equippedItems.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(0, 32);
   }
 
   out.height = clamp(r.height, 0.88, 1.12, out.height);
   out.build = clamp(r.build, 0.88, 1.15, out.build);
   return out;
+}
+
+export interface ShopPatchMeta {
+  id?: string;
+  category?: string;
+  previewColor?: string;
 }
 
 /**
@@ -471,35 +572,95 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
 export function applyBackendAppearancePatch(
   base: CharacterAppearance,
   patch: Record<string, unknown> | null | undefined,
-  bypassLocks: boolean = true
+  bypassLocks: boolean = true,
+  itemMeta?: ShopPatchMeta
 ): CharacterAppearance {
   if (!patch || typeof patch !== 'object') return { ...base };
   const merged: Record<string, unknown> = { ...base };
-  const isHex = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v);
 
   // Copy direct & backend-aliased properties cleanly so they override `base`'s frontend fields
   for (const [k, v] of Object.entries(patch)) {
     if (v !== undefined && v !== null) merged[k] = v;
   }
-  if (isHex(patch.shirtColor)) merged.sweaterColor = patch.shirtColor;
-  if (isHex(patch.pantsColor)) merged.detailColor = patch.pantsColor;
-  if (isHex(patch.shoesColor)) merged.bootColor = patch.shoesColor;
-  if (isHex(patch.hatColor)) merged.hatColor = patch.hatColor;
-  if (isHex(patch.scarfColor)) merged.scarfColor = patch.scarfColor;
-  if (isHex(patch.skinColor)) merged.skinColor = patch.skinColor;
-  if (isHex(patch.hairColor)) merged.hairColor = patch.hairColor;
 
-  if (typeof patch.shirtStyle === 'string' || typeof patch.outfit === 'string') {
-    delete merged.outfitStyle;
+  const shirtHex = normalizeHexColor(patch.shirtColor);
+  if (shirtHex) merged.sweaterColor = shirtHex;
+  const pantsHex = normalizeHexColor(patch.pantsColor);
+  if (pantsHex) merged.detailColor = pantsHex;
+  const shoesHex = normalizeHexColor(patch.shoesColor);
+  if (shoesHex) merged.bootColor = shoesHex;
+  const hatHex = normalizeHexColor(patch.hatColor);
+  if (hatHex) merged.hatColor = hatHex;
+  const scarfHex = normalizeHexColor(patch.scarfColor);
+  if (scarfHex) merged.scarfColor = scarfHex;
+  const skinHex = normalizeHexColor(patch.skinColor);
+  if (skinHex) merged.skinColor = skinHex;
+  const hairHex = normalizeHexColor(patch.hairColor);
+  if (hairHex) merged.hairColor = hairHex;
+  const glassesHex = normalizeHexColor(patch.glassesColor);
+  if (glassesHex) merged.glassesColor = glassesHex;
+  const backpackHex = normalizeHexColor(patch.backpackColor);
+  if (backpackHex) merged.backpackColor = backpackHex;
+  const glowHex = normalizeHexColor(patch.accentGlowColor) ?? normalizeHexColor(patch.glowColor);
+  if (glowHex) merged.accentGlowColor = glowHex;
+
+  // Apply category previewColor fallback when patch omits the specific part color
+  const previewHex = normalizeHexColor(itemMeta?.previewColor);
+  if (previewHex) {
+    if (itemMeta?.category === 'hat' && !hatHex && !normalizeHexColor(patch.hatColor)) {
+      merged.hatColor = previewHex;
+    } else if (itemMeta?.category === 'glasses' && !glassesHex) {
+      merged.glassesColor = previewHex;
+    } else if (itemMeta?.category === 'backpack' && !backpackHex) {
+      merged.backpackColor = previewHex;
+    } else if (itemMeta?.category === 'skin' && !skinHex) {
+      merged.skinColor = previewHex;
+    } else if (itemMeta?.category === 'hair' && !hairHex) {
+      merged.hairColor = previewHex;
+    } else if (itemMeta?.category === 'outfit' && !glowHex) {
+      merged.accentGlowColor = previewHex;
+    }
   }
-  if (typeof patch.hat === 'string' && !('hatStyle' in patch)) {
-    delete merged.hatStyle;
+
+  // Prevent stale base variants/enums from overriding incoming backend patches
+  if (typeof patch.shirtStyle === 'string' || typeof patch.outfit === 'string' || typeof patch.outfitStyle === 'string') {
+    if (!('outfitStyle' in patch)) delete merged.outfitStyle;
+    const ov = cleanVariant(patch.outfit ?? patch.shirtStyle ?? patch.outfitStyle);
+    merged.outfitVariant = ov;
   }
-  if (typeof patch.glasses === 'string' && !('accessory' in patch)) {
-    delete merged.accessory;
+  if (typeof patch.hat === 'string' || typeof patch.hatStyle === 'string') {
+    if (!('hatStyle' in patch)) delete merged.hatStyle;
+    const hv = cleanVariant(patch.hat ?? patch.hatStyle);
+    merged.hatVariant = hv;
+  }
+  if (typeof patch.glasses === 'string' || typeof patch.accessory === 'string') {
+    if (!('accessory' in patch)) delete merged.accessory;
+    const gv = cleanVariant(patch.glasses ?? patch.accessory);
+    merged.glassesVariant = gv;
+  }
+  if ('backpack' in patch || 'backpackVariant' in patch) {
+    const bv = cleanVariant(patch.backpackVariant ?? patch.backpack);
+    merged.backpackVariant = bv;
+  }
+  if (typeof patch.hairStyle === 'string' || typeof patch.hair === 'string') {
+    const hairv = cleanVariant(patch.hairStyle ?? patch.hair);
+    merged.hairVariant = hairv;
+  }
+  if (typeof patch.skinStyle === 'string' || typeof patch.skin === 'string') {
+    const sv = cleanVariant(patch.skinStyle ?? patch.skin);
+    merged.skinVariant = sv;
   }
   if (('pattern' in patch || 'clothingPattern' in patch) && !('shirtPattern' in patch)) {
     delete merged.shirtPattern;
+  }
+
+  if (itemMeta?.id) {
+    const currentIds = Array.isArray(merged.equippedShopIds)
+      ? (merged.equippedShopIds as string[]).filter((x) => typeof x === 'string')
+      : [];
+    if (!currentIds.includes(itemMeta.id)) {
+      merged.equippedShopIds = [...currentIds, itemMeta.id];
+    }
   }
 
   return sanitizeAppearance(merged, base.bodyType, bypassLocks);
@@ -515,8 +676,8 @@ function readRoster(): CharacterRoster {
       const r = JSON.parse(raw) as Record<string, unknown>;
       return {
         active: r.active === 'chica' ? 'chica' : 'chico',
-        chico: sanitizeAppearance(r.chico, 'chico'),
-        chica: sanitizeAppearance(r.chica, 'chica'),
+        chico: sanitizeAppearance(r.chico, 'chico', true),
+        chica: sanitizeAppearance(r.chica, 'chica', true),
       };
     }
     // Migrate the single character saved by the first version of the creator
@@ -524,7 +685,7 @@ function readRoster(): CharacterRoster {
     if (legacy) {
       return {
         active: 'chico',
-        chico: sanitizeAppearance(JSON.parse(legacy), 'chico'),
+        chico: sanitizeAppearance(JSON.parse(legacy), 'chico', true),
         chica: defaultAppearanceFor('chica'),
       };
     }

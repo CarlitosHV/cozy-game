@@ -694,6 +694,10 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
           onFocusChange={(focus) => engine?.setCharacterPreviewFocus(focus)}
           onZoom={(delta) => engine?.adjustCharacterPreviewZoom(delta)}
           embeddedInLobby
+          currentUser={currentUser}
+          onOpenShop={() => switchTab('shop')}
+          onOpenAuth={onOpenAuth}
+          onToast={onToast}
         />
       )}
 

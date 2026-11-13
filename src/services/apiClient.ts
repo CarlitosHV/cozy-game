@@ -630,28 +630,50 @@ class ApiClient {
    * PUT /api/v1/player/appearance
    */
   public async updateAppearance(appearance: Partial<CharacterAppearance>): Promise<void> {
+    const mappedHat =
+      appearance.hatStyle === 'ninguno'
+        ? 'none'
+        : appearance.hatVariant ||
+          (appearance.hatStyle === 'gorro'
+            ? 'beanie_cozy'
+            : appearance.hatStyle === 'gorra'
+              ? 'cap'
+              : appearance.hatStyle === 'sombrero'
+                ? 'sunhat'
+                : appearance.hatStyle === 'flores'
+                  ? 'flower_crown'
+                  : appearance.hatStyle === 'orejas'
+                    ? 'ears'
+                    : 'none');
+
+    const mappedGlasses =
+      appearance.accessory === 'lentes'
+        ? appearance.glassesVariant || 'reading'
+        : appearance.accessory === 'pecas'
+          ? 'freckles'
+          : 'none';
+
+    const mappedBackpack = appearance.backpack
+      ? appearance.backpackVariant || 'explorer_pack'
+      : 'none';
+
+    const mappedShirtStyle =
+      appearance.outfitVariant ||
+      (appearance.outfitStyle === 'sudadera' ? 'hoodie' : appearance.outfitStyle);
+
     const payload = {
       ...appearance,
-      // Map frontend names to backend specification names
+      // Map frontend names to backend specification names while preserving rich variant tokens
       shirtColor: appearance.sweaterColor,
       pantsColor: appearance.detailColor,
       shoesColor: appearance.bootColor,
       hatColor: appearance.hatColor,
-      shirtStyle: appearance.outfitStyle === 'sudadera' ? 'hoodie' : appearance.outfitStyle,
-      hat:
-        appearance.hatStyle === 'gorro'
-          ? 'beanie_cozy'
-          : appearance.hatStyle === 'gorra'
-          ? 'cap'
-          : appearance.hatStyle === 'sombrero'
-          ? 'sunhat'
-          : appearance.hatStyle === 'flores'
-          ? 'flower_crown'
-          : appearance.hatStyle === 'orejas'
-          ? 'ears'
-          : 'none',
-      glasses: appearance.accessory === 'lentes' ? 'reading' : 'none',
-      backpack: appearance.backpack ? 'explorer_pack' : 'none',
+      shirtStyle: mappedShirtStyle,
+      outfit: appearance.outfitVariant || appearance.outfitStyle,
+      hat: mappedHat,
+      glasses: mappedGlasses,
+      backpack: mappedBackpack,
+      pattern: appearance.shirtPattern,
     };
     await this.request(
       '/player/appearance',

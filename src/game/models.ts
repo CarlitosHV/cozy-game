@@ -50,6 +50,10 @@ export function createPlayerCharacter(
   group.add(headGroup);
 
   // Materials with varied roughness & PBR richness
+  const skinVarLower = (look.skinVariant || '').toLowerCase();
+  const hairVarLower = (look.hairVariant || '').toLowerCase();
+  const glowHex = look.accentGlowColor || look.detailColor || '#22d3ee';
+
   const patternTex = getClothingPatternTexture(look.shirtPattern, look.sweaterColor, look.detailColor);
   const sweaterMat = new THREE.MeshStandardMaterial({
     color: patternTex ? 0xffffff : look.sweaterColor, // pattern CanvasTexture already bakes sweaterColor
@@ -60,20 +64,54 @@ export function createPlayerCharacter(
 
   const skinMat = new THREE.MeshStandardMaterial({
     color: look.skinColor,
-    roughness: 0.55,
-    metalness: 0.0,
+    roughness:
+      skinVarLower.includes('ice') || skinVarLower.includes('crystal') || skinVarLower.includes('chrome') || skinVarLower.includes('robot')
+        ? 0.25
+        : skinVarLower.includes('gold') || skinVarLower.includes('oro')
+          ? 0.3
+          : 0.55,
+    metalness:
+      skinVarLower.includes('gold') || skinVarLower.includes('oro')
+        ? 0.5
+        : skinVarLower.includes('robot') || skinVarLower.includes('chrome') || skinVarLower.includes('mech')
+          ? 0.62
+          : skinVarLower.includes('ice') || skinVarLower.includes('crystal')
+            ? 0.15
+            : 0.0,
+    emissive:
+      skinVarLower.includes('neon') || skinVarLower.includes('cyber') || skinVarLower.includes('holo') || skinVarLower.includes('galaxy') || skinVarLower.includes('cosmic') || skinVarLower.includes('ice') || skinVarLower.includes('crystal')
+        ? new THREE.Color(look.accentGlowColor || look.skinColor)
+        : skinVarLower.includes('gold') || skinVarLower.includes('oro')
+          ? new THREE.Color(0x553b08)
+          : new THREE.Color(0x000000),
+    emissiveIntensity:
+      skinVarLower.includes('neon') || skinVarLower.includes('cyber') || skinVarLower.includes('holo') || skinVarLower.includes('galaxy') || skinVarLower.includes('cosmic')
+        ? 0.22
+        : skinVarLower.includes('ice') || skinVarLower.includes('crystal')
+          ? 0.16
+          : skinVarLower.includes('gold') || skinVarLower.includes('oro')
+            ? 0.12
+            : 0.0,
   });
 
   const hairMat = new THREE.MeshStandardMaterial({
     color: look.hairColor,
-    roughness: 0.8,
+    roughness: 0.75,
     metalness: 0.05,
+    emissive:
+      hairVarLower.includes('neon') || hairVarLower.includes('cyber') || hairVarLower.includes('galaxy') || hairVarLower.includes('glow')
+        ? new THREE.Color(look.hairColor)
+        : new THREE.Color(0x000000),
+    emissiveIntensity:
+      hairVarLower.includes('neon') || hairVarLower.includes('cyber') || hairVarLower.includes('galaxy') || hairVarLower.includes('glow')
+        ? 0.24
+        : 0.0,
   });
 
   const hatMat = new THREE.MeshStandardMaterial({
     color: look.hatColor,
-    roughness: 0.9,
-    metalness: 0.0,
+    roughness: 0.82,
+    metalness: 0.05,
   });
 
   const pompomMat = new THREE.MeshStandardMaterial({
@@ -358,6 +396,67 @@ export function createPlayerCharacter(
     }
   }
 
+  // Shop outfit variant embellishments (neon/cyber trim, royal clasps, astronaut chest unit)
+  const outfitVarLower = (look.outfitVariant || '').toLowerCase();
+  if (
+    outfitVarLower.includes('neon') ||
+    outfitVarLower.includes('cyber') ||
+    outfitVarLower.includes('tech') ||
+    outfitVarLower.includes('sci') ||
+    outfitVarLower.includes('future')
+  ) {
+    const neonTrimMat = new THREE.MeshStandardMaterial({
+      color: glowHex,
+      emissive: glowHex,
+      emissiveIntensity: 0.95,
+      roughness: 0.25,
+      metalness: 0.3,
+    });
+    const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.185, 0.018, 6, 20), neonTrimMat);
+    collarRing.rotation.x = Math.PI / 2 + 0.1;
+    collarRing.position.set(0, 0.74, 0.01);
+    const chestCore = new THREE.Mesh(new THREE.OctahedronGeometry(0.036, 0), neonTrimMat);
+    chestCore.position.set(0, 0.62, 0.228);
+    const sideStripeL = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.24, 0.025), neonTrimMat);
+    sideStripeL.position.set(0.21, 0.54, 0.04);
+    const sideStripeR = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.24, 0.025), neonTrimMat);
+    sideStripeR.position.set(-0.21, 0.54, 0.04);
+    group.add(collarRing, chestCore, sideStripeL, sideStripeR);
+  } else if (
+    outfitVarLower.includes('royal') ||
+    outfitVarLower.includes('king') ||
+    outfitVarLower.includes('queen') ||
+    outfitVarLower.includes('prince') ||
+    outfitVarLower.includes('wizard') ||
+    outfitVarLower.includes('mage')
+  ) {
+    for (const side of [1, -1]) {
+      const epaulet = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.026, 0.1), goldButtonMat);
+      epaulet.position.set(0.21 * side, 0.73, 0);
+      epaulet.rotation.z = -0.22 * side;
+      group.add(epaulet);
+    }
+    const clasp = new THREE.Mesh(new THREE.OctahedronGeometry(0.032, 0), goldButtonMat);
+    clasp.position.set(0, 0.68, 0.225);
+    group.add(clasp);
+  } else if (
+    outfitVarLower.includes('astro') ||
+    outfitVarLower.includes('space') ||
+    outfitVarLower.includes('cosmic')
+  ) {
+    const unit = new THREE.Mesh(
+      new THREE.BoxGeometry(0.13, 0.1, 0.03),
+      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.3, metalness: 0.4 })
+    );
+    unit.position.set(0, 0.58, 0.218);
+    const led = new THREE.Mesh(
+      new THREE.SphereGeometry(0.016, 8, 8),
+      new THREE.MeshBasicMaterial({ color: glowHex })
+    );
+    led.position.set(0.03, 0.59, 0.236);
+    group.add(unit, led);
+  }
+
   // 2. Primary: Head (headGroup is the bobbing pivot; head mesh sits at its origin offset)
   const HEAD_Y = 0.95;
   const headGeom = new THREE.SphereGeometry(0.22, 16, 16);
@@ -366,7 +465,17 @@ export function createPlayerCharacter(
   head.castShadow = true;
   group.add(head);
 
-  const hasFullHat = ['gorro', 'gorra', 'sombrero'].includes(look.hatStyle);
+  const hatVarLower = (look.hatVariant || '').toLowerCase();
+  const hasFullHat =
+    ['gorro', 'gorra', 'sombrero'].includes(look.hatStyle) ||
+    hatVarLower.includes('helmet') ||
+    hatVarLower.includes('casco') ||
+    hatVarLower.includes('wizard') ||
+    hatVarLower.includes('mago') ||
+    hatVarLower.includes('witch') ||
+    hatVarLower.includes('beret') ||
+    hatVarLower.includes('boina') ||
+    hatVarLower.includes('party');
 
   // Hair cap covering the top/back of the head - contoured snugly around the cranium
   const capRadius = hasFullHat ? 0.222 : 0.226;
@@ -657,24 +766,140 @@ export function createPlayerCharacter(
   rightCheek.position.set(-0.12, 0.93, 0.17);
   headGroup.add(leftCheek, rightCheek);
 
-  // Face accessories
+  // Face accessories & Shop Glasses / Visors
   if (look.accessory === 'lentes') {
-    const frameMat = new THREE.MeshStandardMaterial({ color: 0x3a2a20, roughness: 0.4, metalness: 0.4 });
-    const lensGeom = new THREE.TorusGeometry(0.048, 0.007, 6, 18);
-    const lensL = new THREE.Mesh(lensGeom, frameMat);
-    lensL.position.set(0.08, 0.97, 0.215);
-    const lensR = new THREE.Mesh(lensGeom, frameMat);
-    lensR.position.set(-0.08, 0.97, 0.215);
-    const bridge = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.065, 6), frameMat);
-    bridge.rotation.z = Math.PI / 2;
-    bridge.position.set(0, 0.98, 0.222);
-    const glassMat = new THREE.MeshBasicMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.18 });
-    const glassGeom = new THREE.CircleGeometry(0.045, 16);
-    const glassL = new THREE.Mesh(glassGeom, glassMat);
-    glassL.position.set(0.08, 0.97, 0.218);
-    const glassR = new THREE.Mesh(glassGeom, glassMat);
-    glassR.position.set(-0.08, 0.97, 0.218);
-    headGroup.add(lensL, lensR, bridge, glassL, glassR);
+    const gv = (look.glassesVariant || 'reading').toLowerCase();
+    const gColorHex = look.glassesColor || (gv.includes('visor') || gv.includes('cyber') || gv.includes('neon') ? '#22d3ee' : gv.includes('star') ? '#fbbf24' : gv.includes('heart') ? '#ec4899' : '#3a2a20');
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: gv.includes('sun') || gv.includes('shades') || gv.includes('sol') ? 0x18181b : gColorHex,
+      roughness: 0.3,
+      metalness: 0.55,
+    });
+
+    if (gv.includes('visor') || gv.includes('cyber') || gv.includes('neon') || gv.includes('futur')) {
+      const visorMat = new THREE.MeshStandardMaterial({
+        color: gColorHex,
+        emissive: gColorHex,
+        emissiveIntensity: 0.85,
+        transparent: true,
+        opacity: 0.78,
+        roughness: 0.15,
+        metalness: 0.3,
+      });
+      const visor = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.228, 0.228, 0.072, 20, 1, true, -0.78, 1.56),
+        visorMat
+      );
+      visor.position.set(0, 0.972, 0.008);
+      const topRim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.228, 0.009, 6, 20, 1.65),
+        new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3, metalness: 0.8 })
+      );
+      topRim.rotation.x = Math.PI / 2;
+      topRim.rotation.z = -Math.PI / 2 - 0.825;
+      topRim.position.set(0, 1.008, 0.008);
+      headGroup.add(visor, topRim);
+    } else if (gv.includes('sun') || gv.includes('sol') || gv.includes('shades') || gv.includes('dark')) {
+      const lensBox = new THREE.BoxGeometry(0.105, 0.068, 0.016);
+      const darkLensMat = new THREE.MeshStandardMaterial({
+        color: look.glassesColor || 0x0f172a,
+        roughness: 0.12,
+        metalness: 0.65,
+      });
+      const lLens = new THREE.Mesh(lensBox, darkLensMat);
+      lLens.position.set(0.08, 0.97, 0.214);
+      lLens.rotation.y = 0.18;
+      const rLens = new THREE.Mesh(lensBox, darkLensMat);
+      rLens.position.set(-0.08, 0.97, 0.214);
+      rLens.rotation.y = -0.18;
+      const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.016, 0.014), frameMat);
+      bridge.position.set(0, 0.985, 0.22);
+      for (const side of [1, -1]) {
+        const temple = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.014, 0.18), frameMat);
+        temple.position.set(0.145 * side, 0.982, 0.12);
+        headGroup.add(temple);
+      }
+      headGroup.add(lLens, rLens, bridge);
+    } else if (gv.includes('star') || gv.includes('estrella')) {
+      const starLensMat = new THREE.MeshStandardMaterial({
+        color: gColorHex,
+        emissive: gColorHex,
+        emissiveIntensity: 0.35,
+        roughness: 0.25,
+        metalness: 0.5,
+      });
+      for (const side of [1, -1]) {
+        const starFrame = new THREE.Mesh(new THREE.OctahedronGeometry(0.056, 0), starLensMat);
+        starFrame.scale.set(1, 1, 0.25);
+        starFrame.position.set(0.082 * side, 0.97, 0.216);
+        headGroup.add(starFrame);
+      }
+      const bridge = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.065, 6), frameMat);
+      bridge.rotation.z = Math.PI / 2;
+      bridge.position.set(0, 0.98, 0.222);
+      headGroup.add(bridge);
+    } else if (gv.includes('heart') || gv.includes('corazon')) {
+      const heartMat = new THREE.MeshStandardMaterial({
+        color: gColorHex,
+        emissive: gColorHex,
+        emissiveIntensity: 0.22,
+        transparent: true,
+        opacity: 0.72,
+      });
+      for (const side of [1, -1]) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.048, 0.009, 6, 16), frameMat);
+        ring.scale.set(1.12, 0.95, 1);
+        ring.position.set(0.08 * side, 0.97, 0.216);
+        const tint = new THREE.Mesh(new THREE.CircleGeometry(0.045, 14), heartMat);
+        tint.scale.set(1.1, 0.95, 1);
+        tint.position.set(0.08 * side, 0.97, 0.218);
+        headGroup.add(ring, tint);
+      }
+      const bridge = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.065, 6), frameMat);
+      bridge.rotation.z = Math.PI / 2;
+      bridge.position.set(0, 0.98, 0.222);
+      headGroup.add(bridge);
+    } else if (gv.includes('goggle') || gv.includes('aviator') || gv.includes('explor')) {
+      const brassGoggle = new THREE.MeshStandardMaterial({ color: look.glassesColor || 0xd97706, roughness: 0.3, metalness: 0.7 });
+      const strapMatG = new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.8 });
+      const strapG = new THREE.Mesh(new THREE.TorusGeometry(0.224, 0.018, 6, 24), strapMatG);
+      strapG.rotation.x = Math.PI / 2;
+      strapG.position.set(0, 0.985, 0);
+      const glassG = new THREE.MeshBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.45 });
+      for (const side of [1, -1]) {
+        const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.056, 0.056, 0.032, 16), brassGoggle);
+        cup.rotation.x = Math.PI / 2;
+        cup.position.set(0.082 * side, 0.975, 0.205);
+        const l = new THREE.Mesh(new THREE.CircleGeometry(0.046, 16), glassG);
+        l.position.set(0.082 * side, 0.975, 0.222);
+        headGroup.add(cup, l);
+      }
+      headGroup.add(strapG);
+    } else if (gv.includes('monocle') || gv.includes('monoculo')) {
+      const goldMono = new THREE.MeshStandardMaterial({ color: look.glassesColor || 0xfbbf24, roughness: 0.25, metalness: 0.85 });
+      const mono = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.008, 6, 18), goldMono);
+      mono.position.set(0.08, 0.97, 0.216);
+      const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.14, 4), goldMono);
+      chain.position.set(0.135, 0.9, 0.195);
+      chain.rotation.z = 0.25;
+      headGroup.add(mono, chain);
+    } else {
+      const lensGeom = new THREE.TorusGeometry(0.048, 0.007, 6, 18);
+      const lensL = new THREE.Mesh(lensGeom, frameMat);
+      lensL.position.set(0.08, 0.97, 0.215);
+      const lensR = new THREE.Mesh(lensGeom, frameMat);
+      lensR.position.set(-0.08, 0.97, 0.215);
+      const bridge = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.065, 6), frameMat);
+      bridge.rotation.z = Math.PI / 2;
+      bridge.position.set(0, 0.98, 0.222);
+      const glassMat = new THREE.MeshBasicMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.2 });
+      const glassGeom = new THREE.CircleGeometry(0.045, 16);
+      const glassL = new THREE.Mesh(glassGeom, glassMat);
+      glassL.position.set(0.08, 0.97, 0.218);
+      const glassR = new THREE.Mesh(glassGeom, glassMat);
+      glassR.position.set(-0.08, 0.97, 0.218);
+      headGroup.add(lensL, lensR, bridge, glassL, glassR);
+    }
   } else if (look.accessory === 'pecas') {
     const freckleMat = new THREE.MeshBasicMaterial({ color: shade(look.skinColor, 0.62) });
     const freckleGeom = new THREE.SphereGeometry(0.008, 5, 5);
@@ -689,8 +914,134 @@ export function createPlayerCharacter(
     }
   }
 
-  // 3. Headwear
+  // 3. Headwear (supports shop hat variants cleanly + base cozy styles)
   let hatPompom: THREE.Mesh = new THREE.Mesh(); // invisible placeholder when the hat has no pompom
+  let floatingHalo: THREE.Mesh | null = null;
+  const handledSpecialHat = (() => {
+    if (look.hatStyle === 'ninguno') return false;
+    if ((hatVarLower.includes('crown') || hatVarLower.includes('corona') || hatVarLower.includes('king') || hatVarLower.includes('royal') || hatVarLower.includes('queen')) && !hatVarLower.includes('flower') && !hatVarLower.includes('flores')) {
+      const crownGold = new THREE.MeshStandardMaterial({
+        color: look.hatColor === '#3d5a80' ? 0xfbbf24 : look.hatColor,
+        roughness: 0.25,
+        metalness: 0.8,
+        emissive: 0x78350f,
+        emissiveIntensity: 0.15,
+      });
+      const gemMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x38bdf8,
+        emissiveIntensity: 0.45,
+        roughness: 0.15,
+      });
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.165, 0.155, 0.065, 16), crownGold);
+      band.position.set(0, 1.15, -0.01);
+      headGroup.add(band);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        const spire = new THREE.Mesh(new THREE.ConeGeometry(0.036, 0.1, 4), crownGold);
+        spire.position.set(Math.sin(a) * 0.145, 1.22, Math.cos(a) * 0.145 - 0.01);
+        const gem = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8), gemMat);
+        gem.position.set(Math.sin(a) * 0.165, 1.155, Math.cos(a) * 0.165 - 0.01);
+        headGroup.add(spire, gem);
+      }
+      return true;
+    }
+    if (hatVarLower.includes('wizard') || hatVarLower.includes('mago') || hatVarLower.includes('witch') || hatVarLower.includes('bruja')) {
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.41, 0.025, 24), hatMat);
+      brim.position.set(0, 1.11, -0.01);
+      brim.rotation.x = -0.1;
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.21, 0.42, 20), hatMat);
+      cone.position.set(0, 1.32, -0.04);
+      cone.rotation.x = -0.22;
+      const wBand = new THREE.Mesh(new THREE.CylinderGeometry(0.195, 0.21, 0.045, 20), goldButtonMat);
+      wBand.position.set(0, 1.15, -0.015);
+      wBand.rotation.x = -0.1;
+      hatPompom = new THREE.Mesh(new THREE.OctahedronGeometry(0.038, 0), goldButtonMat);
+      hatPompom.position.set(0, 1.52, -0.09);
+      headGroup.add(brim, cone, wBand, hatPompom);
+      return true;
+    }
+    if (hatVarLower.includes('halo') || hatVarLower.includes('angel')) {
+      const haloMat = new THREE.MeshStandardMaterial({
+        color: look.hatColor === '#3d5a80' ? 0xfde047 : look.hatColor,
+        emissive: look.hatColor === '#3d5a80' ? 0xfacc15 : look.hatColor,
+        emissiveIntensity: 0.9,
+        roughness: 0.2,
+      });
+      floatingHalo = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.022, 8, 28), haloMat);
+      floatingHalo.rotation.x = Math.PI / 2;
+      floatingHalo.position.set(0, 1.29, -0.01);
+      headGroup.add(floatingHalo);
+      return true;
+    }
+    if (hatVarLower.includes('headphone') || hatVarLower.includes('audifono') || hatVarLower.includes('dj') || hatVarLower.includes('gamer')) {
+      const arc = new THREE.Mesh(new THREE.TorusGeometry(0.238, 0.022, 8, 24, Math.PI), hatMat);
+      arc.position.set(0, 0.97, 0);
+      const neonRingMat = new THREE.MeshStandardMaterial({
+        color: glowHex,
+        emissive: glowHex,
+        emissiveIntensity: 0.85,
+      });
+      for (const side of [1, -1]) {
+        const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.068, 0.045, 16), hatMat);
+        cup.rotation.z = Math.PI / 2;
+        cup.position.set(0.242 * side, 0.95, 0);
+        const led = new THREE.Mesh(new THREE.TorusGeometry(0.048, 0.008, 6, 16), neonRingMat);
+        led.rotation.y = Math.PI / 2;
+        led.position.set(0.266 * side, 0.95, 0);
+        headGroup.add(cup, led);
+      }
+      headGroup.add(arc);
+      return true;
+    }
+    if (hatVarLower.includes('helmet') || hatVarLower.includes('casco') || hatVarLower.includes('astro')) {
+      const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.256, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.62), hatMat);
+      helmet.position.set(0, 0.98, -0.01);
+      helmet.rotation.x = -0.14;
+      const trim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.252, 0.016, 6, 24),
+        new THREE.MeshStandardMaterial({ color: glowHex, emissive: glowHex, emissiveIntensity: 0.75 })
+      );
+      trim.rotation.x = Math.PI / 2 - 0.14;
+      trim.position.set(0, 0.99, -0.01);
+      headGroup.add(helmet, trim);
+      return true;
+    }
+    if (hatVarLower.includes('horn') || hatVarLower.includes('cuerno') || hatVarLower.includes('demon') || hatVarLower.includes('oni')) {
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.224, 0.016, 6, 24, Math.PI), hatMat);
+      band.position.set(0, 0.97, -0.01);
+      headGroup.add(band);
+      for (const side of [1, -1]) {
+        const horn = new THREE.Mesh(new THREE.ConeGeometry(0.048, 0.15, 10), hatMat);
+        horn.position.set(0.13 * side, 1.19, 0.03);
+        horn.rotation.z = -0.35 * side;
+        horn.rotation.x = 0.25;
+        headGroup.add(horn);
+      }
+      return true;
+    }
+    if (hatVarLower.includes('beret') || hatVarLower.includes('boina') || hatVarLower.includes('artist')) {
+      const beret = new THREE.Mesh(new THREE.SphereGeometry(0.24, 18, 12), hatMat);
+      beret.scale.set(1.12, 0.36, 1.12);
+      beret.position.set(0.04, 1.15, -0.02);
+      beret.rotation.z = -0.22;
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.05, 6), hatMat);
+      stem.position.set(0.06, 1.23, -0.02);
+      headGroup.add(beret, stem);
+      return true;
+    }
+    if (hatVarLower.includes('party') || hatVarLower.includes('fiesta')) {
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.26, 16), hatMat);
+      cone.position.set(0, 1.23, 0);
+      hatPompom = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 10), pompomMat);
+      hatPompom.position.set(0, 1.37, 0);
+      headGroup.add(cone, hatPompom);
+      return true;
+    }
+    return false;
+  })();
+
+  if (!handledSpecialHat) {
   switch (look.hatStyle) {
     case 'gorro': {
       // Cozy rounded Beanie Hat: dome that fits snugly and roomily over the head without clipping
@@ -815,6 +1166,7 @@ export function createPlayerCharacter(
     default:
       break;
   }
+  }
 
   // 4. Cozy Scarf with Fringed Tassels (sits comfortably around the collar without chin intersection)
   const isPoncho = look.outfitStyle === 'poncho';
@@ -883,47 +1235,166 @@ export function createPlayerCharacter(
   rightArm.add(rightMitten, rightThumb);
   group.add(rightArm);
 
-  // 6. Detailed Adventurer Backpack with Bedroll & Flask (optional)
+  // 6. Back Equipment: Wings, Jetpacks, Capes, or Detailed Adventurer Backpack
+  const backWings: { pivot: THREE.Group; side: number }[] = [];
+  let backCape: THREE.Mesh | null = null;
+  const packVarLower = (look.backpackVariant || 'explorer_pack').toLowerCase();
+  const packColorHex = look.backpackColor || glowHex || '#38bdf8';
+
   if (look.backpack) {
-    const packGeom = new THREE.BoxGeometry(0.28, 0.32, 0.16);
-    const pack = new THREE.Mesh(packGeom, backpackMat);
-    pack.position.set(0, 0.58, -0.22);
-    pack.castShadow = true;
-    group.add(pack);
+    if (
+      packVarLower.includes('wing') ||
+      packVarLower.includes('ala') ||
+      packVarLower.includes('angel') ||
+      packVarLower.includes('fairy') ||
+      packVarLower.includes('butterfly') ||
+      packVarLower.includes('mariposa')
+    ) {
+      const isCyber =
+        packVarLower.includes('cyber') ||
+        packVarLower.includes('neon') ||
+        packVarLower.includes('holo') ||
+        packVarLower.includes('mech');
+      const wingColor = look.backpackColor || (isCyber ? '#22d3ee' : '#f8fafc');
+      const wingMat = new THREE.MeshStandardMaterial({
+        color: wingColor,
+        emissive: new THREE.Color(wingColor),
+        emissiveIntensity: isCyber ? 0.78 : 0.25,
+        transparent: true,
+        opacity: isCyber ? 0.85 : 0.92,
+        roughness: 0.25,
+        side: THREE.DoubleSide,
+      });
+      const mount = new THREE.Mesh(
+        new THREE.BoxGeometry(0.14, 0.14, 0.06),
+        isCyber ? new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.7, roughness: 0.25 }) : brassMat
+      );
+      mount.position.set(0, 0.6, -0.22);
+      group.add(mount);
 
-    // Backpack pocket pouch
-    const pocketGeom = new THREE.BoxGeometry(0.22, 0.15, 0.06);
-    const pocket = new THREE.Mesh(pocketGeom, backpackMat);
-    pocket.position.set(0, 0.52, -0.32);
-    group.add(pocket);
+      for (const side of [1, -1]) {
+        const pivot = new THREE.Group();
+        pivot.position.set(0.06 * side, 0.63, -0.24);
+        if (isCyber) {
+          for (let b = 0; b < 3; b++) {
+            const blade = new THREE.Mesh(new THREE.BoxGeometry(0.42 - b * 0.08, 0.075, 0.018), wingMat);
+            blade.position.set((0.22 - b * 0.03) * side, 0.14 - b * 0.1, -0.02 * b);
+            blade.rotation.z = (0.35 - b * 0.22) * side;
+            pivot.add(blade);
+          }
+        } else {
+          const upper = new THREE.Mesh(new THREE.CircleGeometry(0.24, 16), wingMat);
+          upper.scale.set(1.35, 0.72, 1);
+          upper.position.set(0.24 * side, 0.12, -0.02);
+          upper.rotation.z = 0.35 * side;
+          const lower = new THREE.Mesh(new THREE.CircleGeometry(0.15, 14), wingMat);
+          lower.scale.set(1.15, 0.7, 1);
+          lower.position.set(0.16 * side, -0.06, -0.02);
+          lower.rotation.z = -0.25 * side;
+          pivot.add(upper, lower);
+        }
+        pivot.rotation.y = -0.28 * side;
+        group.add(pivot);
+        backWings.push({ pivot, side });
+      }
+    } else if (
+      packVarLower.includes('jet') ||
+      packVarLower.includes('rocket') ||
+      packVarLower.includes('cohete') ||
+      packVarLower.includes('propul')
+    ) {
+      const hullMat = new THREE.MeshStandardMaterial({
+        color: look.backpackColor || 0xe2e8f0,
+        roughness: 0.3,
+        metalness: 0.65,
+      });
+      const flameMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+      const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.09), hullMat);
+      bridge.position.set(0, 0.58, -0.21);
+      group.add(bridge);
+      for (const side of [1, -1]) {
+        const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.34, 12), hullMat);
+        tank.position.set(0.11 * side, 0.59, -0.26);
+        tank.castShadow = true;
+        const cap = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.08, 12), detailMat);
+        cap.position.set(0.11 * side, 0.8, -0.26);
+        const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.06, 0.07, 10), soleMat);
+        nozzle.position.set(0.11 * side, 0.39, -0.26);
+        const flame = new THREE.Mesh(new THREE.ConeGeometry(0.042, 0.14, 10), flameMat);
+        flame.rotation.x = Math.PI;
+        flame.position.set(0.11 * side, 0.3, -0.26);
+        group.add(tank, cap, nozzle, flame);
+      }
+    } else if (packVarLower.includes('cape') || packVarLower.includes('capa')) {
+      const capeMat = new THREE.MeshStandardMaterial({
+        color: look.backpackColor || look.detailColor,
+        roughness: 0.78,
+        side: THREE.DoubleSide,
+      });
+      const capeGeom = new THREE.PlaneGeometry(0.46, 0.56, 4, 4);
+      capeGeom.translate(0, -0.28, 0);
+      backCape = new THREE.Mesh(capeGeom, capeMat);
+      backCape.position.set(0, 0.74, -0.23);
+      backCape.rotation.x = 0.16;
+      backCape.castShadow = true;
+      group.add(backCape);
+    } else if (packVarLower.includes('turtle') || packVarLower.includes('caparazon') || packVarLower.includes('shell')) {
+      const shellMat = new THREE.MeshStandardMaterial({
+        color: look.backpackColor || 0x4d7c0f,
+        roughness: 0.55,
+      });
+      const rimMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.7 });
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), shellMat);
+      shell.rotation.x = -Math.PI / 2;
+      shell.scale.set(1, 1.2, 0.8);
+      shell.position.set(0, 0.56, -0.19);
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.025, 6, 20), rimMat);
+      rim.scale.set(1, 1.2, 1);
+      rim.position.set(0, 0.56, -0.19);
+      group.add(shell, rim);
+    } else {
+      const customPackMat = look.backpackColor
+        ? new THREE.MeshStandardMaterial({ color: packColorHex, roughness: 0.65, metalness: 0.1 })
+        : backpackMat;
+      const packGeom = new THREE.BoxGeometry(0.28, 0.32, 0.16);
+      const pack = new THREE.Mesh(packGeom, customPackMat);
+      pack.position.set(0, 0.58, -0.22);
+      pack.castShadow = true;
+      group.add(pack);
 
-    // Chest harness straps wrapping around the front
-    const strapLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
-    strapLeft.position.set(0.12, 0.58, 0.22);
-    const strapRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
-    strapRight.position.set(-0.12, 0.58, 0.22);
-    group.add(strapLeft, strapRight);
+      // Backpack pocket pouch
+      const pocketGeom = new THREE.BoxGeometry(0.22, 0.15, 0.06);
+      const pocket = new THREE.Mesh(pocketGeom, customPackMat);
+      pocket.position.set(0, 0.52, -0.32);
+      group.add(pocket);
 
-    // Rolled sage-green camping bedroll strapped atop the backpack
-    const rollGeom = new THREE.CylinderGeometry(0.065, 0.065, 0.32, 10);
-    rollGeom.rotateZ(Math.PI / 2);
-    const bedroll = new THREE.Mesh(rollGeom, bedrollMat);
-    bedroll.position.set(0, 0.78, -0.24);
-    bedroll.castShadow = true;
-    // Two buckle strap loops holding bedroll
-    const buckle1 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
-    buckle1.position.set(0.09, 0.78, -0.24);
-    buckle1.rotation.y = Math.PI / 2;
-    const buckle2 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
-    buckle2.position.set(-0.09, 0.78, -0.24);
-    buckle2.rotation.y = Math.PI / 2;
-    group.add(bedroll, buckle1, buckle2);
+      // Chest harness straps wrapping around the front
+      const strapLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
+      strapLeft.position.set(0.12, 0.58, 0.22);
+      const strapRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.02), strapMat);
+      strapRight.position.set(-0.12, 0.58, 0.22);
+      group.add(strapLeft, strapRight);
 
-    // Wooden water flask / canteen on side of pack
-    const flaskGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.12, 8);
-    const flask = new THREE.Mesh(flaskGeom, toggleMat);
-    flask.position.set(-0.17, 0.54, -0.22);
-    group.add(flask);
+      // Rolled sage-green camping bedroll strapped atop the backpack
+      const rollGeom = new THREE.CylinderGeometry(0.065, 0.065, 0.32, 10);
+      rollGeom.rotateZ(Math.PI / 2);
+      const bedroll = new THREE.Mesh(rollGeom, bedrollMat);
+      bedroll.position.set(0, 0.78, -0.24);
+      bedroll.castShadow = true;
+      const buckle1 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
+      buckle1.position.set(0.09, 0.78, -0.24);
+      buckle1.rotation.y = Math.PI / 2;
+      const buckle2 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 12), strapMat);
+      buckle2.position.set(-0.09, 0.78, -0.24);
+      buckle2.rotation.y = Math.PI / 2;
+      group.add(bedroll, buckle1, buckle2);
+
+      // Wooden water flask / canteen on side of pack
+      const flaskGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.12, 8);
+      const flask = new THREE.Mesh(flaskGeom, toggleMat);
+      flask.position.set(-0.17, 0.54, -0.22);
+      group.add(flask);
+    }
   } else {
     // Simple leather belt so the lantern still has somewhere to hang
     const belt = new THREE.Mesh(new THREE.TorusGeometry(0.215, 0.022, 6, 24), strapMat);
@@ -1499,6 +1970,17 @@ export function createPlayerCharacter(
     scarfTail2.rotation.x = trailAngle * 0.92;
     scarfTail2.rotation.y = -Math.sin(windTime * 5.0) * 0.22;
     hatPompom.rotation.x = Math.sin(windTime * 3.5) * 0.12;
+    if (floatingHalo) {
+      floatingHalo.position.y = 1.29 + Math.sin(windTime * 3.2) * 0.02;
+      floatingHalo.rotation.z += dt * 0.8;
+    }
+    for (const bw of backWings) {
+      const flutter = Math.sin(windTime * (isGrounded ? 4 : 12)) * (isGrounded ? 0.08 : 0.26);
+      bw.pivot.rotation.y = (-0.28 + flutter) * bw.side;
+    }
+    if (backCape) {
+      backCape.rotation.x = (speed > 0.5 ? 0.52 : 0.16) + Math.sin(windTime * 5) * 0.12;
+    }
 
     // Ponytail / pigtails swing with movement
     for (let i = 0; i < swingingHair.length; i++) {

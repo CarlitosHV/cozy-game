@@ -32,11 +32,12 @@ import {
 import {
   applyBackendAppearancePatch,
   CharacterAppearance,
-  CompanionStyle,
 } from '../game/character';
-import { getPatternSwatchUrl, ShirtPatternId } from '../game/patterns';
-import { unlockCosmeticPattern } from '../game/dailyMissions';
-import { unlockShopCompanion } from '../game/progress';
+import { getPatternSwatchUrl } from '../game/patterns';
+import {
+  applyShopItemToAppearance,
+  syncOwnedShopUnlocks,
+} from '../game/shopCosmetics';
 import { COMPANION_ICONS } from './CharacterCreator';
 import { friendlyError } from '../utils/locale';
 
@@ -144,7 +145,9 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     setErrorMsg(null);
     try {
       const data = await apiClient.getShopCatalog();
-      setItems(Array.isArray(data.items) ? data.items : []);
+      const loadedItems = Array.isArray(data.items) ? data.items : [];
+      setItems(loadedItems);
+      syncOwnedShopUnlocks(loadedItems, appearance);
       if (Array.isArray(data.categories) && data.categories.length > 0) {
         setCategories(data.categories);
       }
@@ -198,25 +201,13 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     });
   }, [items, selectedCategory, selectedRarity, onlyOwned, searchQuery]);
 
-  const syncLocalUnlockFromPatch = (patch: Record<string, unknown> | undefined, nextLook: CharacterAppearance) => {
-    if (nextLook.shirtPattern && nextLook.shirtPattern !== 'liso') {
-      unlockCosmeticPattern(nextLook.shirtPattern as ShirtPatternId);
-    }
-    if (nextLook.companion && nextLook.companion !== 'ninguno') {
-      unlockShopCompanion(nextLook.companion as CompanionStyle);
-    }
-    if (patch && typeof patch.pattern === 'string') {
-      unlockCosmeticPattern(nextLook.shirtPattern ?? 'liso');
-    }
-  };
-
   const handleTogglePreview = (item: ShopItem) => {
     if (previewingItem?.id === item.id) {
       setPreviewingItem(null);
       onTempPreview(null);
       return;
     }
-    const patched = applyBackendAppearancePatch(appearance, item.appearancePatch, true);
+    const patched = applyShopItemToAppearance(appearance, item);
     setPreviewingItem(item);
     onTempPreview(patched);
   };
@@ -257,12 +248,11 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
       if (typeof res.relicsBalance === 'number') {
         onRelicsBalanceChange(res.relicsBalance);
       }
-      const nextAppearance = applyBackendAppearancePatch(
+      const nextAppearance = applyShopItemToAppearance(
         appearance,
-        { ...(item.appearancePatch || {}), ...(res.appearance || {}) },
-        true
+        item,
+        res.appearance || undefined
       );
-      syncLocalUnlockFromPatch(item.appearancePatch, nextAppearance);
       setPreviewingItem(null);
       onTempPreview(null);
       onApplyAppearance(nextAppearance, false);
@@ -319,17 +309,17 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     setBusyItemId(item.id);
     try {
       const res = await apiClient.equipShopItems(item.id);
-      const nextAppearance = applyBackendAppearancePatch(
+      const equippedList = res.equippedItems || res.equipped;
+      const nextAppearance = applyShopItemToAppearance(
         appearance,
-        { ...(item.appearancePatch || {}), ...(res.appearance || {}) },
-        true
+        item,
+        res.appearance || undefined,
+        Array.isArray(equippedList) ? equippedList : undefined
       );
-      syncLocalUnlockFromPatch(item.appearancePatch, nextAppearance);
       setPreviewingItem(null);
       onTempPreview(null);
       onApplyAppearance(nextAppearance, false);
 
-      const equippedList = res.equippedItems || res.equipped;
       setItems((prev) =>
         prev.map((it) => {
           if (Array.isArray(equippedList)) {

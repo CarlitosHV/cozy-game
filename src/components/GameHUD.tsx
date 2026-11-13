@@ -129,6 +129,7 @@ import {
   loadAppearance,
   loadRoster,
 } from '../game/character';
+import { fetchOwnedShopItems, applyShopItemToAppearance } from '../game/shopCosmetics';
 import {
   PHOTO_FILTERS,
   PHOTO_FRAMES,
@@ -655,30 +656,112 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   }, [gameState, engine]);
 
   const [appearance, setAppearance] = useState<CharacterAppearance>(() => engine?.playerAppearance ?? loadAppearance());
+  const userTouchedAppearanceRef = useRef(false);
 
   const handleAppearanceChange = (next: CharacterAppearance, syncServer: boolean = true) => {
+    userTouchedAppearanceRef.current = true;
     setAppearance(next);
-    engine?.setPlayerAppearance(next, true, true);
-    if (syncServer && apiClient.isAuthenticated()) {
+    if (engine) {
+      engine.setPlayerAppearance(next, true, true, syncServer);
+    } else if (syncServer && apiClient.isAuthenticated()) {
       apiClient.updateAppearance(next).catch(() => {});
     }
   };
 
   // Chico / Chica: each keeps its own saved customization
   const handleSwitchBody = (body: BodyType) => {
+    userTouchedAppearanceRef.current = true;
     const next = loadRoster()[body];
     setAppearance(next);
-    engine?.setPlayerAppearance(next);
+    engine?.setPlayerAppearance(next, true, true, true);
   };
 
   const handleEquipPattern = (pattern: ShirtPatternId) => {
+    userTouchedAppearanceRef.current = true;
     const next: CharacterAppearance = { ...appearance, shirtPattern: pattern };
     setAppearance(next);
-    engine?.setPlayerAppearance(next, true, true);
-    if (apiClient.isAuthenticated()) {
-      apiClient.updateAppearance(next).catch(() => {});
-    }
+    engine?.setPlayerAppearance(next, true, true, true);
   };
+
+  // Hydrate profile appearance and owned shop cosmetics once on startup when already logged in
+  const startupHydratedRef = useRef(false);
+  useEffect(() => {
+    if (!engine || startupHydratedRef.current || !apiClient.isAuthenticated()) return;
+    startupHydratedRef.current = true;
+    let cancelled = false;
+    const baseLook = engine.playerAppearance ?? loadAppearance();
+
+    void Promise.allSettled([apiClient.getMe(), fetchOwnedShopItems(baseLook)]).then(
+      ([meRes, shopRes]) => {
+        if (cancelled || userTouchedAppearanceRef.current) return;
+
+        let merged = { ...baseLook };
+        let hasRemoteLook = false;
+
+        if (meRes.status === 'fulfilled' && meRes.value) {
+          const profile = meRes.value;
+          setCurrentUser(apiClient.getCurrentUser());
+          const syncedRelics = profile.relicsBalance ?? profile.progress?.relicsBalance;
+          if (typeof syncedRelics === 'number') {
+            apiClient.setCachedRelicsBalance(syncedRelics);
+          }
+          if (profile.progress?.maxUnlockedLevel) {
+            syncProgressFromBackend(
+              profile.progress.maxUnlockedLevel - 1,
+              profile.progress.unlockedCompanions
+            );
+          } else if (profile.progress?.unlockedCompanions) {
+            syncProgressFromBackend(0, profile.progress.unlockedCompanions);
+          }
+          if (profile.appearance && typeof profile.appearance === 'object') {
+            const saved = profile.appearance as Record<string, unknown>;
+            const madeInGame =
+              'sweaterColor' in saved ||
+              'outfitStyle' in saved ||
+              'eyeStyle' in saved ||
+              'shirtColor' in saved ||
+              'shirtStyle' in saved ||
+              'hat' in saved ||
+              'hatVariant' in saved ||
+              'outfitVariant' in saved ||
+              'glassesVariant' in saved ||
+              'backpackVariant' in saved ||
+              'companion' in saved;
+            if (madeInGame) {
+              merged = applyBackendAppearancePatch(merged, saved, true);
+              hasRemoteLook = true;
+            }
+          }
+        }
+
+        if (shopRes.status === 'fulfilled' && shopRes.value) {
+          const { ownedItems, equippedIds, backendAppearance } = shopRes.value;
+          if (backendAppearance && Object.keys(backendAppearance).length > 0) {
+            merged = applyBackendAppearancePatch(merged, backendAppearance, true);
+            hasRemoteLook = true;
+          }
+          if (equippedIds.length > 0) {
+            merged = { ...merged, equippedShopIds: equippedIds };
+            for (const item of ownedItems) {
+              if (item.equipped) {
+                merged = applyShopItemToAppearance(merged, item, undefined, equippedIds);
+                hasRemoteLook = true;
+              }
+            }
+          }
+        }
+
+        if (hasRemoteLook && !cancelled && !userTouchedAppearanceRef.current) {
+          setAppearance(merged);
+          engine.setPlayerAppearance(merged, true, true, false);
+        }
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [engine]);
 
   useEffect(() => {
     setClaimableMissions(getDailyMissionsState().claimableCount);
@@ -1207,14 +1290,38 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         'shirtColor' in saved ||
         'shirtStyle' in saved ||
         'hat' in saved ||
+        'hatVariant' in saved ||
+        'outfitVariant' in saved ||
+        'glassesVariant' in saved ||
+        'backpackVariant' in saved ||
         'companion' in saved;
       if (madeInGame) {
-        const fullAppearance = applyBackendAppearancePatch(appearance, saved, true);
+        let fullAppearance = applyBackendAppearancePatch(appearance, saved, true);
         setAppearance(fullAppearance);
-        engine.setPlayerAppearance(fullAppearance, true, true);
+        engine.setPlayerAppearance(fullAppearance, true, true, false);
+        void fetchOwnedShopItems(fullAppearance).then(({ ownedItems, equippedIds, backendAppearance }) => {
+          let nextLook = { ...fullAppearance };
+          if (backendAppearance && Object.keys(backendAppearance).length > 0) {
+            nextLook = applyBackendAppearancePatch(nextLook, backendAppearance, true);
+          }
+          if (equippedIds.length > 0) {
+            nextLook = { ...nextLook, equippedShopIds: equippedIds };
+            for (const item of ownedItems) {
+              if (item.equipped) {
+                nextLook = applyShopItemToAppearance(nextLook, item, undefined, equippedIds);
+              }
+            }
+          }
+          fullAppearance = nextLook;
+          setAppearance(fullAppearance);
+          engine.setPlayerAppearance(fullAppearance, true, true, false);
+        });
       } else if (apiClient.isAuthenticated()) {
         apiClient.updateAppearance(appearance).catch(() => {});
+        void fetchOwnedShopItems(appearance);
       }
+    } else if (apiClient.isAuthenticated()) {
+      void fetchOwnedShopItems(appearance);
     }
     if (gameState === 'victory') {
       void submitVictoryRun(true);

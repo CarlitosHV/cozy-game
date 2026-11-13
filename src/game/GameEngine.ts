@@ -812,7 +812,8 @@ export class GameEngine {
   public setPlayerAppearance(
     appearance: CharacterAppearance,
     persist: boolean = true,
-    bypassLocks: boolean = false
+    bypassLocks: boolean = false,
+    syncServer: boolean = true
   ) {
     this.tempPreviewAppearance = null;
     this.playerAppearance = { ...appearance };
@@ -822,7 +823,7 @@ export class GameEngine {
     this.rebuildPlayerModel(this.playerAppearance, !bypassLocks);
     if (persist) {
       saveAppearance(this.playerAppearance);
-      if (apiClient.isAuthenticated()) {
+      if (syncServer && apiClient.isAuthenticated()) {
         apiClient.updateAppearance(this.playerAppearance).catch(() => {});
       }
     }
