@@ -243,7 +243,10 @@ export interface LevelCompletionResult {
     maxUnlockedLevel: number;
     completedLevels: number[];
     totalCollectiblesFound: number;
+    relicsBalance?: number;
   };
+  relicsBalance?: number;
+  relicsEarned?: number;
   antiCheatCheck?: {
     passed: boolean;
     verifiedAt: string;
@@ -263,6 +266,8 @@ class ApiClient {
   private refreshTokenVal: string | null = null;
   private currentUser: User | null = null;
   private listeners: Set<(user: User | null) => void> = new Set();
+  private cachedRelicsBalance: number | null = null;
+  private relicsListeners: Set<(balance: number) => void> = new Set();
   private isRefreshing: boolean = false;
   private refreshPromise: Promise<string | null> | null = null;
 
@@ -336,10 +341,56 @@ class ApiClient {
     this.notifyAuthChange();
   }
 
+  public getCachedRelicsBalance(): number | null {
+    return this.cachedRelicsBalance;
+  }
+
+  public setCachedRelicsBalance(balance: number | null | undefined) {
+    if (typeof balance !== 'number' || !Number.isFinite(balance)) return;
+    const normalized = Math.max(0, Math.floor(balance));
+    this.cachedRelicsBalance = normalized;
+    for (const cb of this.relicsListeners) {
+      cb(normalized);
+    }
+  }
+
+  public onRelicsChange(cb: (balance: number) => void): () => void {
+    this.relicsListeners.add(cb);
+    if (this.cachedRelicsBalance !== null) {
+      cb(this.cachedRelicsBalance);
+    }
+    return () => {
+      this.relicsListeners.delete(cb);
+    };
+  }
+
+  public async refreshRelicsBalance(): Promise<number | null> {
+    try {
+      if (this.accessToken && !this.accessToken.startsWith('offline_token_')) {
+        try {
+          const inv = await this.getShopInventory();
+          if (typeof inv.relicsBalance === 'number') {
+            return inv.relicsBalance;
+          }
+        } catch {
+          // fallback to catalog
+        }
+      }
+      const cat = await this.getShopCatalog();
+      return typeof cat.relicsBalance === 'number' ? cat.relicsBalance : this.cachedRelicsBalance;
+    } catch {
+      return this.cachedRelicsBalance;
+    }
+  }
+
   private clearSession() {
     this.currentUser = null;
     this.accessToken = null;
     this.refreshTokenVal = null;
+    this.cachedRelicsBalance = null;
+    for (const cb of this.relicsListeners) {
+      cb(0);
+    }
     if (typeof window !== 'undefined') {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
       localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
@@ -370,10 +421,11 @@ class ApiClient {
         ...options,
         headers,
         credentials: 'include', // Include HttpOnly cookies for refresh
+        cache: 'no-store',
       });
 
-      // Handle token expiration: attempt automatic refresh once
-      if (response.status === 401 && requireAuth && this.refreshTokenVal && !this.isRefreshing) {
+      // Handle token expiration: attempt automatic refresh once (supports both stored token and HttpOnly cookie)
+      if (response.status === 401 && requireAuth && !this.isRefreshing && !endpoint.startsWith('/auth/')) {
         const newAccessToken = await this.refreshToken();
         if (newAccessToken) {
           headers['Authorization'] = `Bearer ${newAccessToken}`;
@@ -381,6 +433,7 @@ class ApiClient {
             ...options,
             headers,
             credentials: 'include',
+            cache: 'no-store',
           });
         }
       }
@@ -500,7 +553,7 @@ class ApiClient {
         }>('/auth/refresh', {
           method: 'POST',
           body: JSON.stringify({
-            refreshToken: this.refreshTokenVal,
+            ...(this.refreshTokenVal ? { refreshToken: this.refreshTokenVal } : {}),
             deviceId: 'web-browser',
           }),
         });
@@ -565,6 +618,10 @@ class ApiClient {
       this.currentUser = res.data.user;
       localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(res.data.user));
       this.notifyAuthChange();
+    }
+    const bal = res.data?.relicsBalance ?? res.data?.progress?.relicsBalance;
+    if (typeof bal === 'number') {
+      this.setCachedRelicsBalance(bal);
     }
     return res.data;
   }
@@ -752,25 +809,82 @@ class ApiClient {
     };
     this.saveLocalRecord(params.levelId, mode, localEntry);
 
-    try {
-      const res = await this.request<any>(
-        '/player/complete-level',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            levelId: params.levelId,
-            timeSeconds,
-            relicsFound: params.relicsFound ?? 0,
-            score: Math.round(params.score ?? 0),
-            stars: Math.round(params.stars ?? 0),
-            deaths: Math.round(params.deaths ?? 0),
-            mode,
-          }),
+    if (this.accessToken?.startsWith('offline_token_')) {
+      return {
+        record: {
+          _id: `rec_${Date.now()}`,
+          userId: localEntry.userId,
+          username: localEntry.username,
+          levelId: params.levelId,
+          mode,
+          timeSeconds,
+          collectiblesFound: localEntry.collectiblesFound,
+          createdAt: localEntry.createdAt || new Date().toISOString(),
         },
-        true
-      );
+        rank: 1,
+        isNewBest: true,
+        progress: {
+          maxUnlockedLevel: Math.max(params.levelId + 1, 2),
+          completedLevels: [params.levelId],
+          totalCollectiblesFound: localEntry.collectiblesFound,
+        },
+      };
+    }
+
+    const baseBody = {
+      levelId: params.levelId,
+      timeSeconds,
+      relicsFound: params.relicsFound ?? 0,
+      mode,
+    };
+    const fullBody = {
+      ...baseBody,
+      score: Math.round(params.score ?? 0),
+      stars: Math.round(params.stars ?? 0),
+      deaths: Math.round(params.deaths ?? 0),
+    };
+
+    try {
+      let res: any;
+      try {
+        res = await this.request<any>(
+          '/player/complete-level',
+          {
+            method: 'POST',
+            body: JSON.stringify(fullBody),
+          },
+          true
+        );
+      } catch (innerErr: unknown) {
+        const apiErr = innerErr as { status?: number };
+        if (apiErr?.status === 400) {
+          // Retry with strict spec-documented body in case backend rejects extra fields
+          res = await this.request<any>(
+            '/player/complete-level',
+            {
+              method: 'POST',
+              body: JSON.stringify(baseBody),
+            },
+            true
+          );
+        } else {
+          throw innerErr;
+        }
+      }
 
       const data = res?.data ?? res ?? {};
+      const nextBalance =
+        typeof data?.relicsBalance === 'number'
+          ? data.relicsBalance
+          : typeof data?.progress?.relicsBalance === 'number'
+            ? data.progress.relicsBalance
+            : typeof data?.relicsEarned === 'number' && this.cachedRelicsBalance !== null
+              ? this.cachedRelicsBalance + data.relicsEarned
+              : undefined;
+      if (typeof nextBalance === 'number') {
+        this.setCachedRelicsBalance(nextBalance);
+      }
+
       if (data?.record) {
         this.saveLocalRecord(params.levelId, mode, {
           rank: data.rank ?? 1,
@@ -787,7 +901,15 @@ class ApiClient {
       }
       return data;
     } catch (err) {
-      console.warn('Backend complete-level sync deferred, using local storage:', err);
+      const apiErr = err as { status?: number; code?: string };
+      const isOffline =
+        apiErr?.status === 0 ||
+        apiErr?.code === 'SERVER_OFFLINE' ||
+        Boolean(this.accessToken?.startsWith('offline_token_'));
+      if (!isOffline) {
+        throw err;
+      }
+      console.warn('Backend complete-level sync deferred while offline, using local storage:', err);
       return {
         record: {
           _id: `rec_${Date.now()}`,
@@ -1089,7 +1211,11 @@ class ApiClient {
       { method: 'GET' },
       this.accessToken ? 'optional' : false
     );
-    return res.data ?? (res as unknown as ShopCatalogResponse);
+    const data = res.data ?? (res as unknown as ShopCatalogResponse);
+    if (typeof data?.relicsBalance === 'number') {
+      this.setCachedRelicsBalance(data.relicsBalance);
+    }
+    return data;
   }
 
   /**
@@ -1100,7 +1226,11 @@ class ApiClient {
       status: string;
       data: ShopInventoryResponse;
     }>('/shop/inventory', { method: 'GET' }, true);
-    return res.data ?? (res as unknown as ShopInventoryResponse);
+    const data = res.data ?? (res as unknown as ShopInventoryResponse);
+    if (typeof data?.relicsBalance === 'number') {
+      this.setCachedRelicsBalance(data.relicsBalance);
+    }
+    return data;
   }
 
   /**
@@ -1123,6 +1253,9 @@ class ApiClient {
       true
     );
     const data = res.data ?? (res as unknown as ShopPurchaseResponse);
+    if (typeof data?.relicsBalance === 'number') {
+      this.setCachedRelicsBalance(data.relicsBalance);
+    }
     return { ...data, message: res.message || data.message };
   }
 

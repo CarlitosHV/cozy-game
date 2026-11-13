@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Backpack,
   Check,
@@ -164,12 +164,15 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     void loadCatalog();
   }, [loadCatalog, currentUser?._id]);
 
-  // Clear temporary preview on unmount
+  const onTempPreviewRef = useRef(onTempPreview);
+  onTempPreviewRef.current = onTempPreview;
+
+  // Clear temporary preview only when leaving/unmounting the shop tab
   useEffect(() => {
     return () => {
-      onTempPreview(null);
+      onTempPreviewRef.current(null);
     };
-  }, [onTempPreview]);
+  }, []);
 
   const categoryLabelMap = useMemo(() => {
     const map: Record<string, string> = {};

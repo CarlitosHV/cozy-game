@@ -606,7 +606,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [devAccess, setDevAccessState] = useState(() => hasDevAccess());
   const [devOn, setDevOn] = useState(() => hasDevAccess() && isDevMode());
   const [submittedRunKey, setSubmittedRunKey] = useState<string | null>(null);
-  const runStartTimeRef = useRef<number>(Date.now());
+  const runStartTimeRef = useRef<number>(typeof performance !== 'undefined' ? performance.now() : Date.now());
   const [elapsedTime, setElapsedTime] = useState(0);
   const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -743,6 +743,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       JSON.stringify({ roomId, levelId, joinedAt: Date.now() })
     );
     setElapsedTime(0);
+    runStartTimeRef.current = performance.now();
+    setSubmittedRunKey(null);
+    saveProgressAction.clearFeedback();
     engine.startGame('free', levelId);
     multiplayerClient.joinLevel(levelId, roomId);
     showToast(`Entraste a la sala · nivel ${levelId}`, 2200, 'success');
@@ -1092,7 +1095,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     incomingInvite,
   ]);
 
-  const isAnyModalOpen =
+  const isOverlayModalOpen =
     showHelpModal ||
     showLevelBrief ||
     showLobby ||
@@ -1105,10 +1108,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     showLeaderboardModal ||
     Boolean(capturedPhotoUrl) ||
     Boolean(incomingInvite) ||
+    Boolean(confirmRequest);
+
+  const isAnyModalOpen =
+    isOverlayModalOpen ||
     gameState === 'paused' ||
     gameState === 'victory' ||
     gameState === 'game_over' ||
     gameState === 'photo_mode';
+
+  const resumeGameplayFocus = () => {
+    if (!engine) return;
+    engine.setUIModalOpen(false);
+    engine.syncPointerLock();
+  };
 
   const submitVictoryRun = async (force: boolean = false) => {
     if (!engine) return;
@@ -1116,9 +1129,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     if (isDevMode()) return;
     const targetLevel = engine.currentLevel;
     const targetMode = engine.gameMode ?? gameMode;
-    const preciseTime = Math.max(4.6, (performance.now() - runStartTimeRef.current) / 1000, elapsedTime);
+    const runOrigin = Math.max(runStartTimeRef.current, engine.levelStartTime || 0);
+    const preciseTime = Math.max(4.6, (performance.now() - runOrigin) / 1000, elapsedTime);
+    const actualRelicsFound = Math.max(collectedCount, engine.physics?.collectedCount ?? 0);
 
-    const runKey = `${targetLevel}-${targetMode}-${runStartTimeRef.current}`;
+    const runKey = `${targetLevel}-${targetMode}-${engine.levelStartTime || runStartTimeRef.current}`;
     if (!force && submittedRunKey === runKey) return;
     setSubmittedRunKey(runKey);
 
@@ -1127,7 +1142,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         const res = await apiClient.completeLevel({
           levelId: targetLevel,
           timeSeconds: Number(preciseTime.toFixed(2)),
-          relicsFound: collectedCount,
+          relicsFound: actualRelicsFound,
           score: engine.lastRating?.score ?? 0,
           stars: engine.lastRating?.stars ?? 0,
           deaths: engine.lastRating?.deaths ?? deaths,
@@ -1136,6 +1151,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         if (res?.progress?.maxUnlockedLevel) {
           syncProgressFromBackend(res.progress.maxUnlockedLevel - 1);
         }
+        void apiClient.refreshRelicsBalance();
         return res;
       },
       {
@@ -1154,16 +1170,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   // Submit level completion when logged in, with loading / success / error feedback
   useEffect(() => {
-    if (gameState === 'victory' && engine) {
+    if ((gameState === 'victory' || (isSpectating && engine?.physics?.hasReachedSummit)) && engine) {
       void submitVictoryRun(false);
-    } else if (gameState === 'playing') {
+    } else if (gameState === 'playing' && !isSpectating) {
       setSubmittedRunKey(null);
       saveProgressAction.clearFeedback();
     }
-  }, [gameState, engine]);
+  }, [gameState, isSpectating, engine]);
 
   const handleProfileSynced = (profile: PlayerProfileData) => {
     setCurrentUser(apiClient.getCurrentUser());
+    const syncedRelics = profile.relicsBalance ?? profile.progress?.relicsBalance;
+    if (typeof syncedRelics === 'number') {
+      apiClient.setCachedRelicsBalance(syncedRelics);
+    }
     if (profile.progress?.maxUnlockedLevel) {
       syncProgressFromBackend(
         profile.progress.maxUnlockedLevel - 1,
@@ -1212,9 +1232,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   useEffect(() => {
     if (engine) {
-      engine.setUIModalOpen(isAnyModalOpen);
+      engine.setUIModalOpen(isOverlayModalOpen);
     }
-  }, [engine, isAnyModalOpen]);
+  }, [engine, isOverlayModalOpen]);
 
   // Auto-detect mobile touch screen based on touch capabilities (not window size)
   const [touchControlsEnabled, setTouchControlsEnabled] = useState(() => {
@@ -1434,6 +1454,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
       if (gameState === 'paused' && e.code === 'Enter') {
         e.preventDefault();
+        resumeGameplayFocus();
         engine?.setPaused(false);
         return;
       }
@@ -1444,8 +1465,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         if (engine && isLevelUnlocked(engine.currentLevel + 1)) {
           const nextLvl = engine.currentLevel + 1;
           setElapsedTime(0);
+          runStartTimeRef.current = performance.now();
           setPendingLevel(nextLvl);
           localStorage.setItem('cozy_last_level', String(nextLvl));
+          resumeGameplayFocus();
           engine.goToNextLevel();
         } else {
           handleReturnToTitle();
@@ -1626,7 +1649,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     setSubmittedRunKey(null);
     saveProgressAction.clearFeedback();
     const targetMode = modeToRestart ?? gameMode;
-    if (engine) engine.restartGame(targetMode);
+    if (engine) {
+      resumeGameplayFocus();
+      engine.restartGame(targetMode);
+    }
   };
 
   const handleReturnToTitle = () => {
@@ -3154,7 +3180,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           invited={pendingInvites}
           onInvite={handleInviteToPlay}
           onLogin={() => setShowAuthModal(true)}
-          onStart={() => setShowLobby(false)}
+          onStart={() => {
+            setShowLobby(false);
+            resumeGameplayFocus();
+          }}
           onExit={() => {
             setShowLobby(false);
             handleReturnToTitle();
@@ -3171,7 +3200,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </h3>
               <button
                 type="button"
-                onClick={() => setShowLevelBrief(false)}
+                onClick={() => {
+                  setShowLevelBrief(false);
+                  if (gameState === 'playing') resumeGameplayFocus();
+                }}
                 className="p-1.5 rounded-xl hover:bg-cozy-panel-deep text-cozy-soft cursor-pointer shrink-0"
                 aria-label={UI.close}
               >
@@ -3189,7 +3221,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </ul>
             <button
               type="button"
-              onClick={() => setShowLevelBrief(false)}
+              onClick={() => {
+                setShowLevelBrief(false);
+                if (gameState === 'playing') resumeGameplayFocus();
+              }}
               className={`${BTN.primary} mt-1`}
             >
               {gameState === 'paused' ? UI.understood : UI.letsPlay}
@@ -3277,13 +3312,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
             <div className="w-full flex flex-col gap-3">
               <button
-                onClick={() => engine?.setPaused(false)}
+                onClick={() => {
+                  resumeGameplayFocus();
+                  engine?.setPaused(false);
+                }}
                 className={BTN.primary}
               >
                 {UI.resume}
               </button>
               <button
                 onClick={() => {
+                  resumeGameplayFocus();
                   engine?.restartLevel();
                   engine?.setPaused(false);
                 }}
@@ -3552,6 +3591,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </button>
             )}
 
+            {isDevMode() && (
+              <p className="text-[11px] text-amber-800 bg-amber-50/90 border border-amber-200 rounded-xl px-3 py-1.5 w-full">
+                Modo desarrollador activo: esta partida no suma reliquias ni guarda récord en el servidor.
+              </p>
+            )}
+
             <div className="w-full flex flex-col gap-2.5">
               {engine && isLevelUnlocked(engine.currentLevel + 1) && (
                 <button
@@ -3565,6 +3610,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     const nextLvl = engine.currentLevel + 1;
                     setPendingLevel(nextLvl);
                     localStorage.setItem('cozy_last_level', String(nextLvl));
+                    resumeGameplayFocus();
                     engine.goToNextLevel();
                   }}
                   className={`${BTN.primary} flex items-center justify-center gap-2`}

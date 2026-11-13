@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Bug,
   Check,
@@ -131,7 +131,9 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
   const [activeTab, setActiveTab] = useState<LobbyTab>('play');
   const [showModePicker, setShowModePicker] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [relicsBalance, setRelicsBalance] = useState<number>(0);
+  const [relicsBalance, setRelicsBalance] = useState<number>(
+    () => apiClient.getCachedRelicsBalance() ?? 0
+  );
   const [levelSearch, setLevelSearch] = useState('');
   const [levelFilter, setLevelFilter] = useState<'all' | 'todo' | 'done'>('all');
   const [missionsSnapshot, setMissionsSnapshot] = useState<DailyMissionsSnapshot>(() =>
@@ -157,22 +159,22 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
     }
   }, [engine, activeTab]);
 
-  // Fetch initial Relics balance from shop catalog / inventory when user signs in
+  // Subscribe to reactive Relics balance and refresh from backend on lobby mount / account change
   useEffect(() => {
     let cancelled = false;
-    const syncBalance = async () => {
-      try {
-        const cat = await apiClient.getShopCatalog();
-        if (!cancelled && typeof cat.relicsBalance === 'number') {
-          setRelicsBalance(cat.relicsBalance);
-        }
-      } catch {
-        // ignore silent background sync failure
+    const unsub = apiClient.onRelicsChange((balance) => {
+      if (!cancelled) {
+        setRelicsBalance(balance);
       }
-    };
-    void syncBalance();
+    });
+    void apiClient.refreshRelicsBalance().then((bal) => {
+      if (!cancelled && typeof bal === 'number') {
+        setRelicsBalance(bal);
+      }
+    });
     return () => {
       cancelled = true;
+      unsub();
     };
   }, [currentUser?._id]);
 
@@ -190,6 +192,20 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
       window.clearInterval(timer);
     };
   }, []);
+
+  const handleShopTempPreview = useCallback(
+    (temp: CharacterAppearance | null) => {
+      engine?.setTempPreviewAppearance(temp);
+    },
+    [engine]
+  );
+
+  const handleShopZoom = useCallback(
+    (delta: number) => {
+      engine?.adjustCharacterPreviewZoom(delta);
+    },
+    [engine]
+  );
 
   const switchTab = (next: LobbyTab) => {
     if (next === 'character' && activeTab !== 'character') {
@@ -691,9 +707,9 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
           relicsBalance={relicsBalance}
           portrait={portrait}
           onRelicsBalanceChange={setRelicsBalance}
-          onApplyAppearance={(next, syncServer) => onAppearanceChange(next, syncServer)}
-          onTempPreview={(temp) => engine?.setTempPreviewAppearance(temp)}
-          onZoom={(delta) => engine?.adjustCharacterPreviewZoom(delta)}
+          onApplyAppearance={onAppearanceChange}
+          onTempPreview={handleShopTempPreview}
+          onZoom={handleShopZoom}
           onOpenAuth={onOpenAuth}
           onToast={onToast}
         />

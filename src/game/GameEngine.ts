@@ -290,6 +290,10 @@ export class GameEngine {
   private isMouseDragging: boolean = false;
   private lastMouseX: number = 0;
   private lastMouseY: number = 0;
+  private lastHoverMouseX: number = 0;
+  private lastHoverMouseY: number = 0;
+  private hasHoverMousePos: boolean = false;
+  private lastTouchEndTime: number = 0;
 
   // Mobile / Touchscreen Auto-Follow Camera
   public isTouchDevice: boolean = false;
@@ -1599,8 +1603,10 @@ export class GameEngine {
   public setPaused(paused: boolean) {
     if (this.gameState === 'title' || this.gameState === 'victory' || this.gameState === 'game_over') return;
     this.gameState = paused ? 'paused' : 'playing';
+    this.hasHoverMousePos = false;
     this.physics.isMovementLocked = paused || this.isUIModalOpen;
     if (paused) {
+      this.isMouseDragging = false;
       this.currentInput.forward = 0;
       this.currentInput.right = 0;
       this.currentInput.jump = false;
@@ -1619,8 +1625,11 @@ export class GameEngine {
 
   public setUIModalOpen(open: boolean) {
     this.isUIModalOpen = open;
-    this.physics.isMovementLocked = open || this.gameState === 'paused' || this.gameState === 'victory';
+    this.hasHoverMousePos = false;
+    this.physics.isMovementLocked =
+      open || this.gameState === 'paused' || this.gameState === 'victory' || this.gameState === 'game_over';
     if (open) {
+      this.isMouseDragging = false;
       this.currentInput.forward = 0;
       this.currentInput.right = 0;
       this.currentInput.jump = false;
@@ -1804,7 +1813,11 @@ export class GameEngine {
         soundManager.playGameOver();
       },
       unlockMovement: () => {
-        this.physics.isMovementLocked = this.isUIModalOpen || this.gameState === 'paused' || this.gameState === 'victory';
+        this.physics.isMovementLocked =
+          this.isUIModalOpen ||
+          this.gameState === 'paused' ||
+          this.gameState === 'victory' ||
+          this.gameState === 'game_over';
       },
       onDeath: () => this.countDeath(),
     });
@@ -1918,6 +1931,8 @@ export class GameEngine {
     this.partyRoomId = null;
     this.remotePlayers?.clearAll();
     this.gameState = 'title';
+    this.hasHoverMousePos = false;
+    this.isMouseDragging = false;
     this.physics.respawnAtCheckpoint(0, true);
     this.resetCompanionPowers();
     if (this.stalker) {
@@ -2108,6 +2123,7 @@ export class GameEngine {
   public enterPhotoMode() {
     if (this.gameState === 'title') return;
     this.gameState = 'photo_mode';
+    this.hasHoverMousePos = false;
     this.photoYaw = this.cameraYaw;
     this.photoPitch = this.cameraPitch;
     this.photoDistance = 5.2;
@@ -2182,7 +2198,9 @@ export class GameEngine {
 
     const dom = this.renderer.domElement;
     document.addEventListener('pointerlockchange', this.handlePointerLockChange);
+    document.addEventListener('pointerlockerror', this.handlePointerLockError);
     dom.addEventListener('mousedown', this.handleMouseDown);
+    dom.addEventListener('mouseleave', this.handleMouseLeave);
     window.addEventListener('mousemove', this.handleMouseMove);
     window.addEventListener('mouseup', this.handleMouseUp);
     dom.addEventListener('wheel', this.handleWheel, { passive: true });
@@ -2206,6 +2224,7 @@ export class GameEngine {
     this.virtualInput.sprint = false;
     this.virtualInput.crouch = false;
     this.isMouseDragging = false;
+    this.hasHoverMousePos = false;
     this.touchId = null;
     if (this.physics) {
       this.physics.velocity.x = 0;
@@ -2354,12 +2373,15 @@ export class GameEngine {
 
   public setMouseLook(on: boolean) {
     this.mouseLook = on;
+    this.hasHoverMousePos = false;
     try {
       localStorage.setItem('cozy_mouse_look', String(on));
     } catch {
       // ignore
     }
-    if (!on && document.pointerLockElement === this.renderer.domElement) {
+    if (on) {
+      this.syncPointerLock();
+    } else if (document.pointerLockElement === this.renderer.domElement) {
       this.releasingPointer = true;
       document.exitPointerLock();
     }
@@ -2371,6 +2393,7 @@ export class GameEngine {
     const locked = document.pointerLockElement === this.renderer.domElement;
     const wasLocked = this.pointerLocked;
     this.pointerLocked = locked;
+    this.hasHoverMousePos = false;
     if (locked) {
       this.isMouseDragging = false;
       return;
@@ -2385,11 +2408,27 @@ export class GameEngine {
     this.releasingPointer = false;
   };
 
+  private handlePointerLockError = () => {
+    this.releasingPointer = false;
+    this.hasHoverMousePos = false;
+  };
+
+  private handleMouseLeave = () => {
+    this.hasHoverMousePos = false;
+  };
+
+  private isTouchEmulatedMouse(e: MouseEvent): boolean {
+    const caps = (e as MouseEvent & { sourceCapabilities?: { firesTouchEvents?: boolean } }).sourceCapabilities;
+    if (caps?.firesTouchEvents) return true;
+    return this.touchId !== null || performance.now() - this.lastTouchEndTime <= 700;
+  }
+
   private handleMouseDown = (e: MouseEvent) => {
+    if (this.isTouchEmulatedMouse(e)) return;
+    this.usedTouch = false;
     // While playing, a click on the game takes the cursor (if it was freed)
     if (e.button === 0 && this.wantsPointerLock() && !this.pointerLocked) {
       this.syncPointerLock();
-      return;
     }
     if (e.button === 0 || e.button === 2) {
       this.isMouseDragging = true;
@@ -2401,14 +2440,43 @@ export class GameEngine {
   private handleMouseMove = (e: MouseEvent) => {
     if (this.pointerLocked) {
       // Cursor captured: the mouse turns the camera directly
-      if (this.gameState !== 'playing') return;
+      if (this.gameState !== 'playing' || this.isUIModalOpen) return;
       const mx = THREE.MathUtils.clamp(e.movementX || 0, -120, 120);
       const my = THREE.MathUtils.clamp(e.movementY || 0, -120, 120);
       this.cameraYaw -= mx * 0.0032;
       this.cameraPitch = Math.max(0.08, Math.min(1.2, this.cameraPitch + my * 0.0026));
       return;
     }
-    if (!this.isMouseDragging) return;
+
+    if (!this.isTouchEmulatedMouse(e)) {
+      this.usedTouch = false;
+    }
+
+    if (!this.isMouseDragging) {
+      // Seamless free mouse-look fallback when pointer lock is unavailable/rejected (e.g. iframe or before click)
+      if (!this.wantsPointerLock()) {
+        this.hasHoverMousePos = false;
+        return;
+      }
+      if (e.target !== this.renderer.domElement) {
+        this.hasHoverMousePos = false;
+        return;
+      }
+      if (!this.hasHoverMousePos) {
+        this.lastHoverMouseX = e.clientX;
+        this.lastHoverMouseY = e.clientY;
+        this.hasHoverMousePos = true;
+        return;
+      }
+      const dx = THREE.MathUtils.clamp(e.clientX - this.lastHoverMouseX, -120, 120);
+      const dy = THREE.MathUtils.clamp(e.clientY - this.lastHoverMouseY, -120, 120);
+      this.lastHoverMouseX = e.clientX;
+      this.lastHoverMouseY = e.clientY;
+      this.cameraYaw -= dx * 0.0045;
+      this.cameraPitch = Math.max(0.08, Math.min(1.2, this.cameraPitch + dy * 0.0035));
+      return;
+    }
+
     const dx = e.clientX - this.lastMouseX;
     const dy = e.clientY - this.lastMouseY;
     this.lastMouseX = e.clientX;
@@ -2523,6 +2591,7 @@ export class GameEngine {
   };
 
   private handleTouchEnd = (e: TouchEvent) => {
+    this.lastTouchEndTime = performance.now();
     if (e.touches.length < 2) {
       this.initialPinchDist = 0;
     }
@@ -2795,7 +2864,12 @@ export class GameEngine {
       return;
     }
 
-    if (this.gameState === 'paused' || this.gameState === 'victory' || this.isUIModalOpen) {
+    if (
+      this.gameState === 'paused' ||
+      this.gameState === 'victory' ||
+      this.gameState === 'game_over' ||
+      this.isUIModalOpen
+    ) {
       this.lastWallTime = performance.now();
       this.currentInput.forward = 0;
       this.currentInput.right = 0;
@@ -3548,11 +3622,16 @@ export class GameEngine {
 
     const dom = this.renderer.domElement;
     document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
+    document.removeEventListener('pointerlockerror', this.handlePointerLockError);
     if (this.pointerLocked) document.exitPointerLock?.();
     dom.removeEventListener('mousedown', this.handleMouseDown);
+    dom.removeEventListener('mouseleave', this.handleMouseLeave);
     window.removeEventListener('mousemove', this.handleMouseMove);
     window.removeEventListener('mouseup', this.handleMouseUp);
     dom.removeEventListener('wheel', this.handleWheel);
+    dom.removeEventListener('touchstart', this.handleTouchStart);
+    window.removeEventListener('touchmove', this.handleTouchMove);
+    window.removeEventListener('touchend', this.handleTouchEnd);
 
     this.disposeCombat();
     this.remotePlayers?.dispose();
