@@ -962,8 +962,8 @@ export function createPlayerCharacter(
   let hatPompom: THREE.Mesh = new THREE.Mesh(); // invisible placeholder when the hat has no pompom
   let floatingHalo: THREE.Mesh | null = null;
   const handledSpecialHat = (() => {
-    if (look.hatStyle === 'ninguno') return false;
-    if ((hatVarLower.includes('crown') || hatVarLower.includes('corona') || hatVarLower.includes('king') || hatVarLower.includes('royal') || hatVarLower.includes('queen')) && !hatVarLower.includes('flower') && !hatVarLower.includes('flores')) {
+    if (look.hatStyle === 'ninguno' && !hatVarLower) return false;
+    if ((hatVarLower.includes('crown') || hatVarLower.includes('corona') || hatVarLower.includes('tiara') || hatVarLower.includes('diadema') || hatVarLower.includes('king') || hatVarLower.includes('royal') || hatVarLower.includes('queen')) && !hatVarLower.includes('flower') && !hatVarLower.includes('flores')) {
       const crownGold = new THREE.MeshStandardMaterial({
         color: look.hatColor === '#3d5a80' ? 0xfbbf24 : look.hatColor,
         roughness: 0.25,
@@ -1086,7 +1086,8 @@ export function createPlayerCharacter(
   })();
 
   if (!handledSpecialHat) {
-  switch (look.hatStyle) {
+  const effectiveHatStyle = look.hatStyle === 'ninguno' && hatVarLower ? 'sombrero' : look.hatStyle;
+  switch (effectiveHatStyle) {
     case 'gorro': {
       // Cozy rounded Beanie Hat: dome that fits snugly and roomily over the head without clipping
       const hatDomeGeom = new THREE.SphereGeometry(0.245, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.58);

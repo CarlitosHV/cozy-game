@@ -286,7 +286,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     if (busyItemId) return;
     setBusyItemId(item.id);
     try {
-      const res = await apiClient.purchaseShopItem(item.id, true, appearance);
+      const res = await apiClient.purchaseShopItem(item.id, true, appearance, [item.category]);
       const nextCurr: CurrenciesBalance = res.currencies ?? {
         walnut:
           typeof res.walnutBalance === 'number'
@@ -308,7 +308,8 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
         appearance,
         item,
         res.appearance || undefined,
-        purchasedEquippedList
+        purchasedEquippedList,
+        res.appliedPatch || undefined
       );
       setPreviewingItem(null);
       onTempPreview(null);
@@ -381,13 +382,27 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     if (busyItemId) return;
     setBusyItemId(item.id);
     try {
-      const res = await apiClient.equipShopItems(item.id, appearance);
-      const equippedList = res.equippedItems || res.equipped;
+      const res = await apiClient.equipShopItems(item.id, appearance, [item.category]);
+      const rawEqList =
+        res.equippedItems ??
+        res.equipped ??
+        (res.equippedByCategory ? Object.values(res.equippedByCategory).filter(Boolean) : undefined);
+      const equippedSet = new Set<string>(Array.isArray(rawEqList) ? rawEqList : []);
+      if (res.equippedByCategory) {
+        for (const id of Object.values(res.equippedByCategory)) {
+          if (id) equippedSet.add(id);
+        }
+      }
+      if (!equippedSet.has(item.id) && res.equippedByCategory?.[item.category] === item.id) {
+        equippedSet.add(item.id);
+      }
+      const equippedList = equippedSet.size > 0 ? Array.from(equippedSet) : undefined;
       const nextAppearance = applyShopItemToAppearance(
         appearance,
         item,
         res.appearance || undefined,
-        Array.isArray(equippedList) ? equippedList : undefined
+        equippedList,
+        res.appliedPatch || undefined
       );
       setPreviewingItem(null);
       onTempPreview(null);
@@ -395,11 +410,9 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
 
       setItems((prev) =>
         prev.map((it) => {
-          if (Array.isArray(equippedList)) {
-            return { ...it, equipped: equippedList.includes(it.id) };
-          }
           if (it.id === item.id) return { ...it, equipped: true };
           if (it.category === item.category) return { ...it, equipped: false };
+          if (equippedList) return { ...it, equipped: equippedList.includes(it.id) };
           return it;
         })
       );

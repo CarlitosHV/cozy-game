@@ -862,10 +862,13 @@ class ApiClient {
     equipItemIds?: string[];
     unequipCategories?: string[];
     resetToDefault?: boolean;
+    omitCategories?: string[];
   }): Promise<PlayerCharacterResponse> {
     const bodyPayload: Record<string, unknown> = {};
     if (params.appearance) {
-      const cleanApp = buildBackendAppearancePayload(params.appearance);
+      const cleanApp = buildBackendAppearancePayload(params.appearance, {
+        omitCategories: params.omitCategories,
+      });
       if (Object.keys(cleanApp).length > 0) bodyPayload.appearance = cleanApp;
     }
     if (Array.isArray(params.equipItemIds) && params.equipItemIds.length > 0) {
@@ -1605,10 +1608,11 @@ class ApiClient {
   public async purchaseShopItem(
     itemId: string,
     autoEquip: boolean = true,
-    currentAppearance?: Partial<CharacterAppearance>
+    currentAppearance?: Partial<CharacterAppearance>,
+    omitCategories?: string[]
   ): Promise<ShopPurchaseResponse> {
     const safeAppearance = currentAppearance
-      ? buildBackendAppearancePayload(currentAppearance, { coreOnly: true })
+      ? buildBackendAppearancePayload(currentAppearance, { coreOnly: true, omitCategories })
       : null;
     const bodyPayload: Record<string, unknown> = { itemId, autoEquip };
     if (safeAppearance && Object.keys(safeAppearance).length > 0) {
@@ -1668,13 +1672,14 @@ class ApiClient {
    */
   public async equipShopItems(
     itemIds: string | string[],
-    currentAppearance?: Partial<CharacterAppearance>
+    currentAppearance?: Partial<CharacterAppearance>,
+    omitCategories?: string[]
   ): Promise<ShopEquipResponse> {
     const ids = (Array.isArray(itemIds) ? itemIds : [itemIds]).filter(
       (id): id is string => typeof id === 'string' && id.trim().length > 0
     );
     const safeAppearance = currentAppearance
-      ? buildBackendAppearancePayload(currentAppearance, { coreOnly: true })
+      ? buildBackendAppearancePayload(currentAppearance, { coreOnly: true, omitCategories })
       : null;
     const body: Record<string, unknown> = { itemIds: ids };
     if (safeAppearance && Object.keys(safeAppearance).length > 0) {
@@ -1741,8 +1746,15 @@ class ApiClient {
     if (params.category) baseBody.category = params.category;
     if (params.itemId) baseBody.itemId = params.itemId;
 
+    const omitCats = [
+      ...(params.categories ?? []),
+      ...(params.category ? [params.category] : []),
+    ];
     const safeAppearance = params.currentAppearance
-      ? buildBackendAppearancePayload(params.currentAppearance, { coreOnly: true })
+      ? buildBackendAppearancePayload(params.currentAppearance, {
+          coreOnly: true,
+          omitCategories: omitCats,
+        })
       : null;
     const fullBody: Record<string, unknown> = {
       ...baseBody,

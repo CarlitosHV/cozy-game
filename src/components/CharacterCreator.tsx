@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUp,
   Award,
   Backpack,
+  Bug,
   Check,
   Cloud,
   Dices,
@@ -11,7 +11,6 @@ import {
   HardHat,
   Layers,
   Loader2,
-  Lock,
   Mars,
   Palette,
   RefreshCw,
@@ -19,11 +18,8 @@ import {
   Scissors,
   Shirt,
   ShoppingBag,
-  Shuffle,
-  Smile,
   Sparkles,
   Star,
-  Bug,
   Undo2,
   UserRound,
   Venus,
@@ -35,30 +31,17 @@ import {
 import type { CharacterPreviewFocus } from '../game/GameEngine';
 import { UI } from '../ui/labels';
 import {
-  ACCESSORIES,
   BODY_TYPES,
-  BOOT_COLORS,
   BodyType,
-  CLOTH_COLORS,
-  COMPANIONS,
   CharacterAppearance,
   CompanionStyle,
-  EYE_STYLES,
-  HAIR_COLORS,
-  NAME_SUGGESTIONS,
-  SKIN_TONES,
-  colorLabel,
   defaultAppearanceFor,
-  generateRandomAppearance,
   generateRandomName,
-  hairStylesFor,
-  hatStylesFor,
-  outfitStylesFor,
+  normalizeHexColor,
 } from '../game/character';
 import { COMPANION_POWERS } from '../game/companionPowers';
-import { isCompanionUnlocked, unlockLevelFor } from '../game/progress';
-import { SHIRT_PATTERNS, getPatternSwatchUrl } from '../game/patterns';
-import { isPatternUnlocked, subscribeDailyMissions } from '../game/dailyMissions';
+import { subscribeDailyMissions } from '../game/dailyMissions';
+import { getPatternSwatchUrl } from '../game/patterns';
 import {
   apiClient,
   normalizeShopTier,
@@ -69,26 +52,28 @@ import {
   User,
 } from '../services/apiClient';
 import {
+  REMOVABLE_COSMETIC_CATEGORIES,
   SHOP_CATEGORY_LABELS,
+  WardrobeItem,
   applyShopItemToAppearance,
+  applyWardrobeBaseItem,
   clearCategoryFromAppearance,
   fetchOwnedShopItems,
+  getBaseCosmeticItems,
+  getUnlockedProgressionItems,
 } from '../game/shopCosmetics';
 import { ConfirmDialog, ConfirmRequest } from './ConfirmDialog';
-import { FieldError, RequirementList } from './FieldHints';
-import { RecentChips, SuggestionList } from './RecentChips';
+import { FieldError } from './FieldHints';
 import {
   CHARACTER_NAME_MAX,
-  characterNameRequirements,
   isCharacterNameValid,
   sanitizeCharacterNameInput,
 } from '../ui/validation';
 import { characterNameHint } from '../ui/errors';
 import { isTypingTarget } from '../ui/shortcuts';
-import { getRecent, pushRecent, RECENT_KEYS } from '../ui/recentMemory';
 import { friendlyError } from '../utils/locale';
 
-type Tab = 'cuerpo' | 'pelo' | 'ropa' | 'companero' | 'compras';
+type SourceFilter = 'all' | 'shop' | 'base';
 
 interface CharacterCreatorProps {
   appearance: CharacterAppearance;
@@ -106,14 +91,6 @@ interface CharacterCreatorProps {
   onToast?: (msg: string, ms?: number, tone?: 'neutral' | 'success' | 'error') => void;
 }
 
-const TAB_FOCUS: Record<Tab, CharacterPreviewFocus> = {
-  cuerpo: 'full',
-  pelo: 'head',
-  ropa: 'torso',
-  companero: 'companion',
-  compras: 'full',
-};
-
 const CATEGORY_FOCUS: Record<ShopCategory, CharacterPreviewFocus> = {
   skin: 'head',
   hair: 'head',
@@ -128,91 +105,67 @@ const CATEGORY_FOCUS: Record<ShopCategory, CharacterPreviewFocus> = {
   companion: 'companion',
 };
 
-const FIELD_FOCUS: Partial<Record<keyof CharacterAppearance, CharacterPreviewFocus>> = {
-  skinColor: 'head',
-  eyeStyle: 'head',
-  accessory: 'head',
-  accessoryVariant: 'torso',
-  accessoryColor: 'torso',
-  height: 'full',
-  build: 'full',
-  hairStyle: 'head',
-  hairColor: 'head',
-  outfitStyle: 'torso',
-  sweaterColor: 'torso',
-  shirtPattern: 'torso',
-  detailColor: 'torso',
-  hatStyle: 'head',
-  hatColor: 'head',
-  scarfColor: 'torso',
-  bootColor: 'feet',
-  shoesVariant: 'feet',
-  auraVariant: 'full',
-  auraColor: 'full',
-  backpack: 'torso',
-  companion: 'companion',
-  name: 'full',
-  bodyType: 'full',
-};
-
-const TABS: { id: Tab; name: string; icon: React.ReactNode }[] = [
-  { id: 'cuerpo', name: 'Cuerpo', icon: <Smile className="w-3.5 h-3.5" /> },
-  { id: 'pelo', name: 'Pelo', icon: <Scissors className="w-3.5 h-3.5" /> },
-  { id: 'ropa', name: 'Ropa', icon: <Shirt className="w-3.5 h-3.5" /> },
-  { id: 'companero', name: 'Compa', icon: <Sparkles className="w-3.5 h-3.5" /> },
-  { id: 'compras', name: 'Compras', icon: <ShoppingBag className="w-3.5 h-3.5" /> },
-];
-
-const TIER_BADGE: Record<
-  ShopTier,
-  { label: string; lineColor: string; pillClass: string }
-> = {
+const TIER_TEXT_STYLE: Record<ShopTier, { label: string; lineColor: string; textClass: string }> = {
   common: {
     label: SHOP_TIER_META.common.label,
     lineColor: SHOP_TIER_META.common.color,
-    pillClass: 'bg-slate-100 text-slate-700 border-slate-200',
+    textClass: 'text-slate-600',
   },
   epic: {
     label: SHOP_TIER_META.epic.label,
     lineColor: SHOP_TIER_META.epic.color,
-    pillClass: 'bg-purple-50 text-purple-700 border-purple-200',
+    textClass: 'text-purple-700',
   },
   golden: {
     label: SHOP_TIER_META.golden.label,
     lineColor: SHOP_TIER_META.golden.color,
-    pillClass: 'bg-amber-50 text-amber-800 border-amber-300',
+    textClass: 'text-amber-700',
   },
   mythic: {
     label: SHOP_TIER_META.mythic.label,
     lineColor: SHOP_TIER_META.mythic.color,
-    pillClass: 'bg-rose-50 text-rose-700 border-rose-200',
+    textClass: 'text-rose-700',
   },
 };
+
+const CATEGORY_ORDER: ShopCategory[] = [
+  'hat',
+  'outfit',
+  'pattern',
+  'hair',
+  'skin',
+  'glasses',
+  'accessory',
+  'backpack',
+  'shoes',
+  'aura',
+  'companion',
+];
 
 function shopCategoryIcon(cat: ShopCategory) {
   switch (cat) {
     case 'skin':
-      return <Palette className="w-3.5 h-3.5" />;
+      return <Palette className="w-3.5 h-3.5 shrink-0" />;
     case 'hat':
-      return <HardHat className="w-3.5 h-3.5" />;
+      return <HardHat className="w-3.5 h-3.5 shrink-0" />;
     case 'outfit':
-      return <Shirt className="w-3.5 h-3.5" />;
+      return <Shirt className="w-3.5 h-3.5 shrink-0" />;
     case 'pattern':
-      return <Layers className="w-3.5 h-3.5" />;
+      return <Layers className="w-3.5 h-3.5 shrink-0" />;
     case 'glasses':
-      return <Glasses className="w-3.5 h-3.5" />;
+      return <Glasses className="w-3.5 h-3.5 shrink-0" />;
     case 'backpack':
-      return <Backpack className="w-3.5 h-3.5" />;
+      return <Backpack className="w-3.5 h-3.5 shrink-0" />;
     case 'hair':
-      return <Scissors className="w-3.5 h-3.5" />;
+      return <Scissors className="w-3.5 h-3.5 shrink-0" />;
     case 'accessory':
-      return <Award className="w-3.5 h-3.5" />;
+      return <Award className="w-3.5 h-3.5 shrink-0" />;
     case 'shoes':
-      return <Footprints className="w-3.5 h-3.5" />;
+      return <Footprints className="w-3.5 h-3.5 shrink-0" />;
     case 'aura':
-      return <Wand2 className="w-3.5 h-3.5" />;
+      return <Wand2 className="w-3.5 h-3.5 shrink-0" />;
     case 'companion':
-      return <Sparkles className="w-3.5 h-3.5" />;
+      return <Sparkles className="w-3.5 h-3.5 shrink-0" />;
   }
 }
 
@@ -271,245 +224,138 @@ export const COMPANION_ICONS: Record<CompanionStyle, React.ReactNode> = {
   ninguno: <X className="w-4 h-4" />,
 };
 
-// ---------- Small building blocks ----------
-
-const Section: React.FC<{
-  title: string;
-  children: React.ReactNode;
-  aside?: React.ReactNode;
-  onFocus?: () => void;
-}> = ({ title, children, aside, onFocus }) => (
-  <div className="flex flex-col gap-2" onPointerDownCapture={onFocus}>
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-[10px] text-cozy-accent-deep font-extrabold uppercase tracking-wider">
-        {title}
-      </span>
-      {aside}
-    </div>
-    {children}
-  </div>
-);
-
-const Swatches: React.FC<{
-  colors: string[];
-  value: string;
-  onPick: (c: string) => void;
-  label: string;
-}> = ({ colors, value, onPick, label }) => {
-  const isCustom = !colors.includes(value.toLowerCase());
-  return (
-    <div className="p-2.5 rounded-2xl bg-white/60 border border-cozy-line/80">
-      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={label}>
-        {colors.map((c) => {
-          const selected = value.toLowerCase() === c.toLowerCase();
-          return (
-            <button
-              key={c}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              aria-label={colorLabel(c)}
-              title={colorLabel(c)}
-              onClick={() => onPick(c)}
-              className={`w-7 h-7 rounded-full border transition-transform cursor-pointer active:scale-90 ${
-                selected
-                  ? 'border-cozy-accent-deep ring-2 ring-cozy-accent/60 ring-offset-2 ring-offset-white scale-110'
-                  : 'border-black/15 hover:scale-110'
-              }`}
-              style={{ backgroundColor: c }}
-            />
-          );
-        })}
-        <label
-          title="Color personalizado"
-          className={`relative w-7 h-7 rounded-full border cursor-pointer overflow-hidden transition-transform hover:scale-110 ${
-            isCustom
-              ? 'border-cozy-accent-deep ring-2 ring-cozy-accent/60 ring-offset-2 ring-offset-white scale-110'
-              : 'border-black/15'
-          }`}
-          style={{
-            background: isCustom
-              ? value
-              : 'conic-gradient(#f87171, #fbbf24, #a3e635, #34d399, #38bdf8, #a78bfa, #f472b6, #f87171)',
-          }}
-        >
-          <input
-            type="color"
-            value={value}
-            onChange={(e) => onPick(e.target.value)}
-            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-            aria-label={`${label}: color personalizado`}
-          />
-        </label>
-      </div>
-      <p className="mt-2 text-[10px] text-cozy-muted">
-        Elegido: <span className="font-semibold text-cozy-ink">{colorLabel(value)}</span>
-      </p>
-    </div>
-  );
-};
-
-function Chips<T extends string>({
-  options,
-  value,
-  onPick,
-}: {
-  options: { id: T; name: string }[];
-  value: T;
-  onPick: (v: T) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {options.map((o) => {
-        const selected = o.id === value;
-        return (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => onPick(o.id)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer active:scale-95 ${
-              selected
-                ? 'cozy-tab-active border-transparent shadow-xs'
-                : 'bg-white/70 hover:bg-white text-cozy-ink border-cozy-line hover:border-cozy-sky'
-            }`}
-          >
-            {o.name}
-          </button>
-        );
-      })}
-    </div>
-  );
+function isClearingStub(item: ShopItem): boolean {
+  const idLower = item.id.toLowerCase();
+  if (idLower.endsWith('_none') || idLower === 'none') return true;
+  const p = item.appearancePatch || {};
+  if (item.category === 'hat' && typeof p.hat === 'string' && ['none', 'ninguno'].includes(p.hat.toLowerCase())) {
+    return true;
+  }
+  if (item.category === 'glasses' && typeof p.glasses === 'string' && ['none', 'ninguno'].includes(p.glasses.toLowerCase())) {
+    return true;
+  }
+  if (item.category === 'backpack' && (p.backpack === false || (typeof p.backpack === 'string' && ['none', 'ninguno', 'false'].includes(p.backpack.toLowerCase())))) {
+    return true;
+  }
+  return false;
 }
 
-const Slider: React.FC<{
-  value: number;
-  min: number;
-  max: number;
-  onChange: (v: number) => void;
-  leftLabel: string;
-  rightLabel: string;
-  label: string;
-}> = ({ value, min, max, onChange, leftLabel, rightLabel, label }) => (
-  <div className="flex flex-col gap-1 px-3 py-2.5 rounded-2xl bg-white/60 border border-cozy-line/80">
-    <input
-      type="range"
-      min={min}
-      max={max}
-      step={0.01}
-      value={value}
-      aria-label={label}
-      onChange={(e) => onChange(parseFloat(e.target.value))}
-      className="w-full accent-cozy-accent-deep cursor-pointer"
-    />
-    <div className="flex justify-between text-[10px] font-medium text-cozy-muted">
-      <span>{leftLabel}</span>
-      <span>{rightLabel}</span>
-    </div>
-  </div>
-);
+// ---------- Wardrobe Object Card ----------
 
-// ---------- Owned Shop Cosmetic Card ----------
-
-const OwnedShopCard: React.FC<{
-  item: ShopItem;
+const WardrobeObjectCard: React.FC<{
+  item: WardrobeItem;
   equipped: boolean;
   busy: boolean;
   appearance: CharacterAppearance;
-  onEquip: (item: ShopItem) => void;
-  onUnequip?: (item: ShopItem) => void;
-  compact?: boolean;
-}> = ({ item, equipped, busy, appearance, onEquip, onUnequip, compact = false }) => {
+  onEquip: (item: WardrobeItem) => void;
+  onUnequip: (item: WardrobeItem) => void;
+}> = ({ item, equipped, busy, appearance, onEquip, onUnequip }) => {
   const tier = normalizeShopTier(item.tier ?? item.rarity);
-  const rarity = TIER_BADGE[tier] ?? TIER_BADGE.common;
+  const tierInfo = TIER_TEXT_STYLE[tier] ?? TIER_TEXT_STYLE.common;
+  const lineColor = item.source === 'base' ? '#94a3b8' : item.source === 'mission' ? '#588157' : item.source === 'level' ? '#3d5a80' : tierInfo.lineColor;
+
   const patchPattern =
-    item.category === 'pattern' && typeof item.appearancePatch?.pattern === 'string'
-      ? (item.appearancePatch.pattern as CharacterAppearance['shirtPattern'])
+    item.category === 'pattern' &&
+    typeof (item.appearancePatch?.pattern ?? item.appearancePatch?.shirtPattern) === 'string'
+      ? ((item.appearancePatch?.pattern ?? item.appearancePatch?.shirtPattern) as CharacterAppearance['shirtPattern'])
       : undefined;
   const patternUrl = patchPattern
     ? getPatternSwatchUrl(patchPattern, appearance.sweaterColor, appearance.detailColor)
     : undefined;
+
   const patchCompanion =
     item.category === 'companion' && typeof item.appearancePatch?.companion === 'string'
       ? (item.appearancePatch.companion as CompanionStyle)
       : undefined;
-  const removable =
-    equipped &&
-    onUnequip &&
-    (item.category === 'hat' ||
-      item.category === 'glasses' ||
-      item.category === 'backpack' ||
-      item.category === 'hair' ||
-      item.category === 'accessory' ||
-      item.category === 'shoes' ||
-      item.category === 'aura' ||
-      item.category === 'companion');
+  const companionPower = patchCompanion ? COMPANION_POWERS[patchCompanion] : undefined;
+
+  const sourceLabel =
+    item.source === 'base'
+      ? 'Base'
+      : item.source === 'mission'
+        ? item.unlockHint || 'Misión'
+        : item.source === 'level'
+          ? item.unlockHint || 'Nivel'
+          : tierInfo.label;
+
+  const removable = equipped && REMOVABLE_COSMETIC_CATEGORIES.has(item.category);
 
   return (
     <div
       className={`relative flex flex-col justify-between rounded-2xl border overflow-hidden transition-all shadow-xs ${
         equipped
           ? 'bg-white/95 border-amber-400/90 ring-1 ring-amber-400/50'
-          : 'bg-white/75 hover:bg-white/95 border-cozy-line'
+          : 'bg-white/78 hover:bg-white/95 border-cozy-line'
       }`}
     >
-      <div className="h-1 w-full" style={{ backgroundColor: rarity.lineColor }} />
-      <div className={compact ? 'p-2.5 flex items-center gap-2.5' : 'p-3 flex flex-col gap-2'}>
-        <div className={compact ? 'flex items-center gap-2.5 min-w-0 flex-1' : 'flex items-start gap-2.5'}>
-          {/* Swatch / Visual Thumbnail */}
-          <div className="w-9 h-9 rounded-xl border border-black/10 shrink-0 overflow-hidden flex items-center justify-center bg-white/90 shadow-inner">
-            {patternUrl ? (
-              <img src={patternUrl} alt={item.name} className="w-full h-full object-cover" />
-            ) : patchCompanion && COMPANION_ICONS[patchCompanion] ? (
-              <span className="text-cozy-accent-deep">{COMPANION_ICONS[patchCompanion]}</span>
-            ) : (
-              <div
-                className="w-full h-full flex items-center justify-center text-white/90"
-                style={{
-                  background: `linear-gradient(135deg, ${item.previewColor || '#f59e0b'}, ${item.previewColor || '#f59e0b'}cc)`,
-                }}
-              >
-                {shopCategoryIcon(item.category)}
-              </div>
-            )}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs font-bold text-cozy-ink truncate">{item.name}</span>
-            </div>
-            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-              <span className={`px-1.5 py-px rounded text-[9px] font-bold border ${rarity.pillClass}`}>
-                {rarity.label}
-              </span>
-              {!compact && (
-                <span className="text-[10px] text-cozy-muted truncate">
-                  {SHOP_CATEGORY_LABELS[item.category]}
-                </span>
+      <div className="h-1 w-full" style={{ backgroundColor: lineColor }} />
+      <div className="p-3 flex flex-col gap-2 flex-1 justify-between">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-start gap-2.5">
+            <div className="w-10 h-10 rounded-xl border border-black/10 shrink-0 overflow-hidden flex items-center justify-center bg-white/90 shadow-inner">
+              {patternUrl ? (
+                <img src={patternUrl} alt={item.name} className="w-full h-full object-cover" />
+              ) : patchCompanion && COMPANION_ICONS[patchCompanion] ? (
+                <span className="text-cozy-accent-deep">{COMPANION_ICONS[patchCompanion]}</span>
+              ) : (
+                <div
+                  className="w-full h-full flex items-center justify-center text-white/95"
+                  style={{
+                    background: `linear-gradient(135deg, ${item.previewColor || '#f59e0b'}, ${item.previewColor || '#f59e0b'}cc)`,
+                  }}
+                >
+                  {shopCategoryIcon(item.category)}
+                </div>
               )}
             </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wide truncate">
+                <span className={item.source === 'shop' ? tierInfo.textClass : 'text-cozy-accent-deep'}>
+                  {sourceLabel}
+                </span>
+                <span aria-hidden="true" className="text-cozy-soft">
+                  ·
+                </span>
+                <span className="text-cozy-muted truncate">
+                  {SHOP_CATEGORY_LABELS[item.category]}
+                </span>
+              </div>
+              <h3 className="text-xs font-bold text-cozy-ink leading-snug mt-0.5 line-clamp-1">
+                {item.name}
+              </h3>
+            </div>
           </div>
+
+          {item.description && (
+            <p className="text-[11px] text-cozy-muted leading-snug line-clamp-2">
+              {item.description}
+            </p>
+          )}
+
+          {companionPower && (
+            <p className="text-[10px] leading-snug text-cozy-moss font-medium line-clamp-2">
+              <strong>Poder: {companionPower.powerName}.</strong> {companionPower.desc}
+            </p>
+          )}
         </div>
 
-        {!compact && item.description && (
-          <p className="text-[11px] text-cozy-muted leading-snug line-clamp-2">{item.description}</p>
-        )}
-
-        <div className={compact ? 'shrink-0 flex items-center gap-1' : 'pt-1 flex items-center gap-1.5'}>
+        <div className="pt-1 flex items-center gap-1.5">
           {equipped ? (
             <>
-              <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-extrabold">
-                <Check className="w-3 h-3" />
-                Equipado
-              </span>
+              <div className="flex-1 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-extrabold">
+                <Check className="w-3.5 h-3.5" />
+                <span>Equipado</span>
+              </div>
               {removable && (
                 <button
                   type="button"
                   disabled={busy}
                   onClick={() => onUnequip(item)}
                   title="Quitar objeto"
-                  className="px-2 py-1.5 rounded-xl bg-white hover:bg-rose-50 border border-cozy-line hover:border-rose-200 text-cozy-muted hover:text-rose-600 text-[10px] font-bold cursor-pointer transition-colors disabled:opacity-50"
+                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-rose-50 border border-cozy-line hover:border-rose-200 text-cozy-muted hover:text-rose-600 text-[11px] font-bold cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap shrink-0"
                 >
-                  Quitar
+                  {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Quitar'}
                 </button>
               )}
             </>
@@ -518,7 +364,7 @@ const OwnedShopCard: React.FC<{
               type="button"
               disabled={busy}
               onClick={() => onEquip(item)}
-              className={`${compact ? 'px-3 py-1.5' : 'w-full py-1.5 px-3'} rounded-xl cozy-btn-primary text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 active:scale-95`}
+              className="w-full py-1.5 px-3 rounded-xl cozy-btn-primary text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 active:scale-95 whitespace-nowrap"
             >
               {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3 h-3" />}
               <span>Equipar</span>
@@ -547,32 +393,30 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
   onOpenAuth,
   onToast,
 }) => {
-  const [tab, setTab] = useState<Tab>('cuerpo');
   const [history, setHistory] = useState<CharacterAppearance[]>([]);
   const [nameTouched, setNameTouched] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
-  const [recentNames, setRecentNames] = useState<string[]>(() => getRecent(RECENT_KEYS.characterNames));
   const [, setMissionTick] = useState(0);
   const [previewFocus, setPreviewFocus] = useState<CharacterPreviewFocus>('full');
 
-  // Owned Shop Cosmetics State
-  const [ownedItems, setOwnedItems] = useState<ShopItem[]>([]);
+  // Wardrobe & Shop State
+  const [ownedShopItems, setOwnedShopItems] = useState<ShopItem[]>([]);
   const [loadingOwned, setLoadingOwned] = useState(false);
   const [busyEquipId, setBusyEquipId] = useState<string | null>(null);
-  const [shopFilterCat, setShopFilterCat] = useState<'all' | ShopCategory>('all');
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+  const [filterCat, setFilterCat] = useState<'all' | ShopCategory>('all');
 
-  const lastKeyRef = useRef<string | null>(null);
   const isAuth = apiClient.isAuthenticated();
 
   const loadOwned = useCallback(async () => {
     if (!apiClient.isAuthenticated()) {
-      setOwnedItems([]);
+      setOwnedShopItems([]);
       return;
     }
     setLoadingOwned(true);
     try {
       const { ownedItems: items } = await fetchOwnedShopItems(appearance);
-      setOwnedItems(items);
+      setOwnedShopItems(items.filter((it) => !isClearingStub(it)));
     } catch {
       // keep existing items if offline
     } finally {
@@ -595,143 +439,270 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
     onFocusChange?.(next);
   };
 
-  const apply = (next: CharacterAppearance, key: string) => {
-    if (key !== lastKeyRef.current || key === 'random' || key === 'reset') {
-      setHistory((h) => [...h.slice(-29), appearance]);
-    }
-    lastKeyRef.current = key;
-    const part = FIELD_FOCUS[key as keyof CharacterAppearance];
-    if (part) focus(part);
-    onChange(next);
-  };
+  const body = appearance.bodyType;
+  const nameValid = isCharacterNameValid(appearance.name);
+  const nameError = nameTouched ? characterNameHint(appearance.name) : null;
 
-  const withoutOwnedIdsInCategories = (
-    ids: string[] | undefined,
-    categories: ShopCategory[]
-  ): string[] | undefined => {
-    if (!Array.isArray(ids) || ids.length === 0) return ids;
-    const blocked = new Set(
-      ownedItems.filter((i) => categories.includes(i.category)).map((i) => i.id)
-    );
-    const filtered = ids.filter((id) => !blocked.has(id));
-    return filtered;
-  };
+  // Merge Base starter objects + Mission/Level unlocked objects + Owned Shop objects cleanly
+  const { wardrobeItems, shopItemIds } = useMemo(() => {
+    const idSet = new Set<string>();
+    const list: WardrobeItem[] = [];
+    const seenIds = new Set<string>();
+    const backendFreeCategories = new Set<ShopCategory>();
 
-  const set = <K extends keyof CharacterAppearance>(key: K, value: CharacterAppearance[K]) => {
-    const next: CharacterAppearance = { ...appearance, [key]: value };
-    // Clear shop variant overrides when explicitly switching back to a base style
-    if (key === 'outfitStyle') {
-      delete next.outfitVariant;
-      delete next.accentGlowColor;
-      next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, ['outfit']);
-    } else if (key === 'hatStyle') {
-      delete next.hatVariant;
-      next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, ['hat']);
-    } else if (key === 'hairStyle') {
-      delete next.hairVariant;
-      next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, ['hair']);
-    } else if (key === 'skinColor') {
-      delete next.skinVariant;
-      next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, ['skin']);
-    } else if (key === 'accessory') {
-      delete next.glassesVariant;
-      delete next.glassesColor;
-      next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, ['glasses']);
-    } else if (key === 'backpack') {
-      delete next.backpackVariant;
-      delete next.backpackColor;
-      next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, ['backpack']);
-    } else if (key === 'shirtPattern') {
-      next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, ['pattern']);
-    } else if (key === 'companion') {
-      next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, ['companion']);
-    }
-    apply(next, key);
-  };
-
-  const isShopItemEquipped = useCallback(
-    (item: ShopItem): boolean => {
-      if (Array.isArray(appearance.equippedShopIds)) {
-        return appearance.equippedShopIds.includes(item.id);
+    for (const item of ownedShopItems) {
+      idSet.add(item.id);
+      const isFreeStarter = item.priceWalnut === 0 && item.priceCrystal === 0;
+      if (isFreeStarter) backendFreeCategories.add(item.category);
+      if (!seenIds.has(item.id)) {
+        seenIds.add(item.id);
+        list.push({
+          ...item,
+          source: isFreeStarter ? 'base' : 'shop',
+        });
       }
-      return Boolean(item.equipped);
+    }
+
+    // Add starter base objects for every starter slot not already populated by a free backend item
+    for (const baseItem of getBaseCosmeticItems(body)) {
+      if (backendFreeCategories.has(baseItem.category)) continue;
+      if (!seenIds.has(baseItem.id)) {
+        seenIds.add(baseItem.id);
+        list.push(baseItem);
+      }
+    }
+
+    // Add unlocked daily-mission patterns and unlocked level companions as objects
+    for (const progItem of getUnlockedProgressionItems(ownedShopItems)) {
+      if (!seenIds.has(progItem.id)) {
+        seenIds.add(progItem.id);
+        list.push(progItem);
+      }
+    }
+
+    // Sort: purchased shop items first, then mission/level, then base; ordered by category
+    const sourceRank: Record<WardrobeItem['source'], number> = {
+      shop: 0,
+      mission: 1,
+      level: 2,
+      base: 3,
+    };
+    list.sort((a, b) => {
+      const catDiff = CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category);
+      if (catDiff !== 0) return catDiff;
+      return sourceRank[a.source] - sourceRank[b.source];
+    });
+
+    return { wardrobeItems: list, shopItemIds: idSet };
+  }, [ownedShopItems, body]);
+
+  // Helper: is any shop catalog item currently equipped in a given category?
+  const shopEquippedInCategory = useCallback(
+    (category: ShopCategory): boolean => {
+      const eqIds = Array.isArray(appearance.equippedShopIds) ? appearance.equippedShopIds : null;
+      for (const s of ownedShopItems) {
+        if (s.category !== category) continue;
+        if (eqIds ? eqIds.includes(s.id) : s.equipped) {
+          return true;
+        }
+      }
+      return false;
     },
-    [appearance.equippedShopIds]
+    [appearance.equippedShopIds, ownedShopItems]
   );
 
-  const handleEquipShopItem = async (item: ShopItem) => {
+  const isWardrobeItemEquipped = useCallback(
+    (item: WardrobeItem): boolean => {
+      if (shopItemIds.has(item.id)) {
+        if (Array.isArray(appearance.equippedShopIds)) {
+          return appearance.equippedShopIds.includes(item.id);
+        }
+        return Boolean(item.equipped);
+      }
+
+      if (shopEquippedInCategory(item.category)) {
+        return false;
+      }
+
+      const def = defaultAppearanceFor(body);
+      const patch = item.appearancePatch || {};
+      switch (item.category) {
+        case 'skin':
+          return (
+            !appearance.skinVariant &&
+            normalizeHexColor(appearance.skinColor) === normalizeHexColor(patch.skinColor ?? def.skinColor)
+          );
+        case 'hair':
+          return (
+            !appearance.hairVariant &&
+            appearance.hairStyle === (patch.hairStyle ?? def.hairStyle) &&
+            normalizeHexColor(appearance.hairColor) === normalizeHexColor(patch.hairColor ?? def.hairColor)
+          );
+        case 'outfit':
+          return (
+            !appearance.outfitVariant &&
+            appearance.outfitStyle === (patch.outfitStyle ?? def.outfitStyle) &&
+            normalizeHexColor(appearance.sweaterColor) === normalizeHexColor(patch.sweaterColor ?? def.sweaterColor)
+          );
+        case 'pattern': {
+          const targetPat = String(patch.shirtPattern ?? patch.pattern ?? 'liso');
+          return (appearance.shirtPattern ?? 'liso') === targetPat;
+        }
+        case 'hat':
+          return !appearance.hatVariant && appearance.hatStyle === (patch.hatStyle ?? def.hatStyle);
+        case 'backpack':
+          return Boolean(appearance.backpack) && !appearance.backpackVariant;
+        case 'shoes':
+          return (
+            !appearance.shoesVariant &&
+            normalizeHexColor(appearance.bootColor) === normalizeHexColor(patch.bootColor ?? def.bootColor)
+          );
+        case 'companion':
+          return appearance.companion === patch.companion;
+        default:
+          return false;
+      }
+    },
+    [appearance, body, shopEquippedInCategory, shopItemIds]
+  );
+
+  const handleEquipItem = async (item: WardrobeItem) => {
     if (busyEquipId) return;
     setBusyEquipId(item.id);
     focus(CATEGORY_FOCUS[item.category] ?? 'full');
 
-    const prevIds = Array.isArray(appearance.equippedShopIds)
-      ? appearance.equippedShopIds
-      : ownedItems.filter((i) => i.equipped).map((i) => i.id);
-    const sameCatIds = new Set(
-      ownedItems.filter((i) => i.category === item.category).map((i) => i.id)
-    );
-    const optimisticIds = [...prevIds.filter((id) => !sameCatIds.has(id)), item.id];
+    const isShopItem = shopItemIds.has(item.id);
 
     try {
-      if (apiClient.isAuthenticated()) {
-        const res = await apiClient.updatePlayerCharacter({
-          appearance,
-          equipItemIds: [item.id],
-        });
-        const serverEq = Array.isArray(res?.equippedItems)
-          ? res.equippedItems
-          : res?.equippedByCategory
-            ? Object.values(res.equippedByCategory).filter(Boolean)
-            : optimisticIds;
-        const next = applyShopItemToAppearance(appearance, item, res?.appearance, serverEq);
+      if (isShopItem) {
+        const prevIds = Array.isArray(appearance.equippedShopIds)
+          ? appearance.equippedShopIds
+          : ownedShopItems.filter((i) => i.equipped).map((i) => i.id);
+        const sameCatIds = new Set(
+          ownedShopItems.filter((i) => i.category === item.category).map((i) => i.id)
+        );
+        const optimisticIds = [...prevIds.filter((id) => !sameCatIds.has(id)), item.id];
+
+        if (apiClient.isAuthenticated()) {
+          const res = await apiClient.updatePlayerCharacter({
+            appearance,
+            equipItemIds: [item.id],
+            omitCategories: [item.category],
+          });
+          const eqSet = new Set<string>(
+            Array.isArray(res?.equippedItems)
+              ? res.equippedItems
+              : res?.equippedByCategory
+                ? Object.values(res.equippedByCategory).filter(Boolean)
+                : optimisticIds
+          );
+          if (res?.equippedByCategory) {
+            for (const id of Object.values(res.equippedByCategory)) {
+              if (id) eqSet.add(id);
+            }
+          }
+          eqSet.add(item.id);
+          const serverEq = Array.from(eqSet);
+          const next = applyShopItemToAppearance(
+            appearance,
+            item,
+            res?.appearance,
+            serverEq,
+            (res as { appliedPatch?: Record<string, unknown> })?.appliedPatch
+          );
+          setHistory((h) => [...h.slice(-29), appearance]);
+          onChange(next);
+          setOwnedShopItems((cur) =>
+            cur.map((entry) =>
+              entry.category === item.category
+                ? { ...entry, equipped: entry.id === item.id }
+                : { ...entry, equipped: serverEq.includes(entry.id) }
+            )
+          );
+        } else {
+          const next = applyShopItemToAppearance(appearance, item, undefined, optimisticIds);
+          setHistory((h) => [...h.slice(-29), appearance]);
+          onChange(next);
+        }
+        onToast?.(`¡${item.name} equipado!`, 2000, 'success');
+      } else {
+        // Equip Base / Mission / Level object cleanly, clearing any shop override in that category
+        const hadShopEquipped = shopEquippedInCategory(item.category);
+        const next = applyWardrobeBaseItem(appearance, item, ownedShopItems);
+
+        if (apiClient.isAuthenticated()) {
+          if (hadShopEquipped) {
+            await apiClient.unequipShopItems({
+              category: item.category,
+              currentAppearance: next,
+            });
+          }
+          await apiClient.updatePlayerCharacter({ appearance: next }).catch(() => {});
+        }
+
         setHistory((h) => [...h.slice(-29), appearance]);
-        lastKeyRef.current = `shop-${item.id}`;
         onChange(next);
-        setOwnedItems((cur) =>
+        setOwnedShopItems((cur) =>
           cur.map((entry) =>
-            entry.category === item.category
-              ? { ...entry, equipped: entry.id === item.id || serverEq.includes(entry.id) }
-              : { ...entry, equipped: serverEq.includes(entry.id) }
+            entry.category === item.category ? { ...entry, equipped: false } : entry
           )
         );
-      } else {
-        const next = applyShopItemToAppearance(appearance, item, undefined, optimisticIds);
-        setHistory((h) => [...h.slice(-29), appearance]);
-        lastKeyRef.current = `shop-${item.id}`;
-        onChange(next);
+        onToast?.(`¡${item.name} equipado!`, 1800, 'success');
       }
-      onToast?.(`¡${item.name} equipado!`, 2000, 'success');
     } catch (err) {
-      onToast?.(friendlyError(err, 'No se pudo equipar el artículo.'), 2600, 'error');
+      onToast?.(friendlyError(err, 'No se pudo equipar el objeto.'), 2600, 'error');
     } finally {
       setBusyEquipId(null);
     }
   };
 
-  const handleUnequipShopItem = async (item: ShopItem) => {
+  const handleUnequipItem = async (item: WardrobeItem) => {
     if (busyEquipId) return;
     setBusyEquipId(item.id);
+    focus(CATEGORY_FOCUS[item.category] ?? 'full');
+
+    const isShopItem = shopItemIds.has(item.id);
+    const sameCatShopIds = ownedShopItems
+      .filter((s) => s.category === item.category)
+      .map((s) => s.id);
+
     try {
-      let next = clearCategoryFromAppearance(appearance, item.category, undefined, item.id);
+      let next = clearCategoryFromAppearance(
+        appearance,
+        item.category,
+        undefined,
+        item.id,
+        sameCatShopIds
+      );
+
       if (apiClient.isAuthenticated()) {
-        const res = await apiClient.unequipShopItems({
-          category: item.category,
-          itemId: item.id,
-          currentAppearance: appearance,
-        });
-        const serverEq = Array.isArray(res?.equippedItems)
-          ? res.equippedItems
-          : Array.isArray(res?.equipped)
-            ? res.equipped
-            : undefined;
-        next = clearCategoryFromAppearance(appearance, item.category, res?.appearance, item.id);
-        if (serverEq) next.equippedShopIds = serverEq;
+        if (isShopItem) {
+          const res = await apiClient.unequipShopItems({
+            category: item.category,
+            itemId: item.id,
+            currentAppearance: appearance,
+          });
+          const serverEq = Array.isArray(res?.equippedItems)
+            ? res.equippedItems
+            : Array.isArray(res?.equipped)
+              ? res.equipped
+              : undefined;
+          next = clearCategoryFromAppearance(
+            appearance,
+            item.category,
+            res?.appearance,
+            item.id,
+            sameCatShopIds
+          );
+          if (serverEq) next.equippedShopIds = serverEq;
+        } else {
+          await apiClient.updatePlayerCharacter({ appearance: next }).catch(() => {});
+        }
       }
+
       setHistory((h) => [...h.slice(-29), appearance]);
-      lastKeyRef.current = `unequip-${item.id}`;
-      focus(CATEGORY_FOCUS[item.category] ?? 'full');
       onChange(next);
-      setOwnedItems((cur) =>
+      setOwnedShopItems((cur) =>
         cur.map((entry) =>
           entry.id === item.id || entry.category === item.category
             ? { ...entry, equipped: false }
@@ -740,7 +711,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
       );
       onToast?.(`${item.name} quitado`, 1600, 'neutral');
     } catch (err) {
-      onToast?.(friendlyError(err, 'No se pudo quitar el artículo.'), 2400, 'error');
+      onToast?.(friendlyError(err, 'No se pudo quitar el objeto.'), 2400, 'error');
     } finally {
       setBusyEquipId(null);
     }
@@ -750,55 +721,24 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
     if (!history.length) return;
     const prev = history[history.length - 1];
     setHistory(history.slice(0, -1));
-    lastKeyRef.current = null;
     onChange(prev);
   };
 
-  const body = appearance.bodyType;
-  const nameReqs = characterNameRequirements(appearance.name);
-  const nameValid = isCharacterNameValid(appearance.name);
-  const nameError = nameTouched ? characterNameHint(appearance.name) : null;
-
-  const randomize = () => {
-    focus('full');
-    apply(generateRandomAppearance(body), 'random');
-  };
-  const randomizeLook = () => {
-    focus('full');
-    apply(generateRandomAppearance(body, appearance.name), 'random');
-  };
   const reset = () => {
     focus('full');
+    const def = defaultAppearanceFor(body);
     if (apiClient.isAuthenticated()) {
       apiClient.updatePlayerCharacter({ resetToDefault: true }).catch(() => {});
     }
-    apply(defaultAppearanceFor(body), 'reset');
-  };
-
-  const requestRandomize = () => {
-    setConfirmRequest({
-      title: '¿Cambiar todo al azar?',
-      message: 'Se reemplazan nombre y apariencia. Podrás deshacer si te arrepientes.',
-      confirmLabel: 'Al azar',
-      cancelLabel: UI.cancel,
-      onConfirm: randomize,
-    });
-  };
-
-  const requestRandomizeLook = () => {
-    setConfirmRequest({
-      title: '¿Cambiar solo la apariencia?',
-      message: 'Se mantiene el nombre y se genera un look nuevo.',
-      confirmLabel: 'Cambiar look',
-      cancelLabel: UI.cancel,
-      onConfirm: randomizeLook,
-    });
+    setHistory((h) => [...h.slice(-29), appearance]);
+    onChange(def);
+    setOwnedShopItems((cur) => cur.map((it) => ({ ...it, equipped: false })));
   };
 
   const requestReset = () => {
     setConfirmRequest({
       title: '¿Volver al personaje inicial?',
-      message: 'Se pierde el look actual. Podrás deshacer después.',
+      message: 'Se restaura el atuendo base y se quitan los objetos equipados.',
       confirmLabel: 'Restablecer',
       cancelLabel: UI.cancel,
       tone: 'danger',
@@ -809,7 +749,6 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
   const switchBody = (next: BodyType) => {
     if (next === body) return;
     setHistory((h) => [...h.slice(-29), appearance]);
-    lastKeyRef.current = null;
     focus('full');
     onSwitchBody(next);
   };
@@ -818,11 +757,16 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
     if (next === body) return;
     setConfirmRequest({
       title: '¿Cambiar de personaje?',
-      message: 'Pasarás a otra silueta y el look actual se reemplaza.',
+      message: 'Pasarás a otra silueta y conservarás sus objetos guardados.',
       confirmLabel: 'Cambiar',
       cancelLabel: UI.cancel,
       onConfirm: () => switchBody(next),
     });
+  };
+
+  const updateName = (rawName: string) => {
+    setHistory((h) => [...h.slice(-29), appearance]);
+    onChange({ ...appearance, name: rawName });
   };
 
   const finish = () => {
@@ -830,15 +774,9 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
     if (!nameValid) return;
     const trimmed = appearance.name.trim();
     if (trimmed !== appearance.name) {
-      apply({ ...appearance, name: trimmed }, 'name');
+      onChange({ ...appearance, name: trimmed });
     }
-    setRecentNames(pushRecent(RECENT_KEYS.characterNames, trimmed));
     onClose();
-  };
-
-  const selectTab = (next: Tab) => {
-    setTab(next);
-    focus(TAB_FOCUS[next]);
   };
 
   useEffect(() => {
@@ -860,13 +798,6 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
         undo();
         return;
       }
-      const tabMatch = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);
-      if (tabMatch && !e.metaKey && !e.ctrlKey) {
-        const idx = parseInt(tabMatch[1], 10) - 1;
-        const next = TABS[idx];
-        if (next) selectTab(next.id);
-        return;
-      }
       if (e.code === 'Enter') {
         e.preventDefault();
         finish();
@@ -876,54 +807,37 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [confirmRequest, history, appearance.name, nameValid, onCancel]);
 
-  const ownedCategoriesPresent = useMemo(() => {
-    const setCats = new Set<ShopCategory>();
-    for (const item of ownedItems) setCats.add(item.category);
-    return Array.from(setCats);
-  }, [ownedItems]);
+  const shopOnlyCount = useMemo(
+    () => wardrobeItems.filter((i) => i.source === 'shop').length,
+    [wardrobeItems]
+  );
+  const baseAndUnlockCount = useMemo(
+    () => wardrobeItems.filter((i) => i.source !== 'shop').length,
+    [wardrobeItems]
+  );
 
-  const filteredOwnedItems = useMemo(() => {
-    if (shopFilterCat === 'all') return ownedItems;
-    return ownedItems.filter((i) => i.category === shopFilterCat);
-  }, [ownedItems, shopFilterCat]);
+  const itemsBySource = useMemo(() => {
+    if (sourceFilter === 'shop') return wardrobeItems.filter((i) => i.source === 'shop');
+    if (sourceFilter === 'base') return wardrobeItems.filter((i) => i.source !== 'shop');
+    return wardrobeItems;
+  }, [wardrobeItems, sourceFilter]);
 
-  const ownedBodyItems = useMemo(
-    () => ownedItems.filter((i) => i.category === 'skin' || i.category === 'glasses'),
-    [ownedItems]
-  );
-  const ownedHairItems = useMemo(
-    () => ownedItems.filter((i) => i.category === 'hair'),
-    [ownedItems]
-  );
-  const ownedClothingItems = useMemo(
-    () =>
-      ownedItems.filter(
-        (i) =>
-          i.category === 'outfit' ||
-          i.category === 'hat' ||
-          i.category === 'backpack' ||
-          i.category === 'accessory' ||
-          i.category === 'shoes' ||
-          i.category === 'aura' ||
-          i.category === 'pattern'
-      ),
-    [ownedItems]
-  );
-  const shopOwnedCompanions = useMemo(
-    () =>
-      new Set(
-        ownedItems
-          .filter((i) => i.category === 'companion' && typeof i.appearancePatch?.companion === 'string')
-          .map((i) => i.appearancePatch!.companion as CompanionStyle)
-      ),
-    [ownedItems]
-  );
+  const categoriesAvailable = useMemo(() => {
+    const present = new Set<ShopCategory>();
+    for (const item of itemsBySource) present.add(item.category);
+    return CATEGORY_ORDER.filter((c) => present.has(c));
+  }, [itemsBySource]);
+
+  const displayedItems = useMemo(() => {
+    if (filterCat === 'all') return itemsBySource;
+    return itemsBySource.filter((i) => i.category === filterCat);
+  }, [itemsBySource, filterCat]);
 
   const panelPosition = portrait
-    ? 'inset-x-0 bottom-0 max-h-[58%] rounded-t-3xl border-t'
+    ? 'inset-x-0 bottom-0 max-h-[60%] rounded-t-3xl border-t'
     : embeddedInLobby
-      ? 'right-0 top-14 bottom-0 w-[min(440px,48vw)] border-l'
-      : 'right-0 top-0 bottom-0 w-[min(440px,48vw)] border-l';
+      ? 'right-0 top-14 bottom-0 w-[min(480px,50vw)] border-l'
+      : 'right-0 top-0 bottom-0 w-[min(480px,50vw)] border-l';
 
   return (
     <div className="absolute inset-0 pointer-events-none text-cozy-ink">
@@ -941,7 +855,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
           <Sparkles className="w-4 h-4 text-cozy-accent-deep shrink-0" />
           <div className="min-w-0 text-left">
             <div className="text-[10px] font-extrabold uppercase tracking-wider text-cozy-muted leading-none">
-              Estudio de personaje
+              Armario de objetos
             </div>
             <div className="text-lg sm:text-xl font-display font-bold text-cozy-ink truncate leading-tight">
               {appearance.name || 'Sin nombre'}
@@ -969,7 +883,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
                 key={f.id}
                 type="button"
                 onClick={() => focus(f.id)}
-                className={`px-2.5 py-1 rounded-xl text-[10px] font-bold border transition-all cursor-pointer backdrop-blur-md shadow-xs ${
+                className={`px-2.5 py-1 rounded-xl text-[10px] font-bold border transition-all cursor-pointer backdrop-blur-md shadow-xs whitespace-nowrap ${
                   previewFocus === f.id
                     ? 'bg-white/95 border-cozy-accent-deep/60 text-cozy-accent-deep'
                     : 'bg-white/72 hover:bg-white/90 border-white/75 text-cozy-ink'
@@ -1009,16 +923,16 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
         )}
       </div>
 
-      {/* Right Frosted White Studio Panel */}
+      {/* Right Frosted Wardrobe Panel */}
       <div
-        className={`absolute ${panelPosition} pointer-events-auto flex flex-col bg-white/82 backdrop-blur-xl border-white/75 shadow-2xl`}
+        className={`absolute ${panelPosition} pointer-events-auto flex flex-col bg-white/84 backdrop-blur-xl border-white/75 shadow-2xl`}
       >
-        {/* Character selector + name + randomizers */}
+        {/* Compact Character Header: Chico/Chica + Nombre */}
         <div className="flex flex-col gap-2.5 p-4 pb-3 border-b border-cozy-line/80 bg-white/45">
           <div
             className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-white/70 border border-cozy-line"
             role="radiogroup"
-            aria-label="Personaje"
+            aria-label="Silueta del personaje"
           >
             {BODY_TYPES.map((b) => {
               const selected = body === b.id;
@@ -1030,7 +944,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
                   role="radio"
                   aria-checked={selected}
                   onClick={() => requestSwitchBody(b.id)}
-                  className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  className={`flex items-center justify-center gap-1.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     selected
                       ? b.id === 'chica'
                         ? 'bg-cozy-blush text-white shadow-sm'
@@ -1060,16 +974,16 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
                 value={appearance.name}
                 maxLength={CHARACTER_NAME_MAX}
                 placeholder={body === 'chica' ? 'Nombre de tu viajera' : 'Nombre de tu viajero'}
-                onChange={(e) => set('name', sanitizeCharacterNameInput(e.target.value))}
+                onChange={(e) => updateName(sanitizeCharacterNameInput(e.target.value))}
                 onBlur={() => setNameTouched(true)}
-                className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-white/85 border border-cozy-line text-sm font-semibold text-cozy-ink placeholder:text-cozy-soft focus:outline-none focus:border-cozy-sky select-text"
+                className="flex-1 min-w-0 px-3 py-1.5 rounded-xl bg-white/85 border border-cozy-line text-sm font-semibold text-cozy-ink placeholder:text-cozy-soft focus:outline-none focus:border-cozy-sky select-text"
                 aria-label="Nombre del personaje"
                 aria-invalid={Boolean(nameError)}
               />
               <button
                 type="button"
                 onClick={() => {
-                  set('name', generateRandomName(body));
+                  updateName(generateRandomName(body));
                   setNameTouched(true);
                 }}
                 title="Nombre aleatorio"
@@ -1079,635 +993,230 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
                 <Dices className="w-4 h-4" />
               </button>
             </div>
-            <RecentChips
-              label="Nombres recientes"
-              items={recentNames}
-              onPick={(value) => {
-                set('name', sanitizeCharacterNameInput(value));
-                setNameTouched(true);
-              }}
-            />
-            <RecentChips
-              label="Sugerencias"
-              items={NAME_SUGGESTIONS[body]}
-              onPick={(value) => {
-                set('name', sanitizeCharacterNameInput(value));
-                setNameTouched(true);
-              }}
-            />
-            <SuggestionList
-              query={appearance.name}
-              options={[...recentNames, ...NAME_SUGGESTIONS[body]]}
-              onPick={(value) => {
-                set('name', sanitizeCharacterNameInput(value));
-                setNameTouched(true);
-              }}
-            />
-            <RequirementList items={nameReqs} show={nameTouched || appearance.name.length > 0} />
             <FieldError message={nameError} />
           </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={requestRandomize}
-              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl cozy-btn-primary font-bold text-xs cursor-pointer active:scale-95"
-            >
-              <Dices className="w-3.5 h-3.5" />
-              ¡Al azar!
-            </button>
-            <button
-              type="button"
-              onClick={requestRandomizeLook}
-              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white/80 hover:bg-white border border-cozy-line text-cozy-ink font-semibold text-xs cursor-pointer active:scale-95 shadow-xs"
-              title="Cambia la apariencia y conserva el nombre"
-            >
-              <Shuffle className="w-3.5 h-3.5 text-cozy-accent-deep" />
-              Solo look
-            </button>
-          </div>
         </div>
 
-        {/* 5 Tabs: Cuerpo | Pelo | Ropa | Compa | Mis Compras */}
-        <div className="grid grid-cols-5 gap-1 px-3 pt-2.5 pb-1 bg-white/35 border-b border-cozy-line/60" role="tablist">
-          {TABS.map((t) => {
-            const active = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => selectTab(t.id)}
-                className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 px-1.5 py-2 rounded-xl text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer ${
-                  active
-                    ? 'bg-white text-cozy-accent-deep border border-cozy-line shadow-xs'
-                    : 'text-cozy-muted hover:text-cozy-ink hover:bg-white/55 border border-transparent'
-                }`}
-              >
-                {t.icon}
-                <span className="truncate">{t.name}</span>
-                {t.id === 'compras' && ownedItems.length > 0 && (
-                  <span className="px-1 min-w-[16px] h-4 rounded-full bg-amber-100 border border-amber-300 text-amber-800 text-[9px] font-black flex items-center justify-center tabular-nums">
-                    {ownedItems.length}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        {/* Wardrobe Toolbar: Source Segmented Control & Category Strip */}
+        <div className="px-4 py-2.5 border-b border-cozy-line/70 bg-white/35 flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <h2 className="text-xs font-extrabold uppercase tracking-wider text-cozy-accent-deep truncate">
+                Tus objetos
+              </h2>
+              <span className="text-[11px] text-cozy-muted tabular-nums whitespace-nowrap">
+                · {wardrobeItems.length} disponibles
+              </span>
+            </div>
 
-        {/* Tab Content */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-5 overscroll-contain touch-pan-y">
-          {/* TAB 1: CUERPO */}
-          {tab === 'cuerpo' && (
-            <>
-              {ownedBodyItems.length > 0 && (
-                <Section
-                  title="Comprados en tienda (Pieles y Lentes)"
-                  aside={
-                    <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                      {ownedBodyItems.length} tuyos
-                    </span>
-                  }
-                  onFocus={() => focus('head')}
-                >
-                  <div className="flex flex-col gap-2">
-                    {ownedBodyItems.map((item) => (
-                      <OwnedShopCard
-                        key={item.id}
-                        item={item}
-                        equipped={isShopItemEquipped(item)}
-                        busy={busyEquipId === item.id}
-                        appearance={appearance}
-                        onEquip={handleEquipShopItem}
-                        onUnequip={handleUnequipShopItem}
-                        compact
-                      />
-                    ))}
-                  </div>
-                </Section>
-              )}
-
-              <Section title="Tono de piel" onFocus={() => focus('head')}>
-                <Swatches
-                  label="Tono de piel"
-                  colors={SKIN_TONES}
-                  value={appearance.skinColor}
-                  onPick={(c) => set('skinColor', c)}
-                />
-              </Section>
-              <Section title="Ojos" onFocus={() => focus('head')}>
-                <Chips
-                  options={EYE_STYLES}
-                  value={appearance.eyeStyle}
-                  onPick={(v) => set('eyeStyle', v)}
-                />
-              </Section>
-              <Section title="Detalle facial" onFocus={() => focus('head')}>
-                <Chips
-                  options={ACCESSORIES}
-                  value={appearance.accessory}
-                  onPick={(v) => set('accessory', v)}
-                />
-              </Section>
-              <Section title="Estatura" onFocus={() => focus('full')}>
-                <Slider
-                  label="Estatura"
-                  value={appearance.height}
-                  min={0.88}
-                  max={1.12}
-                  onChange={(v) => set('height', v)}
-                  leftLabel="Bajito"
-                  rightLabel="Alto"
-                />
-              </Section>
-              <Section title="Complexión" onFocus={() => focus('full')}>
-                <Slider
-                  label="Complexión"
-                  value={appearance.build}
-                  min={0.88}
-                  max={1.15}
-                  onChange={(v) => set('build', v)}
-                  leftLabel="Delgado"
-                  rightLabel="Rellenito"
-                />
-              </Section>
-            </>
-          )}
-
-          {/* TAB 2: PELO */}
-          {tab === 'pelo' && (
-            <>
-              {ownedHairItems.length > 0 && (
-                <Section
-                  title="Peinados de tienda"
-                  aside={
-                    <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                      {ownedHairItems.length} tuyos
-                    </span>
-                  }
-                  onFocus={() => focus('head')}
-                >
-                  <div className="flex flex-col gap-2">
-                    {ownedHairItems.map((item) => (
-                      <OwnedShopCard
-                        key={item.id}
-                        item={item}
-                        equipped={isShopItemEquipped(item)}
-                        busy={busyEquipId === item.id}
-                        appearance={appearance}
-                        onEquip={handleEquipShopItem}
-                        onUnequip={handleUnequipShopItem}
-                        compact
-                      />
-                    ))}
-                  </div>
-                </Section>
-              )}
-
-              <Section title="Peinado" onFocus={() => focus('head')}>
-                <Chips
-                  options={hairStylesFor(body)}
-                  value={appearance.hairStyle}
-                  onPick={(v) => set('hairStyle', v)}
-                />
-              </Section>
-              <Section title="Color de pelo" onFocus={() => focus('head')}>
-                <Swatches
-                  label="Color de pelo"
-                  colors={HAIR_COLORS}
-                  value={appearance.hairColor}
-                  onPick={(c) => set('hairColor', c)}
-                />
-              </Section>
-            </>
-          )}
-
-          {/* TAB 3: ROPA */}
-          {tab === 'ropa' && (
-            <>
-              {ownedClothingItems.length > 0 && (
-                <Section
-                  title="Comprados en tienda (Ropa, Accesorios, Calzado y Auras)"
-                  aside={
-                    <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                      {ownedClothingItems.length} tuyos
-                    </span>
-                  }
-                  onFocus={() => focus('torso')}
-                >
-                  <div className="flex flex-col gap-2">
-                    {ownedClothingItems.map((item) => (
-                      <OwnedShopCard
-                        key={item.id}
-                        item={item}
-                        equipped={isShopItemEquipped(item)}
-                        busy={busyEquipId === item.id}
-                        appearance={appearance}
-                        onEquip={handleEquipShopItem}
-                        onUnequip={handleUnequipShopItem}
-                        compact
-                      />
-                    ))}
-                  </div>
-                </Section>
-              )}
-
-              <Section title="Estilo de ropa" onFocus={() => focus('torso')}>
-                <Chips
-                  options={outfitStylesFor(body)}
-                  value={appearance.outfitStyle}
-                  onPick={(v) => set('outfitStyle', v)}
-                />
-              </Section>
-              <Section title="Color de la ropa" onFocus={() => focus('torso')}>
-                <Swatches
-                  label="Color de la ropa"
-                  colors={CLOTH_COLORS}
-                  value={appearance.sweaterColor}
-                  onPick={(c) => set('sweaterColor', c)}
-                />
-              </Section>
-              <Section title="Color de detalles" onFocus={() => focus('torso')}>
-                <Swatches
-                  label="Color de detalles"
-                  colors={CLOTH_COLORS}
-                  value={appearance.detailColor}
-                  onPick={(c) => set('detailColor', c)}
-                />
-              </Section>
-              <Section
-                title="Patrón de tela"
-                aside={
-                  <span className="text-[10px] text-cozy-muted tabular-nums">
-                    {SHIRT_PATTERNS.filter((p) => !p.defaultUnlocked && isPatternUnlocked(p.id)).length}/
-                    {SHIRT_PATTERNS.filter((p) => !p.defaultUnlocked).length} desbloqueados
-                  </span>
-                }
-                onFocus={() => focus('torso')}
-              >
-                <div className="grid grid-cols-3 gap-2">
-                  {SHIRT_PATTERNS.map((p) => {
-                    const unlocked = isPatternUnlocked(p.id);
-                    const selected = (appearance.shirtPattern ?? 'liso') === p.id;
-                    const swatchUrl = getPatternSwatchUrl(
-                      p.id,
-                      appearance.sweaterColor,
-                      appearance.detailColor
-                    );
-                    if (!unlocked) {
-                      return (
-                        <div
-                          key={p.id}
-                          title={`${p.name}: Desbloquéalo en Misiones diarias o en la Tienda`}
-                          aria-disabled="true"
-                          className="flex flex-col items-center gap-1.5 p-2 rounded-xl border border-dashed border-cozy-line bg-white/45 opacity-75 text-center"
-                        >
-                          <div className="relative w-10 h-10 rounded-lg overflow-hidden border border-cozy-line/80 shrink-0">
-                            {swatchUrl ? (
-                              <img
-                                src={swatchUrl}
-                                alt={p.name}
-                                className="w-full h-full object-cover grayscale opacity-55"
-                              />
-                            ) : (
-                              <div
-                                className="w-full h-full"
-                                style={{ backgroundColor: appearance.sweaterColor }}
-                              />
-                            )}
-                            <span className="absolute inset-0 flex items-center justify-center bg-black/35 text-white">
-                              <Lock className="w-3.5 h-3.5" />
-                            </span>
-                          </div>
-                          <span className="text-[10px] font-semibold text-cozy-muted leading-tight line-clamp-1">
-                            {p.name}
-                          </span>
-                          <span className="text-[9px] text-cozy-accent-deep/85 leading-none">
-                            Misión / Tienda
-                          </span>
-                        </div>
-                      );
-                    }
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => set('shirtPattern', p.id)}
-                        title={p.desc}
-                        className={`flex flex-col items-center gap-1.5 p-2 rounded-xl border text-center cursor-pointer transition-all active:scale-95 ${
-                          selected
-                            ? 'bg-amber-50/90 border-amber-400 ring-1 ring-amber-400/50 shadow-xs'
-                            : 'bg-white/70 hover:bg-white border-cozy-line hover:border-cozy-sky'
-                        }`}
-                      >
-                        <div className="w-10 h-10 rounded-lg overflow-hidden border border-black/10 shrink-0">
-                          {swatchUrl ? (
-                            <img src={swatchUrl} alt={p.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <div
-                              className="w-full h-full"
-                              style={{ backgroundColor: appearance.sweaterColor }}
-                            />
-                          )}
-                        </div>
-                        <span className="text-[10px] font-bold text-cozy-ink leading-tight line-clamp-1">
-                          {p.name}
-                        </span>
-                        <span className="text-[9px] text-cozy-muted leading-none">
-                          {selected ? 'Equipado' : p.biomeHint}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </Section>
-              <Section title="Para la cabeza" onFocus={() => focus('head')}>
-                <Chips
-                  options={hatStylesFor(body)}
-                  value={appearance.hatStyle}
-                  onPick={(v) => set('hatStyle', v)}
-                />
-              </Section>
-              <Section title="Color del gorro y puños" onFocus={() => focus('head')}>
-                <Swatches
-                  label="Color del gorro"
-                  colors={CLOTH_COLORS}
-                  value={appearance.hatColor}
-                  onPick={(c) => set('hatColor', c)}
-                />
-              </Section>
-              <Section title="Bufanda" onFocus={() => focus('torso')}>
-                <Swatches
-                  label="Bufanda"
-                  colors={CLOTH_COLORS}
-                  value={appearance.scarfColor}
-                  onPick={(c) => set('scarfColor', c)}
-                />
-              </Section>
-              <Section title="Botas" onFocus={() => focus('feet')}>
-                <Swatches
-                  label="Botas"
-                  colors={BOOT_COLORS}
-                  value={appearance.bootColor}
-                  onPick={(c) => set('bootColor', c)}
-                />
-              </Section>
-              <Section title="Equipo" onFocus={() => focus('torso')}>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {onOpenShop && (
                 <button
                   type="button"
-                  role="switch"
-                  aria-checked={appearance.backpack}
-                  onClick={() => set('backpack', !appearance.backpack)}
-                  className={`flex items-center gap-3 p-3 rounded-2xl border text-left cursor-pointer transition-colors ${
-                    appearance.backpack
-                      ? 'bg-amber-50/90 border-amber-300 shadow-xs'
-                      : 'bg-white/70 hover:bg-white border-cozy-line hover:border-cozy-sky'
+                  onClick={onOpenShop}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/85 hover:bg-white border border-cozy-line text-[11px] font-bold text-cozy-accent-deep cursor-pointer shadow-xs whitespace-nowrap"
+                >
+                  <ShoppingBag className="w-3 h-3" />
+                  <span>Tienda</span>
+                </button>
+              )}
+              {isAuth && (
+                <button
+                  type="button"
+                  onClick={() => void loadOwned()}
+                  disabled={loadingOwned}
+                  title="Actualizar objetos"
+                  aria-label="Actualizar objetos"
+                  className="p-1.5 rounded-xl bg-white/80 hover:bg-white border border-cozy-line text-cozy-ink cursor-pointer disabled:opacity-50 shadow-xs"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingOwned ? 'animate-spin' : ''}`} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Source Segmented Filter */}
+          <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-white/70 border border-cozy-line">
+            {(
+              [
+                { id: 'all', label: `Todos (${wardrobeItems.length})` },
+                { id: 'shop', label: `Comprados (${shopOnlyCount})` },
+                { id: 'base', label: `Base (${baseAndUnlockCount})` },
+              ] as const
+            ).map((src) => {
+              const active = sourceFilter === src.id;
+              return (
+                <button
+                  key={src.id}
+                  type="button"
+                  onClick={() => {
+                    setSourceFilter(src.id);
+                    setFilterCat('all');
+                  }}
+                  className={`py-1 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap truncate tabular-nums ${
+                    active
+                      ? 'bg-cozy-ink text-white shadow-xs'
+                      : 'text-cozy-muted hover:text-cozy-ink hover:bg-white/70'
                   }`}
                 >
-                  <Backpack
-                    className={`w-5 h-5 ${
-                      appearance.backpack ? 'text-cozy-accent-deep' : 'text-cozy-muted'
-                    }`}
-                  />
-                  <div className="flex-1">
-                    <div className="text-xs font-bold">Mochila de aventurero</div>
-                    <div className="text-[10px] text-cozy-muted">
-                      {appearance.backpackVariant
-                        ? `Accesorio de tienda activo`
-                        : 'Con petate, cantimplora y farolito'}
-                    </div>
-                  </div>
-                  <span
-                    className={`w-9 h-5 rounded-full p-0.5 transition-colors ${
-                      appearance.backpack ? 'bg-cozy-accent-deep' : 'bg-cozy-soft'
-                    }`}
-                  >
-                    <span
-                      className={`block w-4 h-4 rounded-full bg-white transition-transform ${
-                        appearance.backpack ? 'translate-x-4' : ''
-                      }`}
-                    />
-                  </span>
+                  {src.label}
                 </button>
-              </Section>
-            </>
-          )}
+              );
+            })}
+          </div>
 
-          {/* TAB 4: COMPAÑERO */}
-          {tab === 'companero' && (
-            <Section title="Compañero flotante" onFocus={() => focus('companion')}>
-              <div className="grid grid-cols-2 gap-2">
-                {COMPANIONS.map((c) => {
-                  const selected = appearance.companion === c.id;
-                  const fromShop = shopOwnedCompanions.has(c.id);
-                  const unlocked = isCompanionUnlocked(c.id) || fromShop;
-                  const lvl = unlockLevelFor(c.id);
-                  if (!unlocked) {
-                    return (
-                      <div
-                        key={c.id}
-                        className="flex flex-col gap-1 p-3 rounded-2xl border border-dashed border-cozy-line bg-white/45 text-left opacity-80"
-                        aria-disabled="true"
-                      >
-                        <span className="flex items-center gap-1.5 text-cozy-soft">
-                          {COMPANION_ICONS[c.id]}
-                          <Lock className="w-3.5 h-3.5" />
-                        </span>
-                        <span className="text-xs font-bold text-cozy-muted">{c.name}</span>
-                        <span className="text-[10px] text-cozy-accent-deep/90 leading-snug">
-                          Completa el nivel {lvl} o cómpralo en la Tienda
-                        </span>
-                        {COMPANION_POWERS[c.id] && (
-                          <span className="text-[10px] leading-snug text-cozy-soft">
-                            Poder: {COMPANION_POWERS[c.id]!.powerName}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  }
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => set('companion', c.id)}
-                      className={`flex flex-col gap-1 p-3 rounded-2xl border text-left cursor-pointer transition-all active:scale-95 ${
-                        selected
-                          ? 'bg-amber-50/90 border-amber-400 ring-1 ring-amber-400/50 shadow-xs'
-                          : 'bg-white/75 hover:bg-white border-cozy-line hover:border-cozy-sky'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between w-full">
-                        <span className={selected ? 'text-cozy-accent-deep' : 'text-cozy-muted'}>
-                          {COMPANION_ICONS[c.id]}
-                        </span>
-                        {fromShop && (
-                          <span className="px-1.5 py-px rounded bg-amber-100 border border-amber-200 text-amber-800 text-[9px] font-bold">
-                            Tienda
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-xs font-bold">{c.name}</span>
-                      <span className="text-[10px] text-cozy-muted leading-snug">{c.desc}</span>
-                      {COMPANION_POWERS[c.id] && (
-                        <span className="mt-1 text-[10px] leading-snug text-cozy-moss">
-                          <strong>Poder: {COMPANION_POWERS[c.id]!.powerName}.</strong>{' '}
-                          {COMPANION_POWERS[c.id]!.desc}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+          {/* Category Strip */}
+          {categoriesAvailable.length > 0 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterCat('all');
+                  focus('full');
+                }}
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+                  filterCat === 'all'
+                    ? 'cozy-tab-active'
+                    : 'bg-white/75 hover:bg-white border-cozy-line text-cozy-ink'
+                }`}
+              >
+                Todo
+              </button>
+              {categoriesAvailable.map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => {
+                    setFilterCat(cat);
+                    focus(CATEGORY_FOCUS[cat] ?? 'full');
+                  }}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold border cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+                    filterCat === cat
+                      ? 'cozy-tab-active'
+                      : 'bg-white/75 hover:bg-white border-cozy-line text-cozy-ink'
+                  }`}
+                >
+                  {shopCategoryIcon(cat)}
+                  <span>{SHOP_CATEGORY_LABELS[cat]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Object Grid */}
+        <div className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-3 overscroll-contain touch-pan-y">
+          {sourceFilter === 'shop' && !isAuth ? (
+            <div className="p-5 rounded-2xl bg-white/80 border border-cozy-line text-center flex flex-col items-center gap-3 shadow-xs">
+              <div className="w-11 h-11 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
+                <UserRound className="w-5 h-5" />
               </div>
-            </Section>
-          )}
-
-          {/* TAB 5: MIS COMPRAS */}
-          {tab === 'compras' && (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-xs font-extrabold uppercase tracking-wider text-cozy-accent-deep">
-                    Mis artículos comprados
-                  </h3>
-                  <p className="text-[11px] text-cozy-muted">
-                    Equipa cualquier cosmético que hayas adquirido con reliquias.
-                  </p>
-                </div>
-                {isAuth && (
+              <div>
+                <p className="text-sm font-bold text-cozy-ink">Inicia sesión para ver tus compras</p>
+                <p className="text-xs text-cozy-muted mt-1">
+                  Los objetos comprados en la Tienda de Reliquias aparecen aquí para equiparlos cuando quieras.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {onOpenAuth && (
                   <button
                     type="button"
-                    onClick={() => void loadOwned()}
-                    disabled={loadingOwned}
-                    title="Actualizar inventario"
-                    className="p-2 rounded-xl bg-white/80 hover:bg-white border border-cozy-line text-cozy-ink cursor-pointer disabled:opacity-50 shadow-xs"
+                    onClick={onOpenAuth}
+                    className="px-4 py-2 rounded-xl cozy-btn-primary text-xs font-bold cursor-pointer"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${loadingOwned ? 'animate-spin' : ''}`} />
+                    Iniciar sesión
+                  </button>
+                )}
+                {onOpenShop && (
+                  <button
+                    type="button"
+                    onClick={onOpenShop}
+                    className="px-4 py-2 rounded-xl bg-white hover:bg-white/90 border border-cozy-line text-xs font-bold text-cozy-ink cursor-pointer"
+                  >
+                    Ver Tienda
                   </button>
                 )}
               </div>
-
-              {!isAuth ? (
-                <div className="p-5 rounded-2xl bg-white/75 border border-cozy-line text-center flex flex-col items-center gap-3 shadow-xs">
-                  <div className="w-11 h-11 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
-                    <UserRound className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-cozy-ink">Inicia sesión para ver tus compras</p>
-                    <p className="text-xs text-cozy-muted mt-1">
-                      Los objetos comprados en la Tienda de Reliquias se guardan en tu cuenta y aparecen aquí para equiparlos.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {onOpenAuth && (
-                      <button
-                        type="button"
-                        onClick={onOpenAuth}
-                        className="px-4 py-2 rounded-xl cozy-btn-primary text-xs font-bold cursor-pointer"
-                      >
-                        Iniciar sesión
-                      </button>
-                    )}
-                    {onOpenShop && (
-                      <button
-                        type="button"
-                        onClick={onOpenShop}
-                        className="px-4 py-2 rounded-xl bg-white hover:bg-white/90 border border-cozy-line text-xs font-bold text-cozy-ink cursor-pointer"
-                      >
-                        Ver Tienda
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ) : loadingOwned && ownedItems.length === 0 ? (
-                <div className="py-10 flex flex-col items-center justify-center gap-2 text-cozy-muted">
-                  <Loader2 className="w-6 h-6 animate-spin text-cozy-accent-deep" />
-                  <span className="text-xs font-medium">Cargando tus compras…</span>
-                </div>
-              ) : ownedItems.length === 0 ? (
-                <div className="p-5 rounded-2xl bg-white/75 border border-cozy-line text-center flex flex-col items-center gap-3 shadow-xs">
-                  <div className="w-11 h-11 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
-                    <ShoppingBag className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-cozy-ink">Aún no tienes artículos comprados</p>
-                    <p className="text-xs text-cozy-muted mt-1">
-                      Visita la Tienda de Reliquias para desbloquear sombreros, visores, alas, conjuntos y compañeros únicos.
-                    </p>
-                  </div>
-                  {onOpenShop && (
-                    <button
-                      type="button"
-                      onClick={onOpenShop}
-                      className="px-4 py-2 rounded-xl cozy-btn-primary text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <ShoppingBag className="w-3.5 h-3.5" />
-                      Ir a la Tienda
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <>
-                  {/* Category filter pills */}
-                  {ownedCategoriesPresent.length > 1 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setShopFilterCat('all')}
-                        className={`px-2.5 py-1 rounded-xl text-[10px] font-bold border cursor-pointer transition-colors ${
-                          shopFilterCat === 'all'
-                            ? 'bg-cozy-ink text-white border-cozy-ink'
-                            : 'bg-white/75 hover:bg-white border-cozy-line text-cozy-ink'
-                        }`}
-                      >
-                        Todo ({ownedItems.length})
-                      </button>
-                      {ownedCategoriesPresent.map((cat) => (
-                        <button
-                          key={cat}
-                          type="button"
-                          onClick={() => setShopFilterCat(cat)}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold border cursor-pointer transition-colors ${
-                            shopFilterCat === cat
-                              ? 'bg-cozy-ink text-white border-cozy-ink'
-                              : 'bg-white/75 hover:bg-white border-cozy-line text-cozy-ink'
-                          }`}
-                        >
-                          {shopCategoryIcon(cat)}
-                          <span>{SHOP_CATEGORY_LABELS[cat]}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {filteredOwnedItems.map((item) => (
-                      <OwnedShopCard
-                        key={item.id}
-                        item={item}
-                        equipped={isShopItemEquipped(item)}
-                        busy={busyEquipId === item.id}
-                        appearance={appearance}
-                        onEquip={handleEquipShopItem}
-                        onUnequip={handleUnequipShopItem}
-                      />
-                    ))}
-                  </div>
-
-                  {onOpenShop && (
-                    <button
-                      type="button"
-                      onClick={onOpenShop}
-                      className="mt-1 w-full py-2.5 rounded-xl bg-white/75 hover:bg-white border border-cozy-line text-xs font-bold text-cozy-accent-deep flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                    >
-                      <ShoppingBag className="w-3.5 h-3.5" />
-                      Conseguir más objetos en la Tienda
-                    </button>
-                  )}
-                </>
-              )}
             </div>
+          ) : loadingOwned && shopOnlyCount === 0 && sourceFilter === 'shop' ? (
+            <div className="py-10 flex flex-col items-center justify-center gap-2 text-cozy-muted">
+              <Loader2 className="w-6 h-6 animate-spin text-cozy-accent-deep" />
+              <span className="text-xs font-medium">Cargando tus objetos comprados…</span>
+            </div>
+          ) : displayedItems.length === 0 ? (
+            <div className="p-5 rounded-2xl bg-white/80 border border-cozy-line text-center flex flex-col items-center gap-3 shadow-xs">
+              <div className="w-11 h-11 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
+                <ShoppingBag className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-cozy-ink">
+                  {sourceFilter === 'shop'
+                    ? 'Aún no tienes objetos comprados'
+                    : 'No hay objetos en esta categoría'}
+                </p>
+                <p className="text-xs text-cozy-muted mt-1">
+                  {sourceFilter === 'shop'
+                    ? 'Compra gorros, atuendos, alas, calzado o compañeros con tus reliquias.'
+                    : 'Prueba otra categoría o visita la Tienda de Reliquias.'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {sourceFilter === 'shop' ? (
+                  <button
+                    type="button"
+                    onClick={() => setSourceFilter('all')}
+                    className="px-3.5 py-2 rounded-xl bg-white hover:bg-white/95 border border-cozy-line text-xs font-bold text-cozy-ink cursor-pointer"
+                  >
+                    Ver objetos base
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setFilterCat('all')}
+                    className="px-3.5 py-2 rounded-xl bg-white hover:bg-white/95 border border-cozy-line text-xs font-bold text-cozy-ink cursor-pointer"
+                  >
+                    Ver todas las categorías
+                  </button>
+                )}
+                {onOpenShop && (
+                  <button
+                    type="button"
+                    onClick={onOpenShop}
+                    className="px-4 py-2 rounded-xl cozy-btn-primary text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <ShoppingBag className="w-3.5 h-3.5" />
+                    Ir a la Tienda
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {displayedItems.map((item) => (
+                  <WardrobeObjectCard
+                    key={item.id}
+                    item={item}
+                    equipped={isWardrobeItemEquipped(item)}
+                    busy={busyEquipId === item.id}
+                    appearance={appearance}
+                    onEquip={(it) => void handleEquipItem(it)}
+                    onUnequip={(it) => void handleUnequipItem(it)}
+                  />
+                ))}
+              </div>
+
+              {onOpenShop && (
+                <button
+                  type="button"
+                  onClick={onOpenShop}
+                  className="mt-1 w-full py-2.5 rounded-xl bg-white/80 hover:bg-white border border-cozy-line text-xs font-bold text-cozy-accent-deep flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <ShoppingBag className="w-3.5 h-3.5" />
+                  Conseguir más objetos en la Tienda de Reliquias
+                </button>
+              )}
+            </>
           )}
         </div>
 
