@@ -2738,8 +2738,8 @@ export class GameEngine {
     // Touch camera look: only on right portion of viewport or upper half
     for (let i = 0; i < e.touches.length; i++) {
       const t = e.touches[i];
-      // Avoid bottom-left zone reserved for virtual joystick (unless in photo mode)
-      if (this.gameState === 'photo_mode' || this.gameState === 'title' || t.clientX > window.innerWidth * 0.35 || t.clientY < window.innerHeight * 0.5) {
+      // Avoid bottom-left zone reserved for the enlarged virtual joystick (unless in photo mode or title)
+      if (this.gameState === 'photo_mode' || this.gameState === 'title' || t.clientX > window.innerWidth * 0.42 || t.clientY < window.innerHeight * 0.45) {
         this.touchId = t.identifier;
         this.touchStartX = t.clientX;
         this.touchStartY = t.clientY;

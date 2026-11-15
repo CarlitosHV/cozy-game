@@ -138,10 +138,18 @@ import {
 } from '../game/character';
 import { fetchOwnedShopItems, applyShopItemToAppearance } from '../game/shopCosmetics';
 import {
+  DEFAULT_PHOTO_SETTINGS,
   PHOTO_FILTERS,
+  PHOTO_STYLES,
   PHOTO_FRAMES,
+  buildLiveCssFilter,
+  resolvePhotoGrade,
+  getFilmGrainDataUrl,
+  renderFinalPhotoWithFrame,
   type PhotoFilter,
+  type PhotoStyle,
   type PhotoFrame,
+  type PhotoStudioSettings,
 } from '../ui/photoStudio';
 import { WeatherType, soundManager } from '../audio/SoundtrackSynthesizer';
 import { formatClock, friendlyError } from '../utils/locale';
@@ -266,8 +274,12 @@ const VirtualJoystick: React.FC<{
   const [isActive, setIsActive] = useState(false);
   const [isSprinting, setIsSprinting] = useState(false);
   const touchIdRef = useRef<number | null>(null);
+  const isSprintingRef = useRef(false);
 
-  const maxRadius = compact ? 34 : 45;
+  // Larger physical joystick radius for smooth, controllable analog walking
+  const maxRadius = compact ? 52 : 68;
+  const sprintEngageThreshold = 0.88;
+  const sprintReleaseThreshold = 0.80;
 
   const updateKnob = (clientX: number, clientY: number) => {
     if (!containerRef.current) return;
@@ -289,9 +301,10 @@ const VirtualJoystick: React.FC<{
 
     setKnobPos({ x: clampedX, y: clampedY });
 
-    // Deadzone (12% of maxRadius) eliminates noisy twitching when crossing the center
-    const deadZone = maxRadius * 0.12;
+    // Deadzone (10% of maxRadius) prevents twitching near center
+    const deadZone = maxRadius * 0.1;
     if (dist <= deadZone) {
+      isSprintingRef.current = false;
       setIsSprinting(false);
       onMove(0, 0, false);
       return;
@@ -303,8 +316,11 @@ const VirtualJoystick: React.FC<{
     const normRight = (dx / dist) * magnitude;
     const normForward = (-dy / dist) * magnitude;
 
-    // Automatic Sprint past threshold: pushing the joystick past 68% of range activates sprinting
-    const sprint = magnitude >= 0.68;
+    // Wide walk band (10% - 87%); sprinting only engages near the outer rim with hysteresis
+    const sprint = isSprintingRef.current
+      ? magnitude >= sprintReleaseThreshold
+      : magnitude >= sprintEngageThreshold;
+    isSprintingRef.current = sprint;
     setIsSprinting(sprint);
     onMove(normForward, normRight, sprint);
   };
@@ -338,6 +354,7 @@ const VirtualJoystick: React.FC<{
     for (let i = 0; i < e.changedTouches.length; i++) {
       if (e.changedTouches[i].identifier === touchIdRef.current) {
         touchIdRef.current = null;
+        isSprintingRef.current = false;
         setIsActive(false);
         setIsSprinting(false);
         setKnobPos({ x: 0, y: 0 });
@@ -350,6 +367,7 @@ const VirtualJoystick: React.FC<{
   useEffect(() => {
     const handleReset = () => {
       touchIdRef.current = null;
+      isSprintingRef.current = false;
       setIsActive(false);
       setIsSprinting(false);
       setKnobPos({ x: 0, y: 0 });
@@ -376,37 +394,50 @@ const VirtualJoystick: React.FC<{
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
       className={`relative rounded-full border-2 transition-all select-none flex items-center justify-center ${
-        compact ? 'w-22 h-22 w-[5.5rem] h-[5.5rem]' : 'w-28 h-28 sm:w-32 sm:h-32'
+        compact ? 'w-32 h-32' : 'w-40 h-40 sm:w-44 sm:h-44'
       } ${
         isActive
           ? isSprinting
-            ? 'bg-amber-950/50 border-orange-400 shadow-xl shadow-orange-500/30'
+            ? 'bg-amber-950/55 border-orange-400 shadow-xl shadow-orange-500/30'
             : 'bg-amber-950/40 border-amber-400 shadow-xl shadow-amber-500/20'
-          : 'bg-stone-900/55 border-stone-700/60 shadow-lg backdrop-blur-sm'
+          : 'bg-stone-900/55 border-stone-700/65 shadow-lg backdrop-blur-sm'
       }`}
       style={{ touchAction: 'none' }}
     >
-      {/* Sprint threshold dashed guide ring */}
+      {/* Inner comfort-walk reference ring */}
+      <div
+        className="absolute rounded-full pointer-events-none border border-amber-200/15"
+        style={{ width: '48%', height: '48%' }}
+      />
+
+      {/* Outer Sprint threshold dashed guide ring (~88% of range) */}
       <div
         className={`absolute rounded-full pointer-events-none transition-all ${
           isSprinting
-            ? 'border-2 border-orange-400/70 scale-105 shadow-sm shadow-orange-500/30'
-            : 'border border-stone-600/30 border-dashed'
-        } ${compact ? 'w-[3.8rem] h-[3.8rem]' : 'w-20 h-20 sm:w-22 sm:h-22'}`}
+            ? 'border-2 border-orange-400/80 shadow-sm shadow-orange-500/35'
+            : 'border border-stone-400/35 border-dashed'
+        }`}
+        style={{ width: '88%', height: '88%' }}
       />
 
       {!compact && (
         <>
-          <span className="absolute top-2 text-[9px] text-stone-500 font-mono">W</span>
-          <span className="absolute bottom-2 text-[9px] text-stone-500 font-mono">S</span>
-          <span className="absolute left-2 text-[9px] text-stone-500 font-mono">A</span>
-          <span className="absolute right-2 text-[9px] text-stone-500 font-mono">D</span>
+          <span className="absolute top-1.5 text-[9px] text-stone-400/80 font-mono">W</span>
+          <span className="absolute bottom-1.5 text-[9px] text-stone-400/80 font-mono">S</span>
+          <span className="absolute left-2 text-[9px] text-stone-400/80 font-mono">A</span>
+          <span className="absolute right-2 text-[9px] text-stone-400/80 font-mono">D</span>
         </>
+      )}
+
+      {isSprinting && (
+        <span className="absolute -top-5 px-2 py-0.5 rounded-full bg-orange-500/90 text-stone-950 text-[9px] font-extrabold tracking-wider uppercase shadow">
+          Corriendo
+        </span>
       )}
 
       <div
         className={`rounded-full shadow-md border-2 pointer-events-none flex items-center justify-center transition-all ${
-          compact ? 'w-10 h-10' : 'w-12 h-12 sm:w-14 sm:h-14'
+          compact ? 'w-12 h-12' : 'w-14 h-14 sm:w-16 sm:h-16'
         } ${
           isSprinting
             ? 'bg-gradient-to-br from-amber-400 via-orange-500 to-orange-600 border-orange-200 ring-2 ring-orange-400/50 shadow-orange-500/40 scale-105'
@@ -420,106 +451,12 @@ const VirtualJoystick: React.FC<{
         {isSprinting ? (
           <Zap className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} text-stone-950 fill-stone-950 animate-pulse`} />
         ) : (
-          <div className={`rounded-full bg-amber-100/70 ${compact ? 'w-3 h-3' : 'w-4 h-4'}`} />
+          <div className={`rounded-full bg-amber-100/75 ${compact ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
         )}
       </div>
     </div>
   );
 };
-
-// --- High-Resolution Photo Compositor with Frames and Aesthetic Grading ---
-function renderFinalPhotoWithFrame(
-  rawImgSrc: string,
-  filter: PhotoFilter,
-  frame: PhotoFrame,
-  checkpointName: string
-): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d')!;
-
-      const activeFilterObj = PHOTO_FILTERS.find((f) => f.id === filter);
-      const filterCss = activeFilterObj ? activeFilterObj.css : 'none';
-
-      if (frame === 'polaroid') {
-        const borderX = Math.round(img.width * 0.05);
-        const topY = Math.round(img.height * 0.05);
-        const bottomY = Math.round(img.height * 0.18);
-        canvas.width = img.width + borderX * 2;
-        canvas.height = img.height + topY + bottomY;
-
-        ctx.fillStyle = '#f8f5ee';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        ctx.filter = filterCss;
-        ctx.drawImage(img, borderX, topY, img.width, img.height);
-        ctx.filter = 'none';
-
-        ctx.fillStyle = '#3a2d21';
-        ctx.font = `600 ${Math.round(canvas.height * 0.04)}px 'Playfair Display', serif`;
-        ctx.textAlign = 'center';
-        ctx.fillText('Cozy Leap · ' + checkpointName, canvas.width / 2, canvas.height - bottomY * 0.38);
-
-        resolve(canvas.toDataURL('image/png'));
-      } else if (frame === 'cinematic') {
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx.filter = filterCss;
-        ctx.drawImage(img, 0, 0);
-        ctx.filter = 'none';
-
-        const barHeight = Math.round(canvas.height * 0.12);
-        ctx.fillStyle = '#080808';
-        ctx.fillRect(0, 0, canvas.width, barHeight);
-        ctx.fillRect(0, canvas.height - barHeight, canvas.width, barHeight);
-
-        ctx.fillStyle = '#dfb15b';
-        ctx.font = `600 ${Math.round(canvas.height * 0.026)}px 'Outfit', sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.fillText('COZY LEAP · ' + checkpointName.toUpperCase(), canvas.width / 2, canvas.height - barHeight * 0.36);
-
-        resolve(canvas.toDataURL('image/png'));
-      } else if (frame === 'postcard') {
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx.filter = filterCss;
-        ctx.drawImage(img, 0, 0);
-        ctx.filter = 'none';
-
-        // Postcard border
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = Math.round(canvas.width * 0.018);
-        ctx.strokeRect(14, 14, canvas.width - 28, canvas.height - 28);
-
-        // Postal stamp
-        const stampW = Math.round(canvas.width * 0.12);
-        const stampH = Math.round(canvas.height * 0.14);
-        ctx.fillStyle = '#d4a373';
-        ctx.fillRect(canvas.width - stampW - 32, 32, stampW, stampH);
-        ctx.strokeStyle = '#faedcd';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(canvas.width - stampW - 32, 32, stampW, stampH);
-
-        ctx.fillStyle = '#2b2118';
-        ctx.font = `bold ${Math.round(canvas.height * 0.024)}px 'Outfit', sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.fillText('ISLES', canvas.width - stampW / 2 - 32, 32 + stampH * 0.58);
-
-        resolve(canvas.toDataURL('image/png'));
-      } else {
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx.filter = filterCss;
-        ctx.drawImage(img, 0, 0);
-        ctx.filter = 'none';
-        resolve(canvas.toDataURL('image/png'));
-      }
-    };
-    img.src = rawImgSrc;
-  });
-}
 
 export const GameHUD: React.FC<GameHUDProps> = ({
   engine,
@@ -1166,8 +1103,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   }, [engine, gameState, pendingLevel]);
 
   // Photo Mode Studio State
-  const [photoFilter, setPhotoFilter] = useState<PhotoFilter>('natural');
-  const [photoFrame, setPhotoFrame] = useState<PhotoFrame>('none');
+  const [photoFilter, setPhotoFilter] = useState<PhotoFilter>(DEFAULT_PHOTO_SETTINGS.filter);
+  const [photoIntensity, setPhotoIntensity] = useState<number>(DEFAULT_PHOTO_SETTINGS.intensity);
+  const [photoStyle, setPhotoStyle] = useState<PhotoStyle>(DEFAULT_PHOTO_SETTINGS.style);
+  const [photoVignette, setPhotoVignette] = useState<number>(DEFAULT_PHOTO_SETTINGS.vignette);
+  const [photoGrain, setPhotoGrain] = useState<number>(DEFAULT_PHOTO_SETTINGS.grain);
+  const [photoBloom, setPhotoBloom] = useState<number>(DEFAULT_PHOTO_SETTINGS.bloom);
+  const [photoFrame, setPhotoFrame] = useState<PhotoFrame>(DEFAULT_PHOTO_SETTINGS.frame);
   const [photoFov, setPhotoFov] = useState(55);
   const [photoDistance, setPhotoDistance] = useState(5.0);
   const [photoElevation, setPhotoElevation] = useState(0);
@@ -1175,8 +1117,19 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const [isPhotoPaused, setIsPhotoPaused] = useState(false);
   const [hidePhotoUI, setHidePhotoUI] = useState(false);
   const [capturedPhotoUrl, setCapturedPhotoUrl] = useState<string | null>(null);
-  const [photoActiveTab, setPhotoActiveTab] = useState<'camera' | 'filters' | 'frames'>('camera');
+  const [photoActiveTab, setPhotoActiveTab] = useState<'camera' | 'filters' | 'styles' | 'frames'>('filters');
   const [isFlashing, setIsFlashing] = useState(false);
+
+  const photoSettings: PhotoStudioSettings = {
+    filter: photoFilter,
+    intensity: photoIntensity,
+    style: photoStyle,
+    vignette: photoVignette,
+    grain: photoGrain,
+    bloom: photoBloom,
+    frame: photoFrame,
+  };
+  const livePhotoGrade = resolvePhotoGrade(photoSettings);
 
   useEffect(() => {
     if (!engine) return;
@@ -1518,18 +1471,29 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     }
   }, [showFps, engine]);
 
-  // Live Canvas Filter in Photo Mode
+  // Live WebGL Canvas Filter in Photo Mode
   useEffect(() => {
-    const canvas = document.querySelector('canvas');
+    const canvas = engine?.renderer?.domElement ?? document.querySelector('canvas');
     if (!canvas) return;
     if (gameState === 'photo_mode') {
-      const activeFilter = PHOTO_FILTERS.find((f) => f.id === photoFilter);
-      canvas.style.filter = activeFilter ? activeFilter.css : 'none';
-      canvas.style.transition = 'filter 0.25s ease';
+      const css = buildLiveCssFilter({
+        filter: photoFilter,
+        intensity: photoIntensity,
+        style: photoStyle,
+        vignette: photoVignette,
+        grain: photoGrain,
+        bloom: photoBloom,
+        frame: photoFrame,
+      });
+      canvas.style.transition = 'filter 0.18s ease';
+      canvas.style.filter = css;
+      return () => {
+        canvas.style.filter = 'none';
+      };
     } else {
       canvas.style.filter = 'none';
     }
-  }, [gameState, photoFilter]);
+  }, [engine, gameState, photoFilter, photoIntensity, photoStyle, photoVignette, photoGrain, photoBloom, photoFrame]);
 
   useEffect(() => {
     const cycle = <T,>(list: T[], current: T, delta: number): T => {
@@ -1757,8 +1721,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         }
         const finalUrl = await renderFinalPhotoWithFrame(
           rawUrl,
-          photoFilter,
-          photoFrame,
+          photoSettings,
           checkpointName
         );
         if (!finalUrl) {
@@ -2159,8 +2122,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           className={`absolute pointer-events-none z-20 pl-safe pb-safe ${
             touchControlsEnabled && !isAnyModalOpen
               ? compactControls
-                ? 'left-3 bottom-[7.2rem]'
-                : 'left-5 bottom-[9.6rem] sm:left-6 sm:bottom-[10.8rem]'
+                ? 'left-3 bottom-[9.4rem]'
+                : 'left-5 bottom-[11.75rem] sm:left-6 sm:bottom-[13rem]'
               : 'left-4 bottom-4'
           }`}
         >
@@ -2200,8 +2163,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           className={`absolute pointer-events-none z-20 pl-safe pb-safe ${
             touchControlsEnabled && !isAnyModalOpen
               ? compactControls
-                ? 'left-3 bottom-[7.2rem]'
-                : 'left-5 bottom-[9.6rem] sm:left-6 sm:bottom-[10.8rem]'
+                ? 'left-3 bottom-[9.4rem]'
+                : 'left-5 bottom-[11.75rem] sm:left-6 sm:bottom-[13rem]'
               : 'left-4 bottom-4'
           }`}
         >
@@ -2961,7 +2924,59 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* 4b. PHOTO MODE STUDIO (Viewfinder, Filters & Framing)     */}
       {/* ======================================================== */}
       {gameState === 'photo_mode' && (
-        <div className="absolute inset-0 pointer-events-none select-none z-30">
+        <div className="absolute inset-0 pointer-events-none select-none z-30 overflow-hidden">
+          {/* Live Atmospheric Filter Tint Overlay (stacking-context safe) */}
+          {livePhotoGrade.tint && (
+            <div
+              className="absolute inset-0 pointer-events-none transition-all duration-200"
+              style={{
+                backgroundColor: `rgba(${livePhotoGrade.tint.r}, ${livePhotoGrade.tint.g}, ${livePhotoGrade.tint.b}, ${(livePhotoGrade.tint.alpha * 0.85).toFixed(3)})`,
+              }}
+            />
+          )}
+
+          {/* Live Light Leak / Warm Glow */}
+          {livePhotoGrade.lightLeak && livePhotoGrade.lightLeak.opacity > 0.01 && (
+            <div
+              className="absolute inset-0 pointer-events-none transition-all duration-200"
+              style={{
+                background: `radial-gradient(circle at 14% 16%, rgba(${livePhotoGrade.lightLeak.r}, ${livePhotoGrade.lightLeak.g}, ${livePhotoGrade.lightLeak.b}, ${Math.min(0.55, livePhotoGrade.lightLeak.opacity).toFixed(3)}) 0%, rgba(${livePhotoGrade.lightLeak.r}, ${livePhotoGrade.lightLeak.g}, ${livePhotoGrade.lightLeak.b}, ${(livePhotoGrade.lightLeak.opacity * 0.24).toFixed(3)}) 45%, transparent 78%)`,
+              }}
+            />
+          )}
+
+          {/* Live Ambient Bloom Halo */}
+          {livePhotoGrade.bloom > 0.04 && (
+            <div
+              className="absolute inset-0 pointer-events-none transition-all duration-200"
+              style={{
+                background: `radial-gradient(circle at 50% 45%, rgba(255, 244, 224, ${(livePhotoGrade.bloom * 0.22).toFixed(3)}) 0%, transparent 72%)`,
+              }}
+            />
+          )}
+
+          {/* Live Film Grain Texture */}
+          {livePhotoGrade.grain > 0.01 && (
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                backgroundImage: `url(${getFilmGrainDataUrl()})`,
+                backgroundRepeat: 'repeat',
+                opacity: Math.min(0.65, livePhotoGrade.grain * 0.65),
+              }}
+            />
+          )}
+
+          {/* Live Radial Vignette */}
+          {livePhotoGrade.vignette > 0.02 && (
+            <div
+              className="absolute inset-0 pointer-events-none transition-all duration-200"
+              style={{
+                background: `radial-gradient(circle at 50% 50%, transparent ${(44 - livePhotoGrade.vignette * 14).toFixed(1)}%, rgba(10, 8, 14, ${Math.min(0.88, livePhotoGrade.vignette * 0.85).toFixed(3)}) 100%)`,
+              }}
+            />
+          )}
+
           {/* Shutter White Flash Animation */}
           {isFlashing && (
             <div className="absolute inset-0 bg-white pointer-events-none z-50 animate-out fade-out duration-200" />
@@ -2969,7 +2984,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
           {/* Frame Overlays */}
           {photoFrame === 'grid' && (
-            <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none z-10 opacity-30">
+            <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none z-10 opacity-35">
               <div className="border-r border-b border-white" />
               <div className="border-r border-b border-white" />
               <div className="border-b border-white" />
@@ -3005,10 +3020,51 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
           )}
 
+          {photoFrame === 'filmstrip' && (
+            <div className="absolute inset-0 border-x-[18px] sm:border-x-[26px] border-y-[42px] sm:border-y-[52px] border-stone-950/95 pointer-events-none z-10 flex flex-col justify-between">
+              <div className="flex justify-around -mt-8 px-4">
+                {Array.from({ length: 10 }).map((_, idx) => (
+                  <span key={idx} className="w-3.5 h-5 rounded-sm bg-stone-100/90" />
+                ))}
+              </div>
+              <div className="flex items-center justify-between -mb-8 px-4">
+                <div className="flex flex-1 justify-around">
+                  {Array.from({ length: 10 }).map((_, idx) => (
+                    <span key={idx} className="w-3.5 h-5 rounded-sm bg-stone-100/90" />
+                  ))}
+                </div>
+                <span className="text-[10px] font-mono font-bold text-amber-400 ml-3 hidden sm:inline">
+                  COZY 400 · {checkpointName.toUpperCase()}
+                </span>
+              </div>
+            </div>
+          )}
+
           {photoFrame === 'postcard' && (
-            <div className="absolute inset-4 sm:inset-8 border-4 border-dashed border-white/60 pointer-events-none z-10">
+            <div className="absolute inset-4 sm:inset-8 border-4 border-dashed border-white/70 pointer-events-none z-10">
               <div className="absolute top-3 right-3 px-3 py-1.5 rounded-xl cozy-badge text-[10px] font-bold">
-                Cozy Leap
+                ISLES · Cozy Leap
+              </div>
+              <div className="absolute bottom-3 left-4 text-xs sm:text-sm font-serif italic text-white drop-shadow">
+                Saludos desde {checkpointName}
+              </div>
+            </div>
+          )}
+
+          {photoFrame === 'magazine' && (
+            <div className="absolute inset-3 sm:inset-6 border border-amber-300/60 pointer-events-none z-10 flex flex-col justify-between p-4 bg-gradient-to-b from-black/55 via-transparent to-black/60">
+              <div className="text-center pt-1">
+                <div className="text-xl sm:text-3xl font-serif font-extrabold tracking-wider text-amber-300 drop-shadow">
+                  COZY LEAP
+                </div>
+                <div className="text-[9px] sm:text-[10px] tracking-[0.28em] uppercase text-white/85 font-semibold">
+                  Edición de aventura
+                </div>
+              </div>
+              <div className="text-left pb-1">
+                <span className="text-xs sm:text-sm font-bold tracking-wider uppercase text-white drop-shadow">
+                  {checkpointName}
+                </span>
               </div>
             </div>
           )}
@@ -3023,7 +3079,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <span className="font-bold text-cozy-ink">{UI.photoMode}</span>
                   <span className="text-cozy-soft hidden xs:inline">|</span>
                   <span className="text-cozy-muted text-[11px] hidden xs:inline">
-                    Acercamiento {photoDistance.toFixed(1)} m
+                    {PHOTO_FILTERS.find((f) => f.id === photoFilter)?.name ?? 'Natural'}
                   </span>
                 </div>
 
@@ -3077,22 +3133,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
 
               {/* Bottom Photo Studio Drawer */}
-              <div className="absolute bottom-3 sm:bottom-4 inset-x-3 sm:inset-x-4 max-w-2xl mx-auto flex flex-col items-center gap-2 sm:gap-3 pointer-events-auto z-20 pb-safe">
+              <div className="absolute bottom-3 sm:bottom-4 inset-x-3 sm:inset-x-4 max-w-2xl mx-auto flex flex-col items-center gap-2 sm:gap-2.5 pointer-events-auto z-20 pb-safe">
                 {/* Control Box */}
-                <div className="w-full rounded-3xl cozy-panel p-3 sm:p-4 shadow-xl flex flex-col gap-2.5 sm:gap-3 max-h-[46vh] overflow-y-auto">
+                <div className="w-full rounded-3xl cozy-panel p-3 sm:p-4 shadow-xl flex flex-col gap-2.5 sm:gap-3 max-h-[48vh] overflow-y-auto">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cozy-line pb-2.5">
-                    <div className="flex items-center gap-1 sm:gap-2">
-                      <button
-                        onClick={() => setPhotoActiveTab('camera')}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          photoActiveTab === 'camera'
-                            ? 'cozy-badge'
-                            : 'text-cozy-muted hover:text-cozy-ink'
-                        }`}
-                      >
-                        <Sliders className="w-3.5 h-3.5" />
-                        <span>Cámara</span>
-                      </button>
+                    <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
                       <button
                         onClick={() => setPhotoActiveTab('filters')}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -3105,6 +3150,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                         <span>Filtros</span>
                       </button>
                       <button
+                        onClick={() => setPhotoActiveTab('styles')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          photoActiveTab === 'styles'
+                            ? 'cozy-badge'
+                            : 'text-cozy-muted hover:text-cozy-ink'
+                        }`}
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Estilos</span>
+                      </button>
+                      <button
                         onClick={() => setPhotoActiveTab('frames')}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                           photoActiveTab === 'frames'
@@ -3114,6 +3170,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       >
                         <Layers className="w-3.5 h-3.5" />
                         <span>Marcos</span>
+                      </button>
+                      <button
+                        onClick={() => setPhotoActiveTab('camera')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          photoActiveTab === 'camera'
+                            ? 'cozy-badge'
+                            : 'text-cozy-muted hover:text-cozy-ink'
+                        }`}
+                      >
+                        <Sliders className="w-3.5 h-3.5" />
+                        <span>Cámara</span>
                       </button>
                     </div>
 
@@ -3131,18 +3198,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     </button>
                   </div>
 
-
-
-                    {(photoAction.showLoading || photoAction.feedback) && (
-                      <div className="w-full">
-                        <ActionFeedbackBanner
-                          feedback={photoAction.feedback}
-                          showLoading={photoAction.showLoading}
-                          loadingLabel="Procesando foto..."
-                          onDismiss={photoAction.clearFeedback}
-                        />
-                      </div>
-                    )}
+                  {(photoAction.showLoading || photoAction.feedback) && (
+                    <div className="w-full">
+                      <ActionFeedbackBanner
+                        feedback={photoAction.feedback}
+                        showLoading={photoAction.showLoading}
+                        loadingLabel="Procesando foto..."
+                        onDismiss={photoAction.clearFeedback}
+                      />
+                    </div>
+                  )}
 
                   {/* Tab Panels */}
                   {photoActiveTab === 'camera' && (
@@ -3230,30 +3295,134 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   )}
 
                   {photoActiveTab === 'filters' && (
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                      {PHOTO_FILTERS.map((f) => (
-                        <button
-                          key={f.id}
-                          onClick={() => setPhotoFilter(f.id)}
-                          className={`flex flex-col items-center gap-1.5 p-2 rounded-2xl border text-center transition-all cursor-pointer ${
-                            photoFilter === f.id
-                              ? 'cozy-badge border-cozy-accent'
-                              : 'cozy-btn text-cozy-muted'
-                          }`}
-                        >
-                          <div
-                            className="w-5 h-5 rounded-full border border-cozy-line shadow-inner"
-                            style={{ backgroundColor: f.color }}
+                    <div className="flex flex-col gap-2.5">
+                      <div className="grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-5 gap-2">
+                        {PHOTO_FILTERS.map((f) => (
+                          <button
+                            key={f.id}
+                            onClick={() => setPhotoFilter(f.id)}
+                            className={`flex flex-col items-center gap-1 p-2 rounded-2xl border text-center transition-all cursor-pointer ${
+                              photoFilter === f.id
+                                ? 'cozy-badge border-cozy-accent'
+                                : 'cozy-btn text-cozy-muted'
+                            }`}
+                          >
+                            <div
+                              className="w-6 h-6 rounded-full border border-cozy-line shadow-inner"
+                              style={{ background: f.swatch }}
+                            />
+                            <span className="text-[11px] font-bold leading-tight text-cozy-ink">{f.name}</span>
+                            <span className="text-[9px] text-cozy-soft hidden sm:inline">{f.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+
+                      {photoFilter !== 'natural' && (
+                        <div className="flex items-center gap-3 px-1 pt-1 border-t border-cozy-line/60">
+                          <span className="text-[11px] font-semibold text-cozy-muted whitespace-nowrap">
+                            Intensidad
+                          </span>
+                          <input
+                            type="range"
+                            min="15"
+                            max="100"
+                            step="5"
+                            value={photoIntensity}
+                            onChange={(e) => setPhotoIntensity(parseInt(e.target.value, 10))}
+                            className="flex-1 accent-cozy-accent cursor-pointer h-1.5 bg-cozy-panel-deep rounded-lg"
                           />
-                          <span className="text-[11px] font-bold leading-tight text-cozy-ink">{f.name}</span>
-                          <span className="text-[9px] text-cozy-soft hidden sm:inline">{f.desc}</span>
-                        </button>
-                      ))}
+                          <span className="text-[11px] font-bold text-cozy-accent-deep w-9 text-right">
+                            {photoIntensity}%
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {photoActiveTab === 'styles' && (
+                    <div className="flex flex-col gap-2.5">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {PHOTO_STYLES.map((st) => (
+                          <button
+                            key={st.id}
+                            onClick={() => {
+                              setPhotoStyle(st.id);
+                              setPhotoVignette(Math.round(st.vignette * 100));
+                              setPhotoGrain(Math.round(st.grain * 100));
+                              setPhotoBloom(Math.round(st.bloom * 100));
+                            }}
+                            className={`flex items-center gap-2.5 px-3 py-2 rounded-2xl border text-left transition-all cursor-pointer ${
+                              photoStyle === st.id
+                                ? 'cozy-badge border-cozy-accent'
+                                : 'cozy-btn text-cozy-muted'
+                            }`}
+                          >
+                            <span
+                              className="w-4 h-4 rounded-full border border-cozy-line flex-shrink-0"
+                              style={{ backgroundColor: st.badgeColor }}
+                            />
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-cozy-ink leading-tight">{st.name}</div>
+                              <div className="text-[9px] text-cozy-soft truncate">{st.desc}</div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 border-t border-cozy-line/60 text-xs">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex justify-between text-[11px] text-cozy-muted font-medium">
+                            <span>Viñeta</span>
+                            <span className="text-cozy-accent-deep">{photoVignette}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={photoVignette}
+                            onChange={(e) => setPhotoVignette(parseInt(e.target.value, 10))}
+                            className="accent-cozy-accent cursor-pointer h-1.5 bg-cozy-panel-deep rounded-lg"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <div className="flex justify-between text-[11px] text-cozy-muted font-medium">
+                            <span>Grano 35mm</span>
+                            <span className="text-cozy-accent-deep">{photoGrain}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={photoGrain}
+                            onChange={(e) => setPhotoGrain(parseInt(e.target.value, 10))}
+                            className="accent-cozy-accent cursor-pointer h-1.5 bg-cozy-panel-deep rounded-lg"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <div className="flex justify-between text-[11px] text-cozy-muted font-medium">
+                            <span>Resplandor</span>
+                            <span className="text-cozy-accent-deep">{photoBloom}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={photoBloom}
+                            onChange={(e) => setPhotoBloom(parseInt(e.target.value, 10))}
+                            className="accent-cozy-accent cursor-pointer h-1.5 bg-cozy-panel-deep rounded-lg"
+                          />
+                        </div>
+                      </div>
                     </div>
                   )}
 
                   {photoActiveTab === 'frames' && (
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       {PHOTO_FRAMES.map((fm) => (
                         <button
                           key={fm.id}
