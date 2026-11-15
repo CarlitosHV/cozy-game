@@ -81,6 +81,10 @@ const CODE_HINTS: Record<string, string> = {
   INVALID_INVITE: 'La invitación no es válida. Cierra e inténtalo de nuevo.',
   INVALID_FRIEND_REQUEST: 'No puedes enviarte una solicitud a ti mismo.',
   FORBIDDEN: 'No puedes hacer eso con esta cuenta.',
+  INSUFFICIENT_RELICS: 'No tienes suficientes reliquias para comprar este artículo.',
+  ALREADY_OWNED: 'Ya tienes este artículo desbloqueado en tu inventario.',
+  ITEM_LOCKED: 'Debes comprar este artículo antes de equiparlo.',
+  ITEM_NOT_FOUND: 'No encontramos ese artículo en la tienda.',
   SERVER_OFFLINE: 'No hay conexión ahora. Revisa tu internet e inténtalo de nuevo.',
 };
 

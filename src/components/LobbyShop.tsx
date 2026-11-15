@@ -301,10 +301,14 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
       };
       onCurrenciesChange(nextCurr);
 
+      const purchasedEquippedList = res.equippedByCategory
+        ? Object.values(res.equippedByCategory).filter(Boolean)
+        : undefined;
       const nextAppearance = applyShopItemToAppearance(
         appearance,
         item,
-        res.appearance || undefined
+        res.appearance || undefined,
+        purchasedEquippedList
       );
       setPreviewingItem(null);
       onTempPreview(null);
@@ -340,7 +344,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
           missing?: number | Partial<CurrenciesBalance>;
         };
       };
-      if (e.code === 'INSUFFICIENT_RELICS') {
+      if (e.code === 'INSUFFICIENT_RELICS' || e.code === 'INSUFFICIENT_CURRENCIES') {
         const miss = e.details?.missing;
         if (miss && typeof miss === 'object') {
           const parts: string[] = [];

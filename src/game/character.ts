@@ -437,7 +437,7 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
     const h = String(r.hairStyle || r.hair).toLowerCase();
     if (h.includes('cozy_messy') || h.includes('messy') || h.includes('flequillo') || h.includes('wave')) out.hairStyle = 'flequillo';
     else if (h.includes('short_crop') || h.includes('crop') || h.includes('rapado') || h.includes('corto')) out.hairStyle = 'rapado';
-    else if (h.includes('spike') || h.includes('puntas') || h.includes('mohawk') || h.includes('neon')) out.hairStyle = 'puntas';
+    else if (h.includes('spike') || h.includes('spiky') || h.includes('puntas') || h.includes('mohawk') || h.includes('neon')) out.hairStyle = 'puntas';
     else if (h.includes('ponytail') || h.includes('coleta')) out.hairStyle = 'coleta';
     else if (h.includes('braid') || h.includes('trenza') || h.includes('coletita') || h.includes('twin')) out.hairStyle = 'trenzas';
     else if (h.includes('bun') || h.includes('chongo')) out.hairStyle = 'chongo';
@@ -722,72 +722,136 @@ export function applyBackendAppearancePatch(
   return sanitizeAppearance(merged, base.bodyType, bypassLocks);
 }
 
+const BACKEND_HAIR_MAP: Record<string, string> = {
+  flequillo: 'cozy_messy',
+  rapado: 'short_crop',
+  puntas: 'spike',
+  coleta: 'ponytail',
+  largo: 'long',
+  trenzas: 'braids',
+  chongo: 'bun',
+};
+
+const BACKEND_OUTFIT_MAP: Record<string, string> = {
+  sudadera: 'hoodie',
+  chaqueta: 'varsity_jacket',
+  overol: 'overalls',
+  vestido: 'dress',
+  poncho: 'poncho',
+  sueter: 'sweater',
+};
+
+const BACKEND_HAT_MAP: Record<string, string> = {
+  ninguno: 'none',
+  gorro: 'beanie_cozy',
+  gorra: 'cap',
+  sombrero: 'sunhat',
+  flores: 'flower_crown',
+  orejas: 'ears',
+};
+
+const BACKEND_COMPANIONS = new Set([
+  'nube',
+  'estrella',
+  'luciernaga',
+  'catarina',
+  'hada',
+  'serpiente',
+  'polilla',
+]);
+
 /**
- * Builds a non-destructive JSON payload mapping frontend fields to backend aliases
- * while omitting undefined fields so PATCH /player/appearance & /player/character preserve existing customization.
+ * Builds a strictly schema-safe JSON payload mapping frontend CharacterAppearance fields
+ * to the backend appearance schema while omitting frontend-only tracking fields (equippedShopIds, height, build, variants, etc.)
+ * that would fail strict backend validation (HTTP 400).
  */
 export function buildBackendAppearancePayload(
-  appearance: Partial<CharacterAppearance> | Record<string, unknown>
+  appearance: Partial<CharacterAppearance> | Record<string, unknown>,
+  options?: { coreOnly?: boolean; minimalColorsOnly?: boolean }
 ): Record<string, unknown> {
   const a = appearance as Partial<CharacterAppearance>;
+  const r = appearance as Record<string, unknown>;
   const payload: Record<string, unknown> = {};
 
-  for (const [key, val] of Object.entries(appearance)) {
-    if (val !== undefined) {
-      payload[key] = val;
+  if (a.bodyType === 'chico' || a.bodyType === 'chica') {
+    payload.bodyType = a.bodyType;
+  }
+
+  const skinHex = normalizeHexColor(a.skinColor ?? r.skinColor);
+  if (skinHex) payload.skinColor = skinHex;
+
+  const hairHex = normalizeHexColor(a.hairColor ?? r.hairColor);
+  if (hairHex) payload.hairColor = hairHex;
+
+  const shirtHex = normalizeHexColor(a.sweaterColor ?? r.shirtColor);
+  if (shirtHex) payload.shirtColor = shirtHex;
+
+  const pantsHex = normalizeHexColor(a.detailColor ?? r.pantsColor);
+  if (pantsHex) payload.pantsColor = pantsHex;
+
+  const shoesHex = normalizeHexColor(a.bootColor ?? r.shoesColor);
+  if (shoesHex) payload.shoesColor = shoesHex;
+
+  if (options?.minimalColorsOnly) {
+    return payload;
+  }
+
+  const hairToken = cleanVariant(a.hairVariant ?? r.hairStyle);
+  if (hairToken) {
+    payload.hairStyle = BACKEND_HAIR_MAP[hairToken] ?? hairToken;
+  }
+
+  const rawShirtStyle = cleanVariant(a.outfitVariant ?? r.shirtStyle ?? a.outfitStyle);
+  if (rawShirtStyle) {
+    payload.shirtStyle = BACKEND_OUTFIT_MAP[rawShirtStyle] ?? rawShirtStyle;
+  }
+
+  if (a.hatStyle !== undefined || a.hatVariant !== undefined || typeof r.hat === 'string') {
+    if (a.hatStyle === 'ninguno' || r.hat === 'none' || r.hat === 'ninguno') {
+      payload.hat = 'none';
+    } else {
+      const hatToken = cleanVariant(a.hatVariant ?? r.hat ?? a.hatStyle);
+      payload.hat = hatToken ? BACKEND_HAT_MAP[hatToken] ?? hatToken : 'none';
     }
   }
 
-  if (a.name !== undefined) payload.displayName = a.name;
-  if (a.sweaterColor !== undefined) payload.shirtColor = a.sweaterColor;
-  if (a.detailColor !== undefined) payload.pantsColor = a.detailColor;
-  if (a.bootColor !== undefined) payload.shoesColor = a.bootColor;
-  if (a.hatColor !== undefined) payload.hatColor = a.hatColor;
-  if (a.shirtPattern !== undefined) payload.pattern = a.shirtPattern;
-
-  if (a.outfitStyle !== undefined || a.outfitVariant !== undefined) {
-    const mappedShirtStyle =
-      a.outfitVariant ||
-      (a.outfitStyle === 'sudadera' ? 'hoodie' : a.outfitStyle);
-    if (mappedShirtStyle) {
-      payload.shirtStyle = mappedShirtStyle;
-      payload.outfit = mappedShirtStyle;
+  if (a.accessory !== undefined || a.glassesVariant !== undefined || typeof r.glasses === 'string') {
+    if (a.accessory === 'lentes') {
+      payload.glasses = cleanVariant(a.glassesVariant) ?? 'reading';
+    } else if (a.accessory === 'pecas') {
+      payload.glasses = 'freckles';
+    } else if (typeof r.glasses === 'string' && r.glasses.trim()) {
+      payload.glasses = r.glasses.trim().slice(0, 64);
+    } else {
+      payload.glasses = 'none';
     }
   }
 
-  if (a.hatStyle !== undefined || a.hatVariant !== undefined) {
-    payload.hat =
-      a.hatStyle === 'ninguno'
-        ? 'none'
-        : a.hatVariant ||
-          (a.hatStyle === 'gorro'
-            ? 'beanie_cozy'
-            : a.hatStyle === 'gorra'
-              ? 'cap'
-              : a.hatStyle === 'sombrero'
-                ? 'sunhat'
-                : a.hatStyle === 'flores'
-                  ? 'flower_crown'
-                  : a.hatStyle === 'orejas'
-                    ? 'ears'
-                    : 'none');
+  if (a.backpack !== undefined || a.backpackVariant !== undefined || typeof r.backpack === 'string') {
+    if (typeof r.backpack === 'string') {
+      const b = r.backpack.trim();
+      payload.backpack = b && b !== 'ninguno' && b !== 'false' ? b.slice(0, 64) : 'none';
+    } else {
+      payload.backpack = a.backpack ? cleanVariant(a.backpackVariant) ?? 'explorer_pack' : 'none';
+    }
   }
 
-  if (a.accessory !== undefined || a.glassesVariant !== undefined) {
-    payload.glasses =
-      a.accessory === 'lentes'
-        ? a.glassesVariant || 'reading'
-        : a.accessory === 'pecas'
-          ? 'freckles'
-          : 'none';
+  // Only send companion when a concrete backend companion is selected (avoid 'ninguno' enum rejection)
+  if (typeof a.companion === 'string' && BACKEND_COMPANIONS.has(a.companion)) {
+    if (!options?.coreOnly || a.companion !== 'polilla') {
+      payload.companion = a.companion;
+    }
   }
 
-  if (a.backpack !== undefined || a.backpackVariant !== undefined) {
-    payload.backpack = a.backpack ? a.backpackVariant || 'explorer_pack' : 'none';
+  if (!options?.coreOnly) {
+    const outfitToken = cleanVariant(a.outfitVariant ?? r.outfit);
+    if (outfitToken) {
+      payload.outfit = outfitToken;
+    }
+    if (typeof a.shirtPattern === 'string' && a.shirtPattern && a.shirtPattern !== 'liso') {
+      payload.pattern = a.shirtPattern;
+    }
   }
-
-  if (a.shoesVariant !== undefined) payload.shoes = a.shoesVariant;
-  if (a.auraVariant !== undefined) payload.aura = a.auraVariant;
 
   return payload;
 }

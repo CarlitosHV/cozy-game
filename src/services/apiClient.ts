@@ -643,8 +643,16 @@ class ApiClient {
       const json = await response.json().catch(() => null);
 
       if (!response.ok) {
-        const raw = json?.message || json?.error || '';
-        const code = json?.code || response.status.toString();
+        const nestedErr = json?.error && typeof json.error === 'object' ? json.error : null;
+        const raw =
+          (typeof json?.message === 'string' && json.message) ||
+          (typeof json?.error === 'string' && json.error) ||
+          (typeof nestedErr?.message === 'string' && nestedErr.message) ||
+          '';
+        const code =
+          (typeof json?.code === 'string' && json.code) ||
+          (typeof nestedErr?.code === 'string' && nestedErr.code) ||
+          response.status.toString();
         const err = new Error(typeof raw === 'string' ? raw : '') as Error & {
           code: string;
           status: number;
@@ -654,6 +662,8 @@ class ApiClient {
         err.status = response.status;
         if (json?.details && typeof json.details === 'object') {
           err.details = json.details as Record<string, unknown>;
+        } else if (Array.isArray(json?.errors)) {
+          err.details = { errors: json.errors };
         }
         throw err;
       }
@@ -855,7 +865,8 @@ class ApiClient {
   }): Promise<PlayerCharacterResponse> {
     const bodyPayload: Record<string, unknown> = {};
     if (params.appearance) {
-      bodyPayload.appearance = buildBackendAppearancePayload(params.appearance);
+      const cleanApp = buildBackendAppearancePayload(params.appearance);
+      if (Object.keys(cleanApp).length > 0) bodyPayload.appearance = cleanApp;
     }
     if (Array.isArray(params.equipItemIds) && params.equipItemIds.length > 0) {
       bodyPayload.equipItemIds = params.equipItemIds;
@@ -867,16 +878,49 @@ class ApiClient {
       bodyPayload.resetToDefault = true;
     }
 
-    let res: { status: string; data: PlayerCharacterResponse; message?: string };
-    try {
-      res = await this.request<{ status: string; data: PlayerCharacterResponse; message?: string }>(
+    const sendCharacterPatch = (payload: Record<string, unknown>) =>
+      this.request<{ status: string; data: PlayerCharacterResponse; message?: string }>(
         '/player/character',
-        { method: 'PATCH', body: JSON.stringify(bodyPayload) },
+        { method: 'PATCH', body: JSON.stringify(payload) },
         true
       );
+
+    let res: { status: string; data: PlayerCharacterResponse; message?: string };
+    try {
+      res = await sendCharacterPatch(bodyPayload);
     } catch (err: unknown) {
-      const apiErr = err as { status?: number };
-      if (apiErr?.status === 404 || apiErr?.status === 405) {
+      const apiErr = err as { status?: number; code?: string };
+      if (apiErr?.status === 400 && apiErr?.code !== 'ITEM_LOCKED' && apiErr?.code !== 'ITEM_NOT_FOUND') {
+        try {
+          const minimalPayload: Record<string, unknown> = {
+            ...(params.equipItemIds?.length ? { equipItemIds: params.equipItemIds } : {}),
+            ...(params.unequipCategories?.length ? { unequipCategories: params.unequipCategories } : {}),
+            ...(params.resetToDefault ? { resetToDefault: true } : {}),
+          };
+          if (params.appearance) {
+            const minApp = buildBackendAppearancePayload(params.appearance, { minimalColorsOnly: true });
+            if (Object.keys(minApp).length > 0) minimalPayload.appearance = minApp;
+          }
+          res = await sendCharacterPatch(minimalPayload);
+        } catch (retryErr: unknown) {
+          const rErr = retryErr as { status?: number; code?: string };
+          if (
+            rErr?.status === 400 &&
+            rErr?.code !== 'ITEM_LOCKED' &&
+            rErr?.code !== 'ITEM_NOT_FOUND' &&
+            params.equipItemIds?.length
+          ) {
+            const eqRes = await this.equipShopItems(params.equipItemIds);
+            return {
+              appearance: eqRes.appearance,
+              equippedItems: eqRes.equippedItems ?? eqRes.equipped,
+              equippedByCategory: eqRes.equippedByCategory,
+              message: eqRes.message,
+            };
+          }
+          throw retryErr;
+        }
+      } else if (apiErr?.status === 404 || apiErr?.status === 405) {
         // Fallback to PUT /player/character or /player/appearance if PATCH/character isn't mounted yet
         if (apiErr?.status === 405) {
           res = await this.request<{ status: string; data: PlayerCharacterResponse; message?: string }>(
@@ -888,7 +932,7 @@ class ApiClient {
           if (params.appearance) await this.updateAppearance(params.appearance);
           if (params.equipItemIds?.length) await this.equipShopItems(params.equipItemIds, params.appearance);
           return {
-            appearance: bodyPayload.appearance as Record<string, unknown>,
+            appearance: (bodyPayload.appearance as Record<string, unknown>) || {},
             equippedItems: params.equipItemIds,
           };
         }
@@ -909,18 +953,27 @@ class ApiClient {
    */
   public async updateAppearance(appearance: Partial<CharacterAppearance>): Promise<void> {
     const payload = buildBackendAppearancePayload(appearance);
-    try {
-      await this.request(
+    const sendPatch = (body: Record<string, unknown>) =>
+      this.request(
         '/player/appearance',
         {
           method: 'PATCH',
-          body: JSON.stringify(payload),
+          body: JSON.stringify(body),
         },
         true
       );
+    try {
+      await sendPatch(payload);
     } catch (err: unknown) {
       const apiErr = err as { status?: number };
-      if (apiErr?.status === 404 || apiErr?.status === 405) {
+      if (apiErr?.status === 400) {
+        const minPayload = buildBackendAppearancePayload(appearance, { minimalColorsOnly: true });
+        if (Object.keys(minPayload).length > 0) {
+          await sendPatch(minPayload);
+          return;
+        }
+        throw err;
+      } else if (apiErr?.status === 404 || apiErr?.status === 405) {
         await this.request(
           '/player/appearance',
           {
@@ -1554,22 +1607,46 @@ class ApiClient {
     autoEquip: boolean = true,
     currentAppearance?: Partial<CharacterAppearance>
   ): Promise<ShopPurchaseResponse> {
+    const safeAppearance = currentAppearance
+      ? buildBackendAppearancePayload(currentAppearance, { coreOnly: true })
+      : null;
     const bodyPayload: Record<string, unknown> = { itemId, autoEquip };
-    if (currentAppearance) {
-      bodyPayload.currentAppearance = buildBackendAppearancePayload(currentAppearance);
+    if (safeAppearance && Object.keys(safeAppearance).length > 0) {
+      bodyPayload.currentAppearance = safeAppearance;
     }
-    const res = await this.request<{
-      status: string;
-      message?: string;
-      data: ShopPurchaseResponse;
-    }>(
-      '/shop/purchase',
-      {
-        method: 'POST',
-        body: JSON.stringify(bodyPayload),
-      },
-      true
-    );
+
+    const sendPurchase = (payload: Record<string, unknown>) =>
+      this.request<{
+        status: string;
+        message?: string;
+        data: ShopPurchaseResponse;
+      }>(
+        '/shop/purchase',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        },
+        true
+      );
+
+    let res: { status: string; message?: string; data: ShopPurchaseResponse };
+    try {
+      res = await sendPurchase(bodyPayload);
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number; code?: string };
+      const businessCode =
+        apiErr?.code === 'INSUFFICIENT_RELICS' ||
+        apiErr?.code === 'INSUFFICIENT_CURRENCIES' ||
+        apiErr?.code === 'ALREADY_OWNED' ||
+        apiErr?.code === 'ITEM_NOT_FOUND';
+      if (apiErr?.status === 400 && !businessCode && bodyPayload.currentAppearance) {
+        // Retry without optional currentAppearance if backend rejects any appearance field
+        res = await sendPurchase({ itemId, autoEquip });
+      } else {
+        throw err;
+      }
+    }
+
     const data = res.data ?? (res as unknown as ShopPurchaseResponse);
     const curr = extractCurrencies(data);
     if (curr) {
@@ -1593,22 +1670,58 @@ class ApiClient {
     itemIds: string | string[],
     currentAppearance?: Partial<CharacterAppearance>
   ): Promise<ShopEquipResponse> {
-    const body: Record<string, unknown> = Array.isArray(itemIds) ? { itemIds } : { itemId: itemIds };
-    if (currentAppearance) {
-      body.currentAppearance = buildBackendAppearancePayload(currentAppearance);
-    }
-    const res = await this.request<{
-      status: string;
-      message?: string;
-      data: ShopEquipResponse;
-    }>(
-      '/shop/equip',
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
-      true
+    const ids = (Array.isArray(itemIds) ? itemIds : [itemIds]).filter(
+      (id): id is string => typeof id === 'string' && id.trim().length > 0
     );
+    const safeAppearance = currentAppearance
+      ? buildBackendAppearancePayload(currentAppearance, { coreOnly: true })
+      : null;
+    const body: Record<string, unknown> = { itemIds: ids };
+    if (safeAppearance && Object.keys(safeAppearance).length > 0) {
+      body.currentAppearance = safeAppearance;
+    }
+
+    const sendEquip = (payload: Record<string, unknown>) =>
+      this.request<{
+        status: string;
+        message?: string;
+        data: ShopEquipResponse;
+      }>(
+        '/shop/equip',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        },
+        true
+      );
+
+    let res: { status: string; message?: string; data: ShopEquipResponse };
+    try {
+      res = await sendEquip(body);
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number; code?: string };
+      const businessCode = apiErr?.code === 'ITEM_LOCKED' || apiErr?.code === 'ITEM_NOT_FOUND';
+      if (apiErr?.status === 400 && !businessCode) {
+        try {
+          res = await sendEquip({ itemIds: ids });
+        } catch (retryErr: unknown) {
+          const rErr = retryErr as { status?: number; code?: string };
+          if (
+            rErr?.status === 400 &&
+            rErr?.code !== 'ITEM_LOCKED' &&
+            rErr?.code !== 'ITEM_NOT_FOUND' &&
+            ids.length === 1
+          ) {
+            res = await sendEquip({ itemId: ids[0] });
+          } else {
+            throw retryErr;
+          }
+        }
+      } else {
+        throw err;
+      }
+    }
+
     const data = res.data ?? (res as unknown as ShopEquipResponse);
     return { ...data, message: res.message || data.message };
   }
@@ -1623,25 +1736,47 @@ class ApiClient {
     itemId?: string;
     currentAppearance?: Partial<CharacterAppearance>;
   }): Promise<ShopEquipResponse> {
-    const body: Record<string, unknown> = {};
-    if (params.categories) body.categories = params.categories;
-    if (params.category) body.category = params.category;
-    if (params.itemId) body.itemId = params.itemId;
-    if (params.currentAppearance) {
-      body.currentAppearance = buildBackendAppearancePayload(params.currentAppearance);
+    const baseBody: Record<string, unknown> = {};
+    if (params.categories) baseBody.categories = params.categories;
+    if (params.category) baseBody.category = params.category;
+    if (params.itemId) baseBody.itemId = params.itemId;
+
+    const safeAppearance = params.currentAppearance
+      ? buildBackendAppearancePayload(params.currentAppearance, { coreOnly: true })
+      : null;
+    const fullBody: Record<string, unknown> = {
+      ...baseBody,
+      ...(safeAppearance && Object.keys(safeAppearance).length > 0
+        ? { currentAppearance: safeAppearance }
+        : {}),
+    };
+
+    const sendUnequip = (payload: Record<string, unknown>) =>
+      this.request<{
+        status: string;
+        message?: string;
+        data: ShopEquipResponse;
+      }>(
+        '/shop/unequip',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        },
+        true
+      );
+
+    let res: { status: string; message?: string; data: ShopEquipResponse };
+    try {
+      res = await sendUnequip(fullBody);
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number };
+      if (apiErr?.status === 400 && fullBody.currentAppearance) {
+        res = await sendUnequip(baseBody);
+      } else {
+        throw err;
+      }
     }
-    const res = await this.request<{
-      status: string;
-      message?: string;
-      data: ShopEquipResponse;
-    }>(
-      '/shop/unequip',
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
-      true
-    );
+
     const data = res.data ?? (res as unknown as ShopEquipResponse);
     return { ...data, message: res.message || data.message };
   }
