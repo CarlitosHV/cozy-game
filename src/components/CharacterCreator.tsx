@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowUp,
+  Award,
   Backpack,
   Check,
   Cloud,
   Dices,
+  Footprints,
   Glasses,
   HardHat,
   Layers,
@@ -24,6 +27,7 @@ import {
   Undo2,
   UserRound,
   Venus,
+  Wand2,
   X,
   ZoomIn,
   ZoomOut,
@@ -57,14 +61,17 @@ import { SHIRT_PATTERNS, getPatternSwatchUrl } from '../game/patterns';
 import { isPatternUnlocked, subscribeDailyMissions } from '../game/dailyMissions';
 import {
   apiClient,
+  normalizeShopTier,
+  SHOP_TIER_META,
   ShopCategory,
   ShopItem,
-  ShopRarity,
+  ShopTier,
   User,
 } from '../services/apiClient';
 import {
   SHOP_CATEGORY_LABELS,
   applyShopItemToAppearance,
+  clearCategoryFromAppearance,
   fetchOwnedShopItems,
 } from '../game/shopCosmetics';
 import { ConfirmDialog, ConfirmRequest } from './ConfirmDialog';
@@ -115,6 +122,9 @@ const CATEGORY_FOCUS: Record<ShopCategory, CharacterPreviewFocus> = {
   outfit: 'torso',
   pattern: 'torso',
   backpack: 'torso',
+  accessory: 'torso',
+  shoes: 'feet',
+  aura: 'full',
   companion: 'companion',
 };
 
@@ -122,6 +132,8 @@ const FIELD_FOCUS: Partial<Record<keyof CharacterAppearance, CharacterPreviewFoc
   skinColor: 'head',
   eyeStyle: 'head',
   accessory: 'head',
+  accessoryVariant: 'torso',
+  accessoryColor: 'torso',
   height: 'full',
   build: 'full',
   hairStyle: 'head',
@@ -134,6 +146,9 @@ const FIELD_FOCUS: Partial<Record<keyof CharacterAppearance, CharacterPreviewFoc
   hatColor: 'head',
   scarfColor: 'torso',
   bootColor: 'feet',
+  shoesVariant: 'feet',
+  auraVariant: 'full',
+  auraColor: 'full',
   backpack: 'torso',
   companion: 'companion',
   name: 'full',
@@ -148,29 +163,29 @@ const TABS: { id: Tab; name: string; icon: React.ReactNode }[] = [
   { id: 'compras', name: 'Compras', icon: <ShoppingBag className="w-3.5 h-3.5" /> },
 ];
 
-const RARITY_BADGE: Record<
-  ShopRarity,
+const TIER_BADGE: Record<
+  ShopTier,
   { label: string; lineColor: string; pillClass: string }
 > = {
   common: {
-    label: 'Común',
-    lineColor: '#94a3b8',
+    label: SHOP_TIER_META.common.label,
+    lineColor: SHOP_TIER_META.common.color,
     pillClass: 'bg-slate-100 text-slate-700 border-slate-200',
   },
-  rare: {
-    label: 'Raro',
-    lineColor: '#38bdf8',
-    pillClass: 'bg-sky-50 text-sky-700 border-sky-200',
-  },
   epic: {
-    label: 'Épico',
-    lineColor: '#a78bfa',
-    pillClass: 'bg-violet-50 text-violet-700 border-violet-200',
+    label: SHOP_TIER_META.epic.label,
+    lineColor: SHOP_TIER_META.epic.color,
+    pillClass: 'bg-purple-50 text-purple-700 border-purple-200',
   },
-  legendary: {
-    label: 'Legendario',
-    lineColor: '#f59e0b',
-    pillClass: 'bg-amber-50 text-amber-800 border-amber-200',
+  golden: {
+    label: SHOP_TIER_META.golden.label,
+    lineColor: SHOP_TIER_META.golden.color,
+    pillClass: 'bg-amber-50 text-amber-800 border-amber-300',
+  },
+  mythic: {
+    label: SHOP_TIER_META.mythic.label,
+    lineColor: SHOP_TIER_META.mythic.color,
+    pillClass: 'bg-rose-50 text-rose-700 border-rose-200',
   },
 };
 
@@ -190,6 +205,12 @@ function shopCategoryIcon(cat: ShopCategory) {
       return <Backpack className="w-3.5 h-3.5" />;
     case 'hair':
       return <Scissors className="w-3.5 h-3.5" />;
+    case 'accessory':
+      return <Award className="w-3.5 h-3.5" />;
+    case 'shoes':
+      return <Footprints className="w-3.5 h-3.5" />;
+    case 'aura':
+      return <Wand2 className="w-3.5 h-3.5" />;
     case 'companion':
       return <Sparkles className="w-3.5 h-3.5" />;
   }
@@ -398,7 +419,8 @@ const OwnedShopCard: React.FC<{
   onUnequip?: (item: ShopItem) => void;
   compact?: boolean;
 }> = ({ item, equipped, busy, appearance, onEquip, onUnequip, compact = false }) => {
-  const rarity = RARITY_BADGE[item.rarity] ?? RARITY_BADGE.common;
+  const tier = normalizeShopTier(item.tier ?? item.rarity);
+  const rarity = TIER_BADGE[tier] ?? TIER_BADGE.common;
   const patchPattern =
     item.category === 'pattern' && typeof item.appearancePatch?.pattern === 'string'
       ? (item.appearancePatch.pattern as CharacterAppearance['shirtPattern'])
@@ -416,6 +438,10 @@ const OwnedShopCard: React.FC<{
     (item.category === 'hat' ||
       item.category === 'glasses' ||
       item.category === 'backpack' ||
+      item.category === 'hair' ||
+      item.category === 'accessory' ||
+      item.category === 'shoes' ||
+      item.category === 'aura' ||
       item.category === 'companion');
 
   return (
@@ -648,8 +674,15 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
 
     try {
       if (apiClient.isAuthenticated()) {
-        const res = await apiClient.equipShopItems(item.id);
-        const serverEq = Array.isArray(res?.equippedItems) ? res.equippedItems : optimisticIds;
+        const res = await apiClient.updatePlayerCharacter({
+          appearance,
+          equipItemIds: [item.id],
+        });
+        const serverEq = Array.isArray(res?.equippedItems)
+          ? res.equippedItems
+          : res?.equippedByCategory
+            ? Object.values(res.equippedByCategory).filter(Boolean)
+            : optimisticIds;
         const next = applyShopItemToAppearance(appearance, item, res?.appearance, serverEq);
         setHistory((h) => [...h.slice(-29), appearance]);
         lastKeyRef.current = `shop-${item.id}`;
@@ -675,31 +708,42 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
     }
   };
 
-  const handleUnequipShopItem = (item: ShopItem) => {
-    const next: CharacterAppearance = { ...appearance };
-    next.equippedShopIds = withoutOwnedIdsInCategories(next.equippedShopIds, [item.category]);
-    if (item.category === 'hat') {
-      delete next.hatVariant;
-      next.hatStyle = 'ninguno';
-    } else if (item.category === 'glasses') {
-      delete next.glassesVariant;
-      delete next.glassesColor;
-      next.accessory = 'ninguno';
-    } else if (item.category === 'backpack') {
-      delete next.backpackVariant;
-      delete next.backpackColor;
-      next.backpack = false;
-    } else if (item.category === 'companion') {
-      next.companion = 'ninguno';
+  const handleUnequipShopItem = async (item: ShopItem) => {
+    if (busyEquipId) return;
+    setBusyEquipId(item.id);
+    try {
+      let next = clearCategoryFromAppearance(appearance, item.category, undefined, item.id);
+      if (apiClient.isAuthenticated()) {
+        const res = await apiClient.unequipShopItems({
+          category: item.category,
+          itemId: item.id,
+          currentAppearance: appearance,
+        });
+        const serverEq = Array.isArray(res?.equippedItems)
+          ? res.equippedItems
+          : Array.isArray(res?.equipped)
+            ? res.equipped
+            : undefined;
+        next = clearCategoryFromAppearance(appearance, item.category, res?.appearance, item.id);
+        if (serverEq) next.equippedShopIds = serverEq;
+      }
+      setHistory((h) => [...h.slice(-29), appearance]);
+      lastKeyRef.current = `unequip-${item.id}`;
+      focus(CATEGORY_FOCUS[item.category] ?? 'full');
+      onChange(next);
+      setOwnedItems((cur) =>
+        cur.map((entry) =>
+          entry.id === item.id || entry.category === item.category
+            ? { ...entry, equipped: false }
+            : entry
+        )
+      );
+      onToast?.(`${item.name} quitado`, 1600, 'neutral');
+    } catch (err) {
+      onToast?.(friendlyError(err, 'No se pudo quitar el artículo.'), 2400, 'error');
+    } finally {
+      setBusyEquipId(null);
     }
-    setHistory((h) => [...h.slice(-29), appearance]);
-    lastKeyRef.current = `unequip-${item.id}`;
-    focus(CATEGORY_FOCUS[item.category] ?? 'full');
-    onChange(next);
-    setOwnedItems((cur) =>
-      cur.map((entry) => (entry.id === item.id ? { ...entry, equipped: false } : entry))
-    );
-    onToast?.(`${item.name} quitado`, 1600, 'neutral');
   };
 
   const undo = () => {
@@ -725,6 +769,9 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
   };
   const reset = () => {
     focus('full');
+    if (apiClient.isAuthenticated()) {
+      apiClient.updatePlayerCharacter({ resetToDefault: true }).catch(() => {});
+    }
     apply(defaultAppearanceFor(body), 'reset');
   };
 
@@ -851,7 +898,14 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
   const ownedClothingItems = useMemo(
     () =>
       ownedItems.filter(
-        (i) => i.category === 'outfit' || i.category === 'hat' || i.category === 'backpack'
+        (i) =>
+          i.category === 'outfit' ||
+          i.category === 'hat' ||
+          i.category === 'backpack' ||
+          i.category === 'accessory' ||
+          i.category === 'shoes' ||
+          i.category === 'aura' ||
+          i.category === 'pattern'
       ),
     [ownedItems]
   );
@@ -1204,6 +1258,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
                         busy={busyEquipId === item.id}
                         appearance={appearance}
                         onEquip={handleEquipShopItem}
+                        onUnequip={handleUnequipShopItem}
                         compact
                       />
                     ))}
@@ -1234,7 +1289,7 @@ export const CharacterCreator: React.FC<CharacterCreatorProps> = ({
             <>
               {ownedClothingItems.length > 0 && (
                 <Section
-                  title="Comprados en tienda (Conjuntos, Gorros y Mochilas)"
+                  title="Comprados en tienda (Ropa, Accesorios, Calzado y Auras)"
                   aside={
                     <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                       {ownedClothingItems.length} tuyos

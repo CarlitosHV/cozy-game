@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Award,
   Backpack,
   Check,
   Eye,
   EyeOff,
-  Gem,
+  Footprints,
   Glasses,
   HardHat,
   Layers,
@@ -18,15 +19,21 @@ import {
   ShoppingBag,
   Sparkles,
   UserRound,
+  Wand2,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import {
   apiClient,
+  CurrenciesBalance,
+  normalizeShopTier,
+  SHOP_TIER_META,
   ShopCatalogCategory,
   ShopCategory,
   ShopItem,
-  ShopRarity,
+  ShopTier,
+  ShopTierMeta,
   User,
 } from '../services/apiClient';
 import {
@@ -36,17 +43,19 @@ import {
 import { getPatternSwatchUrl } from '../game/patterns';
 import {
   applyShopItemToAppearance,
+  clearCategoryFromAppearance,
   syncOwnedShopUnlocks,
 } from '../game/shopCosmetics';
 import { COMPANION_ICONS } from './CharacterCreator';
+import { DualCurrencyBalance, ItemPricePills } from './CurrencyBadge';
 import { friendlyError } from '../utils/locale';
 
 interface LobbyShopProps {
   appearance: CharacterAppearance;
   currentUser: User | null;
-  relicsBalance: number;
+  currencies: CurrenciesBalance;
   portrait: boolean;
-  onRelicsBalanceChange: (next: number) => void;
+  onCurrenciesChange: (next: CurrenciesBalance) => void;
   onApplyAppearance: (next: CharacterAppearance, syncServer?: boolean) => void;
   onTempPreview: (temp: CharacterAppearance | null) => void;
   onZoom?: (delta: number) => void;
@@ -56,40 +65,54 @@ interface LobbyShopProps {
 
 const DEFAULT_CATEGORIES: ShopCatalogCategory[] = [
   { id: 'skin', label: 'Pieles' },
-  { id: 'hat', label: 'Gorros' },
+  { id: 'hat', label: 'Gorros y Sombreros' },
   { id: 'outfit', label: 'Conjuntos' },
   { id: 'pattern', label: 'Patrones' },
-  { id: 'glasses', label: 'Lentes' },
-  { id: 'backpack', label: 'Mochilas' },
+  { id: 'glasses', label: 'Lentes y Visores' },
+  { id: 'backpack', label: 'Mochilas y Alas' },
   { id: 'hair', label: 'Peinados' },
+  { id: 'accessory', label: 'Accesorios' },
+  { id: 'shoes', label: 'Calzado' },
+  { id: 'aura', label: 'Auras y Estelas' },
   { id: 'companion', label: 'Compañeros' },
 ];
 
-const RARITY_META: Record<
-  ShopRarity,
-  { label: string; textClass: string; lineColor: string }
+const TIER_STYLES: Record<
+  ShopTier,
+  { textClass: string; badgeClass: string; lineColor: string }
 > = {
   common: {
-    label: 'Común',
     textClass: 'text-slate-600',
-    lineColor: '#94a3b8',
-  },
-  rare: {
-    label: 'Raro',
-    textClass: 'text-sky-700',
-    lineColor: '#38bdf8',
+    badgeClass: 'bg-slate-100/90 text-slate-700 border-slate-200',
+    lineColor: SHOP_TIER_META.common.color,
   },
   epic: {
-    label: 'Épico',
-    textClass: 'text-violet-700',
-    lineColor: '#a78bfa',
+    textClass: 'text-purple-700',
+    badgeClass: 'bg-purple-50/90 text-purple-700 border-purple-200',
+    lineColor: SHOP_TIER_META.epic.color,
   },
-  legendary: {
-    label: 'Legendario',
+  golden: {
     textClass: 'text-amber-700',
-    lineColor: '#f59e0b',
+    badgeClass: 'bg-amber-50/95 text-amber-800 border-amber-300',
+    lineColor: SHOP_TIER_META.golden.color,
+  },
+  mythic: {
+    textClass: 'text-rose-700',
+    badgeClass: 'bg-rose-50/90 text-rose-700 border-rose-200',
+    lineColor: SHOP_TIER_META.mythic.color,
   },
 };
+
+const REMOVABLE_CATEGORIES = new Set<ShopCategory>([
+  'hat',
+  'glasses',
+  'backpack',
+  'hair',
+  'accessory',
+  'shoes',
+  'aura',
+  'companion',
+]);
 
 function categoryIcon(cat: ShopCategory | 'all') {
   switch (cat) {
@@ -107,6 +130,12 @@ function categoryIcon(cat: ShopCategory | 'all') {
       return <Backpack className="w-3.5 h-3.5 shrink-0" />;
     case 'hair':
       return <Scissors className="w-3.5 h-3.5 shrink-0" />;
+    case 'accessory':
+      return <Award className="w-3.5 h-3.5 shrink-0" />;
+    case 'shoes':
+      return <Footprints className="w-3.5 h-3.5 shrink-0" />;
+    case 'aura':
+      return <Wand2 className="w-3.5 h-3.5 shrink-0" />;
     case 'companion':
       return <Sparkles className="w-3.5 h-3.5 shrink-0" />;
     default:
@@ -117,9 +146,9 @@ function categoryIcon(cat: ShopCategory | 'all') {
 export const LobbyShop: React.FC<LobbyShopProps> = ({
   appearance,
   currentUser,
-  relicsBalance,
+  currencies,
   portrait,
-  onRelicsBalanceChange,
+  onCurrenciesChange,
   onApplyAppearance,
   onTempPreview,
   onZoom,
@@ -128,8 +157,9 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
 }) => {
   const [items, setItems] = useState<ShopItem[]>([]);
   const [categories, setCategories] = useState<ShopCatalogCategory[]>(DEFAULT_CATEGORIES);
+  const [tiersMeta, setTiersMeta] = useState<ShopTierMeta[]>(Object.values(SHOP_TIER_META));
   const [selectedCategory, setSelectedCategory] = useState<'all' | ShopCategory>('all');
-  const [selectedRarity, setSelectedRarity] = useState<'all' | ShopRarity>('all');
+  const [selectedTier, setSelectedTier] = useState<'all' | ShopTier>('all');
   const [onlyOwned, setOnlyOwned] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -151,8 +181,11 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
       if (Array.isArray(data.categories) && data.categories.length > 0) {
         setCategories(data.categories);
       }
-      if (typeof data.relicsBalance === 'number') {
-        onRelicsBalanceChange(data.relicsBalance);
+      if (Array.isArray(data.tiers) && data.tiers.length > 0) {
+        setTiersMeta([...data.tiers].sort((a, b) => a.order - b.order));
+      }
+      if (data.currencies) {
+        onCurrenciesChange(data.currencies);
       }
     } catch (err) {
       setErrorMsg(
@@ -161,7 +194,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [onRelicsBalanceChange]);
+  }, [onCurrenciesChange]);
 
   useEffect(() => {
     void loadCatalog();
@@ -184,11 +217,20 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     return map;
   }, [categories]);
 
+  const tierLabelMap = useMemo(() => {
+    const map: Record<ShopTier, ShopTierMeta> = { ...SHOP_TIER_META };
+    for (const t of tiersMeta) {
+      map[t.id] = t;
+    }
+    return map;
+  }, [tiersMeta]);
+
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return items.filter((item) => {
       if (selectedCategory !== 'all' && item.category !== selectedCategory) return false;
-      if (selectedRarity !== 'all' && item.rarity !== selectedRarity) return false;
+      const itemTier = normalizeShopTier(item.tier ?? item.rarity);
+      if (selectedTier !== 'all' && itemTier !== selectedTier) return false;
       if (onlyOwned && !item.owned) return false;
       if (
         q &&
@@ -199,7 +241,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
       }
       return true;
     });
-  }, [items, selectedCategory, selectedRarity, onlyOwned, searchQuery]);
+  }, [items, selectedCategory, selectedTier, onlyOwned, searchQuery]);
 
   const handleTogglePreview = (item: ShopItem) => {
     if (previewingItem?.id === item.id) {
@@ -244,10 +286,21 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     if (busyItemId) return;
     setBusyItemId(item.id);
     try {
-      const res = await apiClient.purchaseShopItem(item.id, true);
-      if (typeof res.relicsBalance === 'number') {
-        onRelicsBalanceChange(res.relicsBalance);
-      }
+      const res = await apiClient.purchaseShopItem(item.id, true, appearance);
+      const nextCurr: CurrenciesBalance = res.currencies ?? {
+        walnut:
+          typeof res.walnutBalance === 'number'
+            ? res.walnutBalance
+            : typeof res.relicsBalance === 'number'
+              ? res.relicsBalance
+              : Math.max(0, currencies.walnut - item.priceWalnut),
+        crystal:
+          typeof res.crystalBalance === 'number'
+            ? res.crystalBalance
+            : Math.max(0, currencies.crystal - item.priceCrystal),
+      };
+      onCurrenciesChange(nextCurr);
+
       const nextAppearance = applyShopItemToAppearance(
         appearance,
         item,
@@ -257,18 +310,20 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
       onTempPreview(null);
       onApplyAppearance(nextAppearance, false);
 
-      const newBalance = typeof res.relicsBalance === 'number' ? res.relicsBalance : relicsBalance;
       const unlockedSet = new Set(res.unlockedItems || []);
       setItems((prev) =>
         prev.map((it) => {
           const isPurchased = it.id === item.id;
           const isOwned = it.owned || isPurchased || unlockedSet.has(it.id);
           const sameCatUnequip = res.equipped && it.category === item.category && !isPurchased;
+          const missW = Math.max(0, it.priceWalnut - nextCurr.walnut);
+          const missC = Math.max(0, it.priceCrystal - nextCurr.crystal);
           return {
             ...it,
             owned: isOwned,
             equipped: isPurchased ? Boolean(res.equipped) : sameCatUnequip ? false : it.equipped,
-            canAfford: newBalance >= it.priceRelics,
+            canAfford: missW === 0 && missC === 0,
+            missingCurrencies: { walnut: missW, crystal: missC },
           };
         })
       );
@@ -279,16 +334,30 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
         'success'
       );
     } catch (err) {
-      const e = err as Error & { code?: string; details?: { required?: number; available?: number; missing?: number } };
+      const e = err as Error & {
+        code?: string;
+        details?: {
+          missing?: number | Partial<CurrenciesBalance>;
+        };
+      };
       if (e.code === 'INSUFFICIENT_RELICS') {
-        const missing = e.details?.missing;
-        onToast(
-          typeof missing === 'number'
-            ? `Te faltan ${missing} reliquias para "${item.name}".`
-            : `No tienes suficientes reliquias para "${item.name}".`,
-          2800,
-          'error'
-        );
+        const miss = e.details?.missing;
+        if (miss && typeof miss === 'object') {
+          const parts: string[] = [];
+          if ((miss.walnut ?? 0) > 0) parts.push(`${miss.walnut} Nuez`);
+          if ((miss.crystal ?? 0) > 0) parts.push(`${miss.crystal} Cristal`);
+          onToast(
+            parts.length > 0
+              ? `Te faltan ${parts.join(' y ')} para "${item.name}".`
+              : `No tienes suficientes reliquias para "${item.name}".`,
+            2800,
+            'error'
+          );
+        } else if (typeof miss === 'number') {
+          onToast(`Te faltan ${miss} reliquias para "${item.name}".`, 2800, 'error');
+        } else {
+          onToast(`No tienes suficientes reliquias para "${item.name}".`, 2800, 'error');
+        }
       } else if (e.code === 'ALREADY_OWNED') {
         onToast(`Ya tienes "${item.name}" desbloqueado.`, 2200, 'neutral');
         void loadCatalog();
@@ -308,7 +377,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
     if (busyItemId) return;
     setBusyItemId(item.id);
     try {
-      const res = await apiClient.equipShopItems(item.id);
+      const res = await apiClient.equipShopItems(item.id, appearance);
       const equippedList = res.equippedItems || res.equipped;
       const nextAppearance = applyShopItemToAppearance(
         appearance,
@@ -339,6 +408,53 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
       } else {
         onToast(friendlyError(err, 'No se pudo equipar este artículo.'), 2400, 'error');
       }
+    } finally {
+      setBusyItemId(null);
+    }
+  };
+
+  const handleUnequip = async (item: ShopItem) => {
+    if (!apiClient.isAuthenticated()) {
+      onOpenAuth();
+      return;
+    }
+    if (busyItemId) return;
+    setBusyItemId(item.id);
+    try {
+      const res = await apiClient.unequipShopItems({
+        category: item.category,
+        itemId: item.id,
+        currentAppearance: appearance,
+      });
+      const equippedList = res.equippedItems || res.equipped;
+      const nextAppearance = clearCategoryFromAppearance(
+        appearance,
+        item.category,
+        res.appearance || undefined,
+        item.id
+      );
+      if (Array.isArray(equippedList)) {
+        nextAppearance.equippedShopIds = equippedList;
+      }
+      setPreviewingItem(null);
+      onTempPreview(null);
+      onApplyAppearance(nextAppearance, false);
+
+      setItems((prev) =>
+        prev.map((it) => {
+          if (Array.isArray(equippedList)) {
+            return { ...it, equipped: equippedList.includes(it.id) };
+          }
+          if (it.id === item.id || it.category === item.category) {
+            return { ...it, equipped: false };
+          }
+          return it;
+        })
+      );
+
+      onToast(res.message || `"${item.name}" quitado`, 1800, 'neutral');
+    } catch (err) {
+      onToast(friendlyError(err, 'No se pudo quitar este artículo.'), 2200, 'error');
     } finally {
       setBusyItemId(null);
     }
@@ -466,16 +582,16 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
               </span>
             </div>
             <p className="text-xs text-cozy-muted mt-0.5">
-              Desbloquea estilos, conjuntos, patrones y compañeros con tus reliquias.
+              Usa Reliquias de Nuez y de Cristal para desbloquear cosméticos, calzado, auras y compañeros.
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50/90 border border-amber-300/60 text-amber-800 shadow-xs">
-              <Gem className="w-4 h-4 text-amber-600" />
-              <span className="text-sm font-black tabular-nums">{relicsBalance}</span>
-              <span className="text-[11px] text-amber-700 font-semibold">Reliquias</span>
-            </div>
+            <DualCurrencyBalance
+              walnut={currencies.walnut}
+              crystal={currencies.crystal}
+              size="sm"
+            />
             <button
               type="button"
               onClick={() => void loadCatalog()}
@@ -550,7 +666,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
             ))}
           </div>
 
-          {/* Search + Rarity + Owned Filter */}
+          {/* Search + Tier + Owned Filter */}
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[160px]">
               <Search className="w-3.5 h-3.5 text-cozy-muted absolute left-2.5 top-1/2 -translate-y-1/2" />
@@ -564,16 +680,17 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
             </div>
 
             <select
-              value={selectedRarity}
-              onChange={(e) => setSelectedRarity(e.target.value as 'all' | ShopRarity)}
-              aria-label="Filtrar por rareza"
+              value={selectedTier}
+              onChange={(e) => setSelectedTier(e.target.value as 'all' | ShopTier)}
+              aria-label="Filtrar por nivel de objeto"
               className="px-2.5 py-1.5 rounded-xl cozy-input text-xs font-semibold cursor-pointer"
             >
-              <option value="all">Todas las rarezas</option>
-              <option value="common">Común</option>
-              <option value="rare">Raro</option>
-              <option value="epic">Épico</option>
-              <option value="legendary">Legendario</option>
+              <option value="all">Todos los tiers</option>
+              {tiersMeta.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
             </select>
 
             <button
@@ -618,7 +735,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
                 type="button"
                 onClick={() => {
                   setSelectedCategory('all');
-                  setSelectedRarity('all');
+                  setSelectedTier('all');
                   setOnlyOwned(false);
                   setSearchQuery('');
                 }}
@@ -630,10 +747,15 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 pb-4">
               {filteredItems.map((item) => {
-                const rarity = RARITY_META[item.rarity] ?? RARITY_META.common;
+                const tierId = normalizeShopTier(item.tier ?? item.rarity);
+                const tierStyle = TIER_STYLES[tierId] ?? TIER_STYLES.common;
+                const tierInfo = tierLabelMap[tierId] ?? SHOP_TIER_META[tierId];
                 const isPreviewing = previewingItem?.id === item.id;
                 const isBusy = busyItemId === item.id;
-                const canBuyNow = isAuth && relicsBalance >= item.priceRelics;
+                const missW = isAuth ? Math.max(0, item.priceWalnut - currencies.walnut) : 0;
+                const missC = isAuth ? Math.max(0, item.priceCrystal - currencies.crystal) : 0;
+                const canBuyNow = !isAuth || (missW === 0 && missC === 0);
+                const removable = REMOVABLE_CATEGORIES.has(item.category);
 
                 return (
                   <div
@@ -645,15 +767,21 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
                           ? 'border-cozy-moss/60'
                           : 'border-white/80 hover:border-cozy-line'
                     }`}
-                    style={{ borderTopWidth: '3px', borderTopColor: rarity.lineColor }}
+                    style={{
+                      borderTopWidth: '3px',
+                      borderTopColor: tierInfo.color || tierStyle.lineColor,
+                    }}
                   >
                     <div className="p-3.5 flex flex-col gap-2.5">
                       <div className="flex items-start gap-2.5">
                         {renderItemThumb(item)}
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider">
-                            <span className={rarity.textClass}>{rarity.label}</span>
-                            <span className="text-cozy-soft">·</span>
+                            <span
+                              className={`px-1.5 py-px rounded border text-[9px] font-extrabold ${tierStyle.badgeClass}`}
+                            >
+                              {tierInfo.label}
+                            </span>
                             <span className="text-cozy-muted truncate">
                               {categoryLabelMap[item.category] || item.category}
                             </span>
@@ -667,9 +795,21 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
                       <p className="text-[11px] text-cozy-muted leading-relaxed line-clamp-2 min-h-[2rem]">
                         {item.description}
                       </p>
+
+                      {!item.owned && (
+                        <div className="pt-0.5">
+                          <ItemPricePills
+                            walnut={item.priceWalnut}
+                            crystal={item.priceCrystal}
+                            missingWalnut={missW}
+                            missingCrystal={missC}
+                            size="xs"
+                          />
+                        </div>
+                      )}
                     </div>
 
-                    <div className="px-3.5 py-2.5 bg-white/55 border-t border-cozy-line flex items-center gap-2">
+                    <div className="px-3.5 py-2.5 bg-white/55 border-t border-cozy-line flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => handleTogglePreview(item)}
@@ -685,9 +825,22 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
                       </button>
 
                       {item.equipped ? (
-                        <div className="flex-1 py-1.5 px-2.5 rounded-xl cozy-badge-moss text-[11px] font-bold flex items-center justify-center gap-1">
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Equipado</span>
+                        <div className="flex-1 flex items-center gap-1.5">
+                          <div className="flex-1 py-1.5 px-2 rounded-xl cozy-badge-moss text-[11px] font-bold flex items-center justify-center gap-1">
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Equipado</span>
+                          </div>
+                          {removable && (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => void handleUnequip(item)}
+                              title="Quitar artículo"
+                              className="px-2 py-1.5 rounded-xl bg-white hover:bg-rose-50 border border-cozy-line hover:border-rose-200 text-cozy-muted hover:text-rose-600 text-[11px] font-bold cursor-pointer disabled:opacity-50 transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       ) : item.owned ? (
                         <button
@@ -708,7 +861,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
                           onClick={() => void handlePurchase(item)}
                           disabled={isBusy}
                           className={`flex-1 py-1.5 px-2.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50 transition-colors ${
-                            canBuyNow || !isAuth
+                            canBuyNow
                               ? 'cozy-btn-primary'
                               : 'bg-stone-200/80 border border-stone-300/60 text-stone-600 hover:bg-stone-200'
                           }`}
@@ -716,11 +869,7 @@ export const LobbyShop: React.FC<LobbyShopProps> = ({
                           {isBusy ? (
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           ) : (
-                            <>
-                              <Gem className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                              <span className="tabular-nums">{item.priceRelics}</span>
-                              <span className="ml-0.5">Comprar</span>
-                            </>
+                            <span>{canBuyNow ? 'Comprar' : 'Faltan reliquias'}</span>
                           )}
                         </button>
                       )}

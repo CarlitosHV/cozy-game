@@ -92,10 +92,18 @@ export interface WeatherNotice {
   reason: 'milestone' | 'manual';
 }
 
+export interface CollectibleProgressDetail {
+  walnut: number;
+  crystal: number;
+  totalWalnut: number;
+  totalCrystal: number;
+  lastKind?: 'walnut' | 'crystal' | null;
+}
+
 export interface GameEngineCallbacks {
   onStateChange: (state: GameState) => void;
   onCheckpointChange: (name: string, index: number, total?: number) => void;
-  onCollectiblesChange: (collected: number, total: number) => void;
+  onCollectiblesChange: (collected: number, total: number, detail?: CollectibleProgressDetail) => void;
   onWeatherChange: (weather: WeatherType, isTransitioning?: boolean) => void;
   onWeatherNotice?: (notice: WeatherNotice) => void;
   onModeChange?: (mode: GameMode) => void;
@@ -732,13 +740,27 @@ export class GameEngine {
     }
 
     // Report initial state
-    this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
+    this.emitCollectiblesChange(null);
     const cp0 = this.world.checkpoints[0];
     this.callbacks.onCheckpointChange(cp0 ? cp0.name : 'Pradera del Amanecer', 1, this.world.checkpoints.length || 3);
     this.callbacks.onLevelThemeChange?.(this.currentLevel, this.getActiveTheme());
 
     // Start render loop
     this.startLoop();
+  }
+
+  private emitCollectiblesChange(lastKind?: 'walnut' | 'crystal' | null) {
+    this.callbacks.onCollectiblesChange(
+      this.physics.collectedCount,
+      this.physics.totalCollectibles,
+      {
+        walnut: this.physics.walnutCollectedCount,
+        crystal: this.physics.crystalCollectedCount,
+        totalWalnut: this.physics.totalWalnutCollectibles,
+        totalCrystal: this.physics.totalCrystalCollectibles,
+        lastKind: lastKind ?? null,
+      }
+    );
   }
 
   public getActiveTheme(): ThemeId {
@@ -1117,7 +1139,7 @@ export class GameEngine {
     this.reapplySharedWorld();
     this.resetCombat();
 
-    this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
+    this.emitCollectiblesChange(null);
     const cp0 = this.world.checkpoints[0];
     this.callbacks.onCheckpointChange(cp0 ? cp0.name : '', 1, this.world.checkpoints.length || 3);
     // New world: switch the sky almost instantly
@@ -1589,7 +1611,7 @@ export class GameEngine {
     this.clearPreviewCamera();
     this.resetCompanionPowers();
     this.physics.resetCollectibles();
-    this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
+    this.emitCollectiblesChange(null);
     this.itemSystem.resetPickups();
     if (freshBackpack) this.itemSystem.clearInventory(this.itemCtx);
     this.itemSystem.removeAllOfType('llave');
@@ -2093,7 +2115,7 @@ export class GameEngine {
     this.spawnedAt.copy(this.physics.position);
     this.resetCompanionPowers();
     this.physics.resetCollectibles();
-    this.callbacks.onCollectiblesChange(0, this.physics.totalCollectibles);
+    this.emitCollectiblesChange(null);
     this.itemSystem.resetPickups();
     this.itemSystem.clearInventory(this.itemCtx);
     this.itemSystem.removeAllOfType('llave');
@@ -3271,12 +3293,13 @@ export class GameEngine {
 
     if (this.physics.collectedCount !== prevCollectibles) {
       const gained = Math.max(0, this.physics.collectedCount - prevCollectibles);
-      this.callbacks.onCollectiblesChange(
-        this.physics.collectedCount,
-        this.physics.totalCollectibles
-      );
+      this.emitCollectiblesChange(this.physics.lastCollectedKind);
       if (this.gameMode === 'time_trial') {
-        this.addTimeTrialBonus(8, 'Reliquia (+8s)');
+        if (this.physics.lastCollectedKind === 'crystal') {
+          this.addTimeTrialBonus(25, 'Reliquia Cristal (+25s)');
+        } else {
+          this.addTimeTrialBonus(15, 'Reliquia Nuez (+15s)');
+        }
       }
       if (gained > 0 && !this.isSpectating) {
         const theme = themeForLevel(this.currentLevel);

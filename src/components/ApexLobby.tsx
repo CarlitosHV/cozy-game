@@ -5,7 +5,6 @@ import {
   ChevronRight,
   Clock,
   Gamepad2,
-  Gem,
   Gift,
   HelpCircle,
   Lock,
@@ -42,8 +41,9 @@ import {
   subscribeDailyMissions,
 } from '../game/dailyMissions';
 import { ShirtPatternId } from '../game/patterns';
-import { apiClient, User } from '../services/apiClient';
+import { apiClient, CurrenciesBalance, User } from '../services/apiClient';
 import { CharacterCreator } from './CharacterCreator';
+import { DualCurrencyBalance } from './CurrencyBadge';
 import { DailyMissionsModal } from './DailyMissionsModal';
 import { LobbyShop } from './LobbyShop';
 import { EmptyState } from './HelpTip';
@@ -131,8 +131,8 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
   const [activeTab, setActiveTab] = useState<LobbyTab>('play');
   const [showModePicker, setShowModePicker] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [relicsBalance, setRelicsBalance] = useState<number>(
-    () => apiClient.getCachedRelicsBalance() ?? 0
+  const [currencies, setCurrencies] = useState<CurrenciesBalance>(
+    () => apiClient.getCachedCurrencies() ?? { walnut: 0, crystal: 0 }
   );
   const [levelSearch, setLevelSearch] = useState('');
   const [levelFilter, setLevelFilter] = useState<'all' | 'todo' | 'done'>('all');
@@ -159,17 +159,17 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
     }
   }, [engine, activeTab]);
 
-  // Subscribe to reactive Relics balance and refresh from backend on lobby mount / account change
+  // Subscribe to reactive Dual-Currency balance (Walnut & Crystal) and refresh from backend on lobby mount / account change
   useEffect(() => {
     let cancelled = false;
-    const unsub = apiClient.onRelicsChange((balance) => {
+    const unsub = apiClient.onCurrenciesChange((next) => {
       if (!cancelled) {
-        setRelicsBalance(balance);
+        setCurrencies(next);
       }
     });
-    void apiClient.refreshRelicsBalance().then((bal) => {
-      if (!cancelled && typeof bal === 'number') {
-        setRelicsBalance(bal);
+    void apiClient.refreshCurrencies().then((next) => {
+      if (!cancelled && next) {
+        setCurrencies(next);
       }
     });
     return () => {
@@ -220,7 +220,7 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
     setActiveTab('play');
     if (apiClient.isAuthenticated()) {
       apiClient
-        .updateAppearance(appearance)
+        .updatePlayerCharacter({ appearance })
         .then(() => onToast('Aspecto guardado', 2000, 'success'))
         .catch(() => {});
     }
@@ -333,10 +333,9 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
             type="button"
             onClick={() => switchTab('shop')}
             title="Ir a la Tienda de Reliquias"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/75 hover:bg-white/95 border border-cozy-line text-amber-800 cursor-pointer transition-colors shadow-xs"
+            className="flex items-center px-1.5 py-1 rounded-xl bg-white/75 hover:bg-white/95 border border-cozy-line cursor-pointer transition-colors shadow-xs"
           >
-            <Gem className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-            <span className="text-xs font-black tabular-nums">{relicsBalance}</span>
+            <DualCurrencyBalance walnut={currencies.walnut} crystal={currencies.crystal} size="xs" />
           </button>
 
           <div className="relative">
@@ -708,9 +707,9 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
         <LobbyShop
           appearance={appearance}
           currentUser={currentUser}
-          relicsBalance={relicsBalance}
+          currencies={currencies}
           portrait={portrait}
-          onRelicsBalanceChange={setRelicsBalance}
+          onCurrenciesChange={setCurrencies}
           onApplyAppearance={onAppearanceChange}
           onTempPreview={handleShopTempPreview}
           onZoom={handleShopZoom}

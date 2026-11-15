@@ -223,11 +223,9 @@ export function generateParkourLevel(
     });
   };
 
-  const spawnRelic = (x: number, y: number, z: number, forceAcorn?: boolean, secondary = false, modIdx = 0) => {
-    if (collectN >= RELICS.parkour) return;
-    if (secondary && moduleCount >= 11 && modIdx % 2 === 1) return;
-    const type = (forceAcorn ?? collectN % 2 === 1) ? 'golden_acorn' : 'sun_crystal';
-    kit.addCollectible(`pk_col_${collectN++}`, type, x, y + 1.15, z);
+  const relicSpots: { x: number; y: number; z: number }[] = [];
+  const spawnRelic = (x: number, y: number, z: number, _forceAcorn?: boolean, _secondary = false, _modIdx = 0) => {
+    relicSpots.push({ x, y: y + 1.15, z });
   };
 
   const spawnExtra = (kind: ExtraKind, x: number, y: number, z: number, axis: 'x' | 'z', range: number) => {
@@ -839,10 +837,24 @@ export function generateParkourLevel(
   podium.receiveShadow = true;
   kit.addDecor(podium);
 
-  // Guarantee exact RELICS.parkour (12) collectibles placed
-  while (collectN < RELICS.parkour) {
-    const angle = (collectN / RELICS.parkour) * Math.PI * 2;
-    spawnRelic(sum.x + Math.cos(angle) * 4.2, sum.y + 0.35, sum.z + Math.sin(angle) * 4.2);
+  // Place 2 well-spaced Reliquias de Nuez along the ascent + 1 Reliquia de Cristal on even levels
+  const pickSpotAt = (frac: number, fallbackAngle: number) => {
+    if (relicSpots.length >= 2) {
+      const idx = Math.min(relicSpots.length - 1, Math.max(1, Math.floor(relicSpots.length * frac)));
+      return relicSpots[idx];
+    }
+    return {
+      x: sum.x + Math.cos(fallbackAngle) * 4.2,
+      y: sum.y + 1.5,
+      z: sum.z + Math.sin(fallbackAngle) * 4.2,
+    };
+  };
+  const walnutSpot1 = pickSpotAt(0.28, 0.8);
+  const walnutSpot2 = pickSpotAt(0.68, 2.8);
+  kit.addCollectible(`pk_col_${collectN++}`, 'golden_acorn', walnutSpot1.x, walnutSpot1.y, walnutSpot1.z);
+  kit.addCollectible(`pk_col_${collectN++}`, 'golden_acorn', walnutSpot2.x, walnutSpot2.y, walnutSpot2.z);
+  if (level % 2 === 0) {
+    kit.addCollectible(`pk_col_${collectN++}`, 'sun_crystal', sum.x + 3.2, sum.y + 1.5, sum.z - 2.6);
   }
 
   // Center far horizon backdrop cleanly around full ascent bounds

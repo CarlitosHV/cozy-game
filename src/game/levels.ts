@@ -446,16 +446,10 @@ export function buildCozyParkourWorld(
   scene.add(easterHeart);
   decorativeMeshes.push(easterHeart);
 
-  // Collectibles on start island
-  collectibles.push(
-    createCollectible('c1', 'golden_acorn', new THREE.Vector3(4.0, 1.2, 3.5)),
-    createCollectible('c2', 'golden_acorn', new THREE.Vector3(-4.0, 1.2, 3.5))
-  );
-
+  // Collectibles: Level 1 (odd) spawns 2 golden_acorn (walnut) relics across the ascent
   // Stepping stones leading forward (comfortably spaced)
   createIsland('step_1', 0, 0.4, 9.5, 3.2, 3.2, 1.0, 'stone');
   createIsland('step_2', 2.5, 0.9, 13.5, 3.0, 3.0, 1.0, 'stone');
-  collectibles.push(createCollectible('c3', 'sun_crystal', new THREE.Vector3(2.5, 2.1, 13.5)));
 
   // Bouncy Mushroom Island 1
   createIsland('mush_isle_1', 0, 1.4, 18.0, 5.0, 5.0, 1.5, 'grass');
@@ -473,7 +467,6 @@ export function buildCozyParkourWorld(
 
   // High Wooden Vault Target (Y = 4.8, perfectly caught by bouncy mushroom launch!)
   createIsland('arch_target', 0, 4.8, 24.5, 5.0, 6.0, 1.2, 'wood');
-  collectibles.push(createCollectible('c4', 'sun_crystal', new THREE.Vector3(0, 6.0, 24.5)));
 
   // Stepping stones towards Zone 2
   createIsland('step_3', -3.2, 5.4, 30.0, 3.4, 3.4, 1.0, 'stone');
@@ -530,7 +523,6 @@ export function buildCozyParkourWorld(
   cloud2.type = 'moving';
   cloud2.initialPos = new THREE.Vector3(11.0, 9.6, 63.5);
   cloud2.movement = { axis: 'y', amplitude: 0.9, speed: 0.8, offset: Math.PI / 2 };
-  collectibles.push(createCollectible('c6', 'sun_crystal', new THREE.Vector3(11.0, 11.2, 63.5)));
 
   // Resting Island with Overhead Gallows Swinging Chime, Rolling Yarn Ball & Spore Steam Vent
   createIsland('bridge_perch', 4.5, 10.4, 68.0, 6.5, 8.0, 1.5, 'wood');
@@ -575,11 +567,9 @@ export function buildCozyParkourWorld(
 
   // Intermediate Cloud Stepping & Gliding Pad
   createIsland('cloud_glide_step', -1.5, 16.0, 79.5, 4.8, 4.8, 1.2, 'cloud');
-  collectibles.push(createCollectible('c_glide', 'golden_acorn', new THREE.Vector3(-1.5, 17.3, 79.5)));
 
   // Spacious High Air Catch Platform (enlarged deck for smooth landing)
   createIsland('high_catch', -1.5, 18.0, 84.5, 5.5, 5.5, 1.4, 'wood');
-  collectibles.push(createCollectible('c7', 'golden_acorn', new THREE.Vector3(-1.5, 19.3, 84.5)));
 
   // Bouncy Double-Hop: Mushroom 2 & Stepping Stone & Mushroom 3
   createIsland('mush_isle_2', -6.0, 18.2, 89.5, 4.5, 4.5, 1.2, 'grass');
@@ -610,7 +600,6 @@ export function buildCozyParkourWorld(
     mesh: bouncyMush3.group,
     bouncyModel: bouncyMush3,
   });
-  collectibles.push(createCollectible('c8', 'sun_crystal', new THREE.Vector3(-13.0, 22.2, 97.5)));
 
   // ==========================================
   // ZONE 3: CELESTIAL SPIRE & SUMMIT
@@ -676,7 +665,6 @@ export function buildCozyParkourWorld(
   scene.add(steamVent2.group);
   steamVents.push(steamVent2);
   registerCylinderCollider('steam_vent_2_stone', -12.0, 28.5, 126.5, 0.65, 0.9);
-  collectibles.push(createCollectible('c9', 'sun_crystal', new THREE.Vector3(-12.0, 30.0, 126.5)));
 
   // Crumbling stone lilypad platform with overhead gallows pendulum
   const crumblePad = createIsland('ring_step_2', -6.5, 29.8, 128.5, 3.6, 3.6, 1.0, 'wood');

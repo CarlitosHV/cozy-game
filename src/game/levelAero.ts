@@ -733,20 +733,11 @@ export function buildAeroWorld(root: THREE.Object3D, textures: ProceduralTexture
   });
 
   // =====================================================
-  // COLLECTIBLES (aqua crystals & golden acorns)
+  // COLLECTIBLES (2 Nueces + 1 Cristal)
   // =====================================================
   collectibles.push(
-    createCollectible('a1', 'sun_crystal', new THREE.Vector3(6, 1.2, 5)),
-    createCollectible('a2', 'golden_acorn', new THREE.Vector3(-9, 1.2, -3)),
-    createCollectible('a3', 'sun_crystal', new THREE.Vector3(2.5, 3.0, 25.5)),
-    createCollectible('a4', 'sun_crystal', new THREE.Vector3(0, 6.6, 33.2)),
-    createCollectible('a5', 'golden_acorn', new THREE.Vector3(9, 8.6, 54)),
-    createCollectible('a6', 'sun_crystal', new THREE.Vector3(6, 9.6, 59.5)),
-    createCollectible('a7', 'sun_crystal', new THREE.Vector3(-2, 16.8, 76.5)),
-    createCollectible('a8', 'golden_acorn', new THREE.Vector3(-2, 18.6, 90)),
-    createCollectible('a9', 'sun_crystal', new THREE.Vector3(3.5, 20.4, 104)),
-    createCollectible('a10', 'golden_acorn', new THREE.Vector3(3, 24.0, 123)),
-    createCollectible('a11', 'sun_crystal', new THREE.Vector3(-2.5, 25.3, 125.5)),
+    createCollectible('a1', 'golden_acorn', new THREE.Vector3(9, 8.6, 54)),
+    createCollectible('a2', 'golden_acorn', new THREE.Vector3(-2, 18.6, 90)),
     createCollectible('a_master', 'sun_crystal', new THREE.Vector3(-2.5, summitY + 2.4, 144))
   );
   collectibles.forEach((c) => root.add(c.group));

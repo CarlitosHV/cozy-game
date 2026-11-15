@@ -499,19 +499,10 @@ export function buildCosmicWorld(root: THREE.Object3D, textures: ProceduralTextu
   addCosmicBackdrop(kit, style);
 
   // =====================================================
-  // COLLECTIBLES
+  // COLLECTIBLES (2 Nueces + 1 Cristal)
   // =====================================================
-  kit.addCollectible('s1', 'sun_crystal', 6, 1.2, 4);
-  kit.addCollectible('s2', 'golden_acorn', -7, 1.2, -5);
-  kit.addCollectible('s3', 'sun_crystal', 3, 2.4, 20.5);
-  kit.addCollectible('s4', 'sun_crystal', -1, 3.0, 26);
-  kit.addCollectible('s5', 'sun_crystal', -4, 6.6, 39.2);
-  kit.addCollectible('s6', 'golden_acorn', 2, 7.6, 54);
-  kit.addCollectible('s7', 'sun_crystal', 12.5, 9.4, 66.5);
-  kit.addCollectible('s8', 'sun_crystal', 9, 16.4, 83.5);
-  kit.addCollectible('s9', 'golden_acorn', 9, 18.2, 97);
-  kit.addCollectible('s10', 'sun_crystal', -4, 21.4, 114.5);
-  kit.addCollectible('s11', 'sun_crystal', -1, 22.7, 119.5);
+  kit.addCollectible('s1', 'golden_acorn', -4, 6.6, 39.2);
+  kit.addCollectible('s2', 'golden_acorn', 9, 16.4, 83.5);
   kit.addCollectible('s_master', 'sun_crystal', 7, summitY + 2.4, 137.5);
 
   // =====================================================

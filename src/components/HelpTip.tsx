@@ -79,7 +79,7 @@ export const TIPS = {
   persecucion:
     'Un acechador te sigue. Si te alcanza, te empuja: mantente en movimiento.',
   reliquias:
-    'Objetos brillantes por el camino. Recógelos para puntos y, en contrarreloj, más tiempo.',
+    'Reliquias de Nuez (~2 por nivel) y de Cristal (1 cada 2 niveles). Úsalas en la Tienda y gana +15s o +25s en contrarreloj.',
   orbes:
     'Esferas mágicas del mundo abierto. Con todas se abre la fortaleza del centro.',
   mochila:

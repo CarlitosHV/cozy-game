@@ -67,8 +67,8 @@ function mulberry32(seed: number) {
   };
 }
 
-/** Relics on the open zone (+1 on the summit = RELICS.zone, the total the menus show) */
-const RELICS_IN_ZONE = RELICS.zone - 1;
+/** Relics on the open zone (+1 on the summit = levelTotalCollectibles) */
+const ZONE_WALNUT_DEFAULT = 2;
 const STONE: Record<OutdoorThemeId, number> = {
   cozy: 0xa08a7a,
   cosmic: 0x6d6a8f,
@@ -197,9 +197,9 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     g.add(cap);
   };
 
-  function collectible(x: number, y: number, z: number, force = false) {
-    if (collectN >= RELICS_IN_ZONE || (!force && rng() > 0.5)) return;
-    kit.addCollectible(`g${collectN++}`, rng() < 0.7 ? 'sun_crystal' : 'golden_acorn', x, y + 1.2, z);
+  const zoneRelicSpots: { x: number; y: number; z: number }[] = [];
+  function collectible(x: number, y: number, z: number, _force = false) {
+    zoneRelicSpots.push({ x, y: y + 1.2, z });
   }
   function hint(pos: THREE.Vector3, radius: number, text: string) {
     puzzles.hints.push({ pos: pos.clone(), radius, text, shown: false });
@@ -1410,7 +1410,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   routes.push({ name: 'fortaleza', ids: climbIds });
   theme.prop(-3, summitTop, 3, rng());
   theme.prop(3, summitTop, 3, rng());
-  kit.addCollectible('g_master', 'sun_crystal', 0, summitTop + 1.4, 2);
+  kit.addCollectible('g_master', level % 2 === 0 ? 'sun_crystal' : 'golden_acorn', 0, summitTop + 1.4, 2);
   if (diff > 0.15) theme.walker(enemies, `w${enemyN++}`, new THREE.Vector3(0, summitTop, -2.5), 'x', 2.2);
 
   // Magic shield over the whole fortress until every orb is found
@@ -1499,19 +1499,41 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
     const p = t && freeSpot(t, 0.8);
     if (p) items.push({ type, pos: p.add(new THREE.Vector3(0, 0.95, 0)) });
   });
-  // Relics on the open zone (always reachable): spread out (one touch never takes two),
-  // and always the same amount so the counter matches the menus: 24 here + the summit one = 25
+  // Relics on the open zone: 2 Nueces on even levels (+1 Cristal on summit), 1 Nuez on odd levels (+1 Nuez on summit)
+  const targetOpenWalnuts = level % 2 === 0 ? ZONE_WALNUT_DEFAULT : 1;
   for (const t of shuffle(nonFort())) {
-    if (collectN >= RELICS_IN_ZONE) break;
+    if (zoneRelicSpots.length >= 6) break;
     const p = freeSpot(t, 1.5);
-    if (p) collectible(p.x, p.y, p.z, rng() < 0.6);
+    if (p) zoneRelicSpots.push({ x: p.x, y: p.y + 1.2, z: p.z });
   }
-  for (let pass = 0; pass < 4 && collectN < RELICS_IN_ZONE; pass++) {
-    for (const t of shuffle(nonFort())) {
-      if (collectN >= RELICS_IN_ZONE) break;
-      const p = freeSpot(t, pass < 2 ? 1.5 : 0.8);
-      if (p) collectible(p.x, p.y, p.z, true);
+  const chosenSpots: { x: number; y: number; z: number }[] = [];
+  if (zoneRelicSpots.length > 0) {
+    chosenSpots.push(zoneRelicSpots[Math.floor(rng() * zoneRelicSpots.length)]);
+    if (targetOpenWalnuts > 1) {
+      let bestSpot = zoneRelicSpots[0];
+      let bestDist = -1;
+      for (const cand of zoneRelicSpots) {
+        const d = Math.hypot(cand.x - chosenSpots[0].x, cand.z - chosenSpots[0].z);
+        if (d > bestDist) {
+          bestDist = d;
+          bestSpot = cand;
+        }
+      }
+      if (bestDist > 2.5 || zoneRelicSpots.length > 1) {
+        chosenSpots.push(bestSpot);
+      }
     }
+  }
+  for (const spot of chosenSpots) {
+    kit.addCollectible(`g${collectN++}`, 'golden_acorn', spot.x, spot.y, spot.z);
+  }
+  while (collectN < targetOpenWalnuts) {
+    for (const t of shuffle(nonFort())) {
+      if (collectN >= targetOpenWalnuts) break;
+      const p = freeSpot(t, 0.8);
+      if (p) kit.addCollectible(`g${collectN++}`, 'golden_acorn', p.x, p.y + 1.2, p.z);
+    }
+    break;
   }
   // Decor
   for (const t of nonFort()) {

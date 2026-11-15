@@ -18,7 +18,12 @@ export default function App() {
   const [checkpointIndex, setCheckpointIndex] = useState<number>(1);
   const [checkpointTotal, setCheckpointTotal] = useState<number>(3);
   const [collectedCount, setCollectedCount] = useState<number>(0);
-  const [totalCollectibles, setTotalCollectibles] = useState<number>(10);
+  const [totalCollectibles, setTotalCollectibles] = useState<number>(2);
+  const [walnutCount, setWalnutCount] = useState<number>(0);
+  const [crystalCount, setCrystalCount] = useState<number>(0);
+  const [totalWalnuts, setTotalWalnuts] = useState<number>(2);
+  const [totalCrystals, setTotalCrystals] = useState<number>(0);
+  const [lastRelicKind, setLastRelicKind] = useState<'walnut' | 'crystal' | null>(null);
   const [currentWeather, setCurrentWeather] = useState<WeatherType>('golden_hour');
   const [lobbyTheme, setLobbyTheme] = useState<ThemeId>(() => {
     const devPick = getDevLevelPick();
@@ -171,9 +176,16 @@ export default function App() {
         setCheckpointIndex(index);
         if (typeof total === 'number' && total > 0) setCheckpointTotal(total);
       },
-      onCollectiblesChange: (collected, total) => {
+      onCollectiblesChange: (collected, total, detail) => {
         setCollectedCount(collected);
         setTotalCollectibles(total);
+        if (detail) {
+          setWalnutCount(detail.walnut);
+          setCrystalCount(detail.crystal);
+          setTotalWalnuts(detail.totalWalnut);
+          setTotalCrystals(detail.totalCrystal);
+          setLastRelicKind(detail.lastKind ?? null);
+        }
       },
       onWeatherChange: (weather, isTransitioning) => {
         setCurrentWeather(weather);
@@ -273,6 +285,11 @@ export default function App() {
         checkpointTotal={checkpointTotal}
         collectedCount={collectedCount}
         totalCollectibles={totalCollectibles}
+        walnutCount={walnutCount}
+        crystalCount={crystalCount}
+        totalWalnuts={totalWalnuts}
+        totalCrystals={totalCrystals}
+        lastRelicKind={lastRelicKind}
         currentWeather={currentWeather}
         isWeatherTransitioning={isWeatherTransitioning}
         weatherNotice={weatherNotice}

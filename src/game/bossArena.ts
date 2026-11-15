@@ -371,11 +371,15 @@ export function generateBossArena(level: number, root: THREE.Object3D, textures:
   ];
   for (const [x, z, k] of foodSpots) setup.food.push({ pos: new THREE.Vector3(x, Y + 1.0, z), kind: k });
 
-  // ---- A few crystals to collect ----
+  // ---- Relics: 2 Nueces + 1 Cristal on even levels ----
   for (let k = 0; k < RELICS.boss; k++) {
     const a = (k / RELICS.boss) * Math.PI * 2 + rng() * 0.4;
-    const r = 17 + rng() * 6;
-    kit.addCollectible(`bc${k}`, rng() < 0.7 ? 'sun_crystal' : 'golden_acorn', Math.cos(a) * r, Y + 1.2, Math.sin(a) * r);
+    const r = 17 + rng() * 5;
+    kit.addCollectible(`bc${k}`, 'golden_acorn', Math.cos(a) * r, Y + 1.2, Math.sin(a) * r);
+  }
+  if (level % 2 === 0) {
+    const a = Math.PI * 0.5 + rng() * 0.4;
+    kit.addCollectible('bc_crystal', 'sun_crystal', Math.cos(a) * 19, Y + 1.2, Math.sin(a) * 19);
   }
 
   // ---- Decor along the border (never on the play paths) ----

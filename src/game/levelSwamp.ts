@@ -465,20 +465,10 @@ export function buildSwampWorld(root: THREE.Object3D, textures: ProceduralTextur
   addSwampBackdrop(kit, style);
 
   // =====================================================
-  // COLLECTIBLES
+  // COLLECTIBLES (2 Nueces)
   // =====================================================
-  kit.addCollectible('w1', 'sun_crystal', 6, 1.2, 4);
-  kit.addCollectible('w2', 'golden_acorn', -8, 1.2, -4);
-  kit.addCollectible('w3', 'sun_crystal', 1, 1.9, 18.5);
-  kit.addCollectible('w4', 'golden_acorn', 1, 2.1, 25);
-  kit.addCollectible('w5', 'sun_crystal', -6, 6.6, 45.2);
-  kit.addCollectible('w6', 'sun_crystal', 2, 7.4, 60);
-  kit.addCollectible('w7', 'golden_acorn', 7.5, 8.6, 70);
-  kit.addCollectible('w8', 'sun_crystal', 7.5, 15.0, 81.5);
-  kit.addCollectible('w9', 'sun_crystal', 5, 19.0, 98.3);
-  kit.addCollectible('w10', 'golden_acorn', -3.8, 21.4, 102.5);
-  kit.addCollectible('w11', 'sun_crystal', -7, 22.6, 97.5);
-  kit.addCollectible('w_master', 'sun_crystal', 3.5, summitY + 2.4, 100.5);
+  kit.addCollectible('w1', 'golden_acorn', -6, 6.6, 45.2);
+  kit.addCollectible('w2', 'golden_acorn', 3.5, summitY + 2.4, 100.5);
 
   // =====================================================
   // ENEMIES (mud creatures & wraiths)

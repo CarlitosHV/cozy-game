@@ -9,7 +9,7 @@
  *  - System: /system/health
  */
 
-import { CharacterAppearance } from '../game/character';
+import { buildBackendAppearancePayload, CharacterAppearance } from '../game/character';
 import { ItemType } from '../game/items';
 
 export interface User {
@@ -31,6 +31,11 @@ export interface AuthTokens {
   expiresInSeconds: number;
 }
 
+export interface CurrenciesBalance {
+  walnut: number;
+  crystal: number;
+}
+
 export interface PlayerProfileData {
   user: User;
   appearance: CharacterAppearance | Record<string, unknown>;
@@ -41,11 +46,18 @@ export interface PlayerProfileData {
     maxUnlockedLevel: number;
     completedLevels: number[];
     totalCollectiblesFound: number;
+    totalWalnutRelicsFound?: number;
+    totalCrystalRelicsFound?: number;
     unlockedCompanions: string[];
     relicsBalance?: number;
   };
+  currencies?: CurrenciesBalance;
+  walnutBalance?: number;
+  crystalBalance?: number;
   relicsBalance?: number;
   unlockedItems?: string[];
+  equippedItems?: string[];
+  equippedByCategory?: Partial<Record<ShopCategory, string>>;
   stats?: {
     totalPlayTimeSeconds: number;
     totalJumps: number;
@@ -61,9 +73,20 @@ export type ShopCategory =
   | 'glasses'
   | 'backpack'
   | 'hair'
+  | 'accessory'
+  | 'shoes'
+  | 'aura'
   | 'companion';
 
-export type ShopRarity = 'common' | 'rare' | 'epic' | 'legendary';
+export type ShopTier = 'common' | 'epic' | 'golden' | 'mythic';
+export type ShopRarity = ShopTier | 'rare' | 'legendary';
+
+export interface ShopTierMeta {
+  id: ShopTier;
+  label: string;
+  color: string;
+  order: number;
+}
 
 export interface ShopCatalogCategory {
   id: ShopCategory;
@@ -75,18 +98,28 @@ export interface ShopItem {
   category: ShopCategory;
   name: string;
   description: string;
-  priceRelics: number;
+  tier: ShopTier;
   rarity: ShopRarity;
+  priceWalnut: number;
+  priceCrystal: number;
+  price: CurrenciesBalance;
+  /** Legacy alias equal to priceWalnut */
+  priceRelics: number;
   previewColor: string;
   appearancePatch: Record<string, unknown>;
   owned: boolean;
   equipped: boolean;
   canAfford: boolean;
+  missingCurrencies: CurrenciesBalance;
 }
 
 export interface ShopCatalogResponse {
-  currency: string;
+  currency?: string;
+  currencies: CurrenciesBalance;
+  walnutBalance: number;
+  crystalBalance: number;
   relicsBalance: number;
+  tiers?: ShopTierMeta[];
   categories: ShopCatalogCategory[];
   totalItems: number;
   items: ShopItem[];
@@ -94,15 +127,21 @@ export interface ShopCatalogResponse {
 
 export interface ShopPurchaseHistoryEntry {
   itemId: string;
-  priceRelics: number;
+  priceRelics?: number;
+  priceWalnut?: number;
+  priceCrystal?: number;
   purchasedAt: string;
 }
 
 export interface ShopInventoryResponse {
+  currencies?: CurrenciesBalance;
+  walnutBalance?: number;
+  crystalBalance?: number;
   relicsBalance: number;
   unlockedItems: string[];
   equippedItems?: string[];
   equipped?: string[];
+  equippedByCategory?: Record<string, string>;
   appearance?: Record<string, unknown>;
   purchaseHistory?: ShopPurchaseHistoryEntry[];
 }
@@ -111,12 +150,21 @@ export interface ShopPurchaseResponse {
   purchasedItem: {
     id: string;
     category: ShopCategory;
-    priceRelics: number;
+    tier?: ShopTier;
+    priceWalnut?: number;
+    priceCrystal?: number;
+    priceRelics?: number;
   };
+  currencies?: CurrenciesBalance;
+  walnutBalance?: number;
+  crystalBalance?: number;
   relicsBalance: number;
-  relicsSpent: number;
+  spent?: CurrenciesBalance;
+  relicsSpent?: number;
   unlockedItems: string[];
   equipped: boolean;
+  appliedPatch?: Record<string, unknown>;
+  equippedByCategory?: Record<string, string>;
   appearance: Record<string, unknown>;
   message?: string;
 }
@@ -124,8 +172,108 @@ export interface ShopPurchaseResponse {
 export interface ShopEquipResponse {
   equippedItems?: string[];
   equipped?: string[];
+  equippedByCategory?: Record<string, string>;
+  appliedPatch?: Record<string, unknown>;
   appearance: Record<string, unknown>;
   message?: string;
+}
+
+export interface PlayerCharacterResponse {
+  appearance: Record<string, unknown>;
+  equippedByCategory?: Record<string, string>;
+  equippedItems?: string[];
+  unlockedItems?: string[];
+  currencies?: CurrenciesBalance;
+  walnutBalance?: number;
+  crystalBalance?: number;
+  message?: string;
+}
+
+export function normalizeShopTier(raw: unknown): ShopTier {
+  const s = typeof raw === 'string' ? raw.toLowerCase().trim() : '';
+  if (s === 'mythic' || s === 'legendary' || s === 'mitico' || s === 'mítico') return 'mythic';
+  if (s === 'golden' || s === 'gold' || s === 'dorado') return 'golden';
+  if (s === 'epic' || s === 'rare' || s === 'epico' || s === 'épico') return 'epic';
+  return 'common';
+}
+
+export const SHOP_TIER_META: Record<ShopTier, ShopTierMeta> = {
+  common: { id: 'common', label: 'Común', color: '#94a3b8', order: 1 },
+  epic: { id: 'epic', label: 'Épico', color: '#a855f7', order: 2 },
+  golden: { id: 'golden', label: 'Dorado', color: '#facc15', order: 3 },
+  mythic: { id: 'mythic', label: 'Mítico', color: '#f43f5e', order: 4 },
+};
+
+function extractCurrencies(raw: any): CurrenciesBalance | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const c = raw.currencies && typeof raw.currencies === 'object' ? raw.currencies : null;
+  const w =
+    typeof c?.walnut === 'number'
+      ? c.walnut
+      : typeof raw.walnutBalance === 'number'
+        ? raw.walnutBalance
+        : typeof raw.relicsBalance === 'number'
+          ? raw.relicsBalance
+          : typeof raw.progress?.relicsBalance === 'number'
+            ? raw.progress.relicsBalance
+            : null;
+  const cr =
+    typeof c?.crystal === 'number'
+      ? c.crystal
+      : typeof raw.crystalBalance === 'number'
+        ? raw.crystalBalance
+        : null;
+  if (w === null && cr === null) return null;
+  return {
+    walnut: Math.max(0, Math.floor(w ?? 0)),
+    crystal: Math.max(0, Math.floor(cr ?? 0)),
+  };
+}
+
+function normalizeShopItem(raw: any): ShopItem {
+  const tier = normalizeShopTier(raw?.tier ?? raw?.rarity);
+  const priceWalnut = Math.max(
+    0,
+    Math.floor(
+      typeof raw?.priceWalnut === 'number'
+        ? raw.priceWalnut
+        : typeof raw?.price?.walnut === 'number'
+          ? raw.price.walnut
+          : typeof raw?.priceRelics === 'number'
+            ? raw.priceRelics
+            : 0
+    )
+  );
+  const priceCrystal = Math.max(
+    0,
+    Math.floor(
+      typeof raw?.priceCrystal === 'number'
+        ? raw.priceCrystal
+        : typeof raw?.price?.crystal === 'number'
+          ? raw.price.crystal
+          : 0
+    )
+  );
+  const missingWalnut = Math.max(0, Math.floor(raw?.missingCurrencies?.walnut ?? 0));
+  const missingCrystal = Math.max(0, Math.floor(raw?.missingCurrencies?.crystal ?? 0));
+  return {
+    id: String(raw?.id ?? ''),
+    category: (raw?.category ?? 'accessory') as ShopCategory,
+    name: String(raw?.name ?? ''),
+    description: String(raw?.description ?? ''),
+    tier,
+    rarity: (raw?.rarity ? normalizeShopTier(raw.rarity) : tier) as ShopRarity,
+    priceWalnut,
+    priceCrystal,
+    price: { walnut: priceWalnut, crystal: priceCrystal },
+    priceRelics: typeof raw?.priceRelics === 'number' ? raw.priceRelics : priceWalnut,
+    previewColor: String(raw?.previewColor ?? '#94a3b8'),
+    appearancePatch: (raw?.appearancePatch && typeof raw.appearancePatch === 'object' ? raw.appearancePatch : {}) as Record<string, unknown>,
+    owned: Boolean(raw?.owned),
+    equipped: Boolean(raw?.equipped),
+    canAfford: typeof raw?.canAfford === 'boolean' ? raw.canAfford : missingWalnut === 0 && missingCrystal === 0,
+    missingCurrencies: { walnut: missingWalnut, crystal: missingCrystal },
+  };
 }
 
 export interface LeaderboardEntry {
@@ -243,8 +391,15 @@ export interface LevelCompletionResult {
     maxUnlockedLevel: number;
     completedLevels: number[];
     totalCollectiblesFound: number;
+    totalWalnutRelicsFound?: number;
+    totalCrystalRelicsFound?: number;
     relicsBalance?: number;
   };
+  currencies?: CurrenciesBalance;
+  walnutBalance?: number;
+  crystalBalance?: number;
+  walnutRelicsEarned?: number;
+  crystalRelicsEarned?: number;
   relicsBalance?: number;
   relicsEarned?: number;
   antiCheatCheck?: {
@@ -266,7 +421,8 @@ class ApiClient {
   private refreshTokenVal: string | null = null;
   private currentUser: User | null = null;
   private listeners: Set<(user: User | null) => void> = new Set();
-  private cachedRelicsBalance: number | null = null;
+  private cachedCurrencies: CurrenciesBalance | null = null;
+  private currenciesListeners: Set<(currencies: CurrenciesBalance) => void> = new Set();
   private relicsListeners: Set<(balance: number) => void> = new Set();
   private isRefreshing: boolean = false;
   private refreshPromise: Promise<string | null> | null = null;
@@ -341,23 +497,80 @@ class ApiClient {
     this.notifyAuthChange();
   }
 
+  public getCachedCurrencies(): CurrenciesBalance | null {
+    return this.cachedCurrencies ? { ...this.cachedCurrencies } : null;
+  }
+
+  public setCachedCurrencies(currencies: Partial<CurrenciesBalance> | null | undefined) {
+    if (!currencies || typeof currencies !== 'object') return;
+    const prev = this.cachedCurrencies ?? { walnut: 0, crystal: 0 };
+    const next: CurrenciesBalance = {
+      walnut:
+        typeof currencies.walnut === 'number' && Number.isFinite(currencies.walnut)
+          ? Math.max(0, Math.floor(currencies.walnut))
+          : prev.walnut,
+      crystal:
+        typeof currencies.crystal === 'number' && Number.isFinite(currencies.crystal)
+          ? Math.max(0, Math.floor(currencies.crystal))
+          : prev.crystal,
+    };
+    this.cachedCurrencies = next;
+    for (const cb of this.currenciesListeners) {
+      cb({ ...next });
+    }
+    for (const cb of this.relicsListeners) {
+      cb(next.walnut);
+    }
+  }
+
+  public onCurrenciesChange(cb: (currencies: CurrenciesBalance) => void): () => void {
+    this.currenciesListeners.add(cb);
+    if (this.cachedCurrencies !== null) {
+      cb({ ...this.cachedCurrencies });
+    }
+    return () => {
+      this.currenciesListeners.delete(cb);
+    };
+  }
+
+  public async refreshCurrencies(): Promise<CurrenciesBalance | null> {
+    try {
+      if (this.accessToken && !this.accessToken.startsWith('offline_token_')) {
+        try {
+          const charState = await this.getPlayerCharacter();
+          const c = extractCurrencies(charState);
+          if (c) return c;
+        } catch {
+          // fallback to inventory/catalog
+        }
+        try {
+          const inv = await this.getShopInventory();
+          const c = extractCurrencies(inv);
+          if (c) return c;
+        } catch {
+          // fallback to catalog
+        }
+      }
+      const cat = await this.getShopCatalog();
+      return cat.currencies ?? this.cachedCurrencies;
+    } catch {
+      return this.cachedCurrencies;
+    }
+  }
+
   public getCachedRelicsBalance(): number | null {
-    return this.cachedRelicsBalance;
+    return this.cachedCurrencies ? this.cachedCurrencies.walnut : null;
   }
 
   public setCachedRelicsBalance(balance: number | null | undefined) {
     if (typeof balance !== 'number' || !Number.isFinite(balance)) return;
-    const normalized = Math.max(0, Math.floor(balance));
-    this.cachedRelicsBalance = normalized;
-    for (const cb of this.relicsListeners) {
-      cb(normalized);
-    }
+    this.setCachedCurrencies({ walnut: balance });
   }
 
   public onRelicsChange(cb: (balance: number) => void): () => void {
     this.relicsListeners.add(cb);
-    if (this.cachedRelicsBalance !== null) {
-      cb(this.cachedRelicsBalance);
+    if (this.cachedCurrencies !== null) {
+      cb(this.cachedCurrencies.walnut);
     }
     return () => {
       this.relicsListeners.delete(cb);
@@ -365,29 +578,18 @@ class ApiClient {
   }
 
   public async refreshRelicsBalance(): Promise<number | null> {
-    try {
-      if (this.accessToken && !this.accessToken.startsWith('offline_token_')) {
-        try {
-          const inv = await this.getShopInventory();
-          if (typeof inv.relicsBalance === 'number') {
-            return inv.relicsBalance;
-          }
-        } catch {
-          // fallback to catalog
-        }
-      }
-      const cat = await this.getShopCatalog();
-      return typeof cat.relicsBalance === 'number' ? cat.relicsBalance : this.cachedRelicsBalance;
-    } catch {
-      return this.cachedRelicsBalance;
-    }
+    const c = await this.refreshCurrencies();
+    return c ? c.walnut : null;
   }
 
   private clearSession() {
     this.currentUser = null;
     this.accessToken = null;
     this.refreshTokenVal = null;
-    this.cachedRelicsBalance = null;
+    this.cachedCurrencies = null;
+    for (const cb of this.currenciesListeners) {
+      cb({ walnut: 0, crystal: 0 });
+    }
     for (const cb of this.relicsListeners) {
       cb(0);
     }
@@ -619,70 +821,118 @@ class ApiClient {
       localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(res.data.user));
       this.notifyAuthChange();
     }
-    const bal = res.data?.relicsBalance ?? res.data?.progress?.relicsBalance;
-    if (typeof bal === 'number') {
-      this.setCachedRelicsBalance(bal);
+    const curr = extractCurrencies(res.data);
+    if (curr) {
+      this.setCachedCurrencies(curr);
     }
     return res.data;
   }
 
   /**
-   * PUT /api/v1/player/appearance
+   * GET /api/v1/player/character
+   * Full customization editor state (appearance, equippedByCategory, unlockedItems, currencies)
+   */
+  public async getPlayerCharacter(): Promise<PlayerCharacterResponse> {
+    const res = await this.request<{
+      status: string;
+      data: PlayerCharacterResponse;
+    }>('/player/character', { method: 'GET' }, true);
+    const data = res.data ?? (res as unknown as PlayerCharacterResponse);
+    const curr = extractCurrencies(data);
+    if (curr) this.setCachedCurrencies(curr);
+    return data;
+  }
+
+  /**
+   * PATCH /api/v1/player/character (with PUT fallback)
+   * Updates appearance, equipItemIds, unequipCategories, or resetToDefault atomically without overwriting prior customization.
+   */
+  public async updatePlayerCharacter(params: {
+    appearance?: Partial<CharacterAppearance>;
+    equipItemIds?: string[];
+    unequipCategories?: string[];
+    resetToDefault?: boolean;
+  }): Promise<PlayerCharacterResponse> {
+    const bodyPayload: Record<string, unknown> = {};
+    if (params.appearance) {
+      bodyPayload.appearance = buildBackendAppearancePayload(params.appearance);
+    }
+    if (Array.isArray(params.equipItemIds) && params.equipItemIds.length > 0) {
+      bodyPayload.equipItemIds = params.equipItemIds;
+    }
+    if (Array.isArray(params.unequipCategories) && params.unequipCategories.length > 0) {
+      bodyPayload.unequipCategories = params.unequipCategories;
+    }
+    if (params.resetToDefault) {
+      bodyPayload.resetToDefault = true;
+    }
+
+    let res: { status: string; data: PlayerCharacterResponse; message?: string };
+    try {
+      res = await this.request<{ status: string; data: PlayerCharacterResponse; message?: string }>(
+        '/player/character',
+        { method: 'PATCH', body: JSON.stringify(bodyPayload) },
+        true
+      );
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number };
+      if (apiErr?.status === 404 || apiErr?.status === 405) {
+        // Fallback to PUT /player/character or /player/appearance if PATCH/character isn't mounted yet
+        if (apiErr?.status === 405) {
+          res = await this.request<{ status: string; data: PlayerCharacterResponse; message?: string }>(
+            '/player/character',
+            { method: 'PUT', body: JSON.stringify(bodyPayload) },
+            true
+          );
+        } else {
+          if (params.appearance) await this.updateAppearance(params.appearance);
+          if (params.equipItemIds?.length) await this.equipShopItems(params.equipItemIds, params.appearance);
+          return {
+            appearance: bodyPayload.appearance as Record<string, unknown>,
+            equippedItems: params.equipItemIds,
+          };
+        }
+      } else {
+        throw err;
+      }
+    }
+
+    const data = res.data ?? (res as unknown as PlayerCharacterResponse);
+    const curr = extractCurrencies(data);
+    if (curr) this.setCachedCurrencies(curr);
+    return { ...data, message: res.message || data.message };
+  }
+
+  /**
+   * PATCH /api/v1/player/appearance (with PUT fallback)
+   * Non-destructive: omitted fields are preserved on backend.
    */
   public async updateAppearance(appearance: Partial<CharacterAppearance>): Promise<void> {
-    const mappedHat =
-      appearance.hatStyle === 'ninguno'
-        ? 'none'
-        : appearance.hatVariant ||
-          (appearance.hatStyle === 'gorro'
-            ? 'beanie_cozy'
-            : appearance.hatStyle === 'gorra'
-              ? 'cap'
-              : appearance.hatStyle === 'sombrero'
-                ? 'sunhat'
-                : appearance.hatStyle === 'flores'
-                  ? 'flower_crown'
-                  : appearance.hatStyle === 'orejas'
-                    ? 'ears'
-                    : 'none');
-
-    const mappedGlasses =
-      appearance.accessory === 'lentes'
-        ? appearance.glassesVariant || 'reading'
-        : appearance.accessory === 'pecas'
-          ? 'freckles'
-          : 'none';
-
-    const mappedBackpack = appearance.backpack
-      ? appearance.backpackVariant || 'explorer_pack'
-      : 'none';
-
-    const mappedShirtStyle =
-      appearance.outfitVariant ||
-      (appearance.outfitStyle === 'sudadera' ? 'hoodie' : appearance.outfitStyle);
-
-    const payload = {
-      ...appearance,
-      // Map frontend names to backend specification names while preserving rich variant tokens
-      shirtColor: appearance.sweaterColor,
-      pantsColor: appearance.detailColor,
-      shoesColor: appearance.bootColor,
-      hatColor: appearance.hatColor,
-      shirtStyle: mappedShirtStyle,
-      outfit: appearance.outfitVariant || appearance.outfitStyle,
-      hat: mappedHat,
-      glasses: mappedGlasses,
-      backpack: mappedBackpack,
-      pattern: appearance.shirtPattern,
-    };
-    await this.request(
-      '/player/appearance',
-      {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      },
-      true
-    );
+    const payload = buildBackendAppearancePayload(appearance);
+    try {
+      await this.request(
+        '/player/appearance',
+        {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        },
+        true
+      );
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number };
+      if (apiErr?.status === 404 || apiErr?.status === 405) {
+        await this.request(
+          '/player/appearance',
+          {
+            method: 'PUT',
+            body: JSON.stringify(payload),
+          },
+          true
+        );
+      } else {
+        throw err;
+      }
+    }
   }
 
   /**
@@ -788,6 +1038,8 @@ class ApiClient {
   public async completeLevel(params: {
     levelId: number;
     timeSeconds: number;
+    walnutRelicsFound?: number;
+    crystalRelicsFound?: number;
     relicsFound?: number;
     score?: number;
     stars?: number;
@@ -814,6 +1066,10 @@ class ApiClient {
     const minSecs = minThresholds[params.levelId] ?? 4.6;
     const timeSeconds = Math.max(minSecs, Number(params.timeSeconds.toFixed(2)));
 
+    const walnutFound = Math.max(0, Math.floor(params.walnutRelicsFound ?? params.relicsFound ?? 0));
+    const crystalFound = Math.max(0, Math.floor(params.crystalRelicsFound ?? 0));
+    const totalRelicsFound = Math.max(0, Math.floor(params.relicsFound ?? walnutFound + crystalFound));
+
     // Ensure user session exists so records are always attached to a player
     await this.ensureAuthenticated().catch(() => {});
     const currentUsername = this.currentUser?.displayName || this.currentUser?.username || 'Viajero';
@@ -822,8 +1078,8 @@ class ApiClient {
       userId: this.currentUser?._id || 'local_user',
       username: currentUsername,
       timeSeconds,
-      collectiblesFound: params.relicsFound ?? 0,
-      relicsFound: params.relicsFound ?? 0,
+      collectiblesFound: totalRelicsFound,
+      relicsFound: totalRelicsFound,
       score: params.score ?? 0,
       stars: params.stars ?? 0,
       deaths: params.deaths ?? 0,
@@ -831,7 +1087,13 @@ class ApiClient {
     };
     this.saveLocalRecord(params.levelId, mode, localEntry);
 
-    if (this.accessToken?.startsWith('offline_token_')) {
+    const buildOfflineResult = (): LevelCompletionResult => {
+      const prev = this.cachedCurrencies ?? { walnut: 0, crystal: 0 };
+      const updated = {
+        walnut: prev.walnut + walnutFound,
+        crystal: prev.crystal + crystalFound,
+      };
+      this.setCachedCurrencies(updated);
       return {
         record: {
           _id: `rec_${Date.now()}`,
@@ -840,23 +1102,38 @@ class ApiClient {
           levelId: params.levelId,
           mode,
           timeSeconds,
-          collectiblesFound: localEntry.collectiblesFound,
+          collectiblesFound: totalRelicsFound,
           createdAt: localEntry.createdAt || new Date().toISOString(),
         },
         rank: 1,
         isNewBest: true,
+        walnutRelicsEarned: walnutFound,
+        crystalRelicsEarned: crystalFound,
+        relicsEarned: walnutFound + crystalFound,
+        currencies: updated,
+        walnutBalance: updated.walnut,
+        crystalBalance: updated.crystal,
+        relicsBalance: updated.walnut,
         progress: {
           maxUnlockedLevel: Math.max(params.levelId + 1, 2),
           completedLevels: [params.levelId],
-          totalCollectiblesFound: localEntry.collectiblesFound,
+          totalCollectiblesFound: totalRelicsFound,
+          totalWalnutRelicsFound: walnutFound,
+          totalCrystalRelicsFound: crystalFound,
         },
       };
+    };
+
+    if (this.accessToken?.startsWith('offline_token_')) {
+      return buildOfflineResult();
     }
 
     const baseBody = {
       levelId: params.levelId,
       timeSeconds,
-      relicsFound: params.relicsFound ?? 0,
+      walnutRelicsFound: walnutFound,
+      crystalRelicsFound: crystalFound,
+      relicsFound: totalRelicsFound,
       mode,
     };
     const fullBody = {
@@ -895,16 +1172,17 @@ class ApiClient {
       }
 
       const data = res?.data ?? res ?? {};
-      const nextBalance =
-        typeof data?.relicsBalance === 'number'
-          ? data.relicsBalance
-          : typeof data?.progress?.relicsBalance === 'number'
-            ? data.progress.relicsBalance
-            : typeof data?.relicsEarned === 'number' && this.cachedRelicsBalance !== null
-              ? this.cachedRelicsBalance + data.relicsEarned
-              : undefined;
-      if (typeof nextBalance === 'number') {
-        this.setCachedRelicsBalance(nextBalance);
+      const nextCurr = extractCurrencies(data);
+      if (nextCurr) {
+        this.setCachedCurrencies(nextCurr);
+      } else {
+        const prev = this.cachedCurrencies ?? { walnut: 0, crystal: 0 };
+        const wEarned = typeof data?.walnutRelicsEarned === 'number' ? data.walnutRelicsEarned : walnutFound;
+        const cEarned = typeof data?.crystalRelicsEarned === 'number' ? data.crystalRelicsEarned : crystalFound;
+        this.setCachedCurrencies({
+          walnut: prev.walnut + wEarned,
+          crystal: prev.crystal + cEarned,
+        });
       }
 
       if (data?.record) {
@@ -913,8 +1191,8 @@ class ApiClient {
           userId: data.record.userId || localEntry.userId,
           username: data.record.username || localEntry.username,
           timeSeconds: data.record.timeSeconds || timeSeconds,
-          collectiblesFound: data.record.collectiblesFound ?? (params.relicsFound ?? 0),
-          relicsFound: data.record.collectiblesFound ?? (params.relicsFound ?? 0),
+          collectiblesFound: data.record.collectiblesFound ?? totalRelicsFound,
+          relicsFound: data.record.collectiblesFound ?? totalRelicsFound,
           score: data.record.score ?? localEntry.score,
           stars: data.record.stars ?? localEntry.stars,
           deaths: data.record.deaths ?? localEntry.deaths,
@@ -932,25 +1210,7 @@ class ApiClient {
         throw err;
       }
       console.warn('Backend complete-level sync deferred while offline, using local storage:', err);
-      return {
-        record: {
-          _id: `rec_${Date.now()}`,
-          userId: localEntry.userId,
-          username: localEntry.username,
-          levelId: params.levelId,
-          mode,
-          timeSeconds,
-          collectiblesFound: localEntry.collectiblesFound,
-          createdAt: localEntry.createdAt || new Date().toISOString(),
-        },
-        rank: 1,
-        isNewBest: true,
-        progress: {
-          maxUnlockedLevel: Math.max(params.levelId + 1, 2),
-          completedLevels: [params.levelId],
-          totalCollectiblesFound: localEntry.collectiblesFound,
-        },
-      };
+      return buildOfflineResult();
     }
   }
 
@@ -1213,31 +1473,54 @@ class ApiClient {
 
   /**
    * GET /api/v1/shop/catalog
-   * Sends Bearer token when signed in so owned/equipped/canAfford and relicsBalance are accurate.
+   * Sends Bearer token when signed in so owned/equipped/canAfford, missingCurrencies and dual currencies are accurate.
    */
   public async getShopCatalog(params?: {
     category?: string;
+    tier?: string;
     rarity?: string;
     onlyOwned?: boolean;
   }): Promise<ShopCatalogResponse> {
     const query = new URLSearchParams();
     if (params?.category && params.category !== 'all') query.set('category', params.category);
-    if (params?.rarity && params.rarity !== 'all') query.set('rarity', params.rarity);
+    const tierFilter = params?.tier || params?.rarity;
+    if (tierFilter && tierFilter !== 'all') query.set('tier', tierFilter);
     if (params?.onlyOwned) query.set('onlyOwned', 'true');
     const qs = query.toString();
     const res = await this.request<{
       status: string;
-      data: ShopCatalogResponse;
+      data: any;
     }>(
       `/shop/catalog${qs ? `?${qs}` : ''}`,
       { method: 'GET' },
       this.accessToken ? 'optional' : false
     );
-    const data = res.data ?? (res as unknown as ShopCatalogResponse);
-    if (typeof data?.relicsBalance === 'number') {
-      this.setCachedRelicsBalance(data.relicsBalance);
+    const rawData = res.data ?? res ?? {};
+    const currencies = extractCurrencies(rawData) ?? { walnut: 0, crystal: 0 };
+    if (extractCurrencies(rawData)) {
+      this.setCachedCurrencies(currencies);
     }
-    return data;
+    const items = Array.isArray(rawData.items) ? rawData.items.map(normalizeShopItem) : [];
+    const tiers = Array.isArray(rawData.tiers)
+      ? rawData.tiers.map((t: any) => ({
+          id: normalizeShopTier(t.id),
+          label: String(t.label ?? SHOP_TIER_META[normalizeShopTier(t.id)].label),
+          color: String(t.color ?? SHOP_TIER_META[normalizeShopTier(t.id)].color),
+          order: typeof t.order === 'number' ? t.order : SHOP_TIER_META[normalizeShopTier(t.id)].order,
+        }))
+      : Object.values(SHOP_TIER_META);
+
+    return {
+      currency: rawData.currency,
+      currencies,
+      walnutBalance: currencies.walnut,
+      crystalBalance: currencies.crystal,
+      relicsBalance: currencies.walnut,
+      tiers,
+      categories: Array.isArray(rawData.categories) ? rawData.categories : [],
+      totalItems: typeof rawData.totalItems === 'number' ? rawData.totalItems : items.length,
+      items,
+    };
   }
 
   /**
@@ -1249,19 +1532,32 @@ class ApiClient {
       data: ShopInventoryResponse;
     }>('/shop/inventory', { method: 'GET' }, true);
     const data = res.data ?? (res as unknown as ShopInventoryResponse);
-    if (typeof data?.relicsBalance === 'number') {
-      this.setCachedRelicsBalance(data.relicsBalance);
+    const curr = extractCurrencies(data);
+    if (curr) {
+      this.setCachedCurrencies(curr);
     }
-    return data;
+    return {
+      ...data,
+      currencies: curr ?? data.currencies,
+      walnutBalance: curr?.walnut ?? data.walnutBalance ?? data.relicsBalance ?? 0,
+      crystalBalance: curr?.crystal ?? data.crystalBalance ?? 0,
+      relicsBalance: curr?.walnut ?? data.relicsBalance ?? 0,
+    };
   }
 
   /**
    * POST /api/v1/shop/purchase
+   * Preserves local character appearance when autoEquip is true by forwarding currentAppearance.
    */
   public async purchaseShopItem(
     itemId: string,
-    autoEquip: boolean = true
+    autoEquip: boolean = true,
+    currentAppearance?: Partial<CharacterAppearance>
   ): Promise<ShopPurchaseResponse> {
+    const bodyPayload: Record<string, unknown> = { itemId, autoEquip };
+    if (currentAppearance) {
+      bodyPayload.currentAppearance = buildBackendAppearancePayload(currentAppearance);
+    }
     const res = await this.request<{
       status: string;
       message?: string;
@@ -1270,28 +1566,76 @@ class ApiClient {
       '/shop/purchase',
       {
         method: 'POST',
-        body: JSON.stringify({ itemId, autoEquip }),
+        body: JSON.stringify(bodyPayload),
       },
       true
     );
     const data = res.data ?? (res as unknown as ShopPurchaseResponse);
-    if (typeof data?.relicsBalance === 'number') {
-      this.setCachedRelicsBalance(data.relicsBalance);
+    const curr = extractCurrencies(data);
+    if (curr) {
+      this.setCachedCurrencies(curr);
     }
-    return { ...data, message: res.message || data.message };
+    return {
+      ...data,
+      currencies: curr ?? data.currencies,
+      walnutBalance: curr?.walnut ?? data.walnutBalance ?? data.relicsBalance,
+      crystalBalance: curr?.crystal ?? data.crystalBalance ?? 0,
+      relicsBalance: curr?.walnut ?? data.relicsBalance ?? 0,
+      message: res.message || data.message,
+    };
   }
 
   /**
    * POST /api/v1/shop/equip
+   * Merges item slot appearancePatch cleanly while optionally forwarding unsaved currentAppearance.
    */
-  public async equipShopItems(itemIds: string | string[]): Promise<ShopEquipResponse> {
-    const body = Array.isArray(itemIds) ? { itemIds } : { itemId: itemIds };
+  public async equipShopItems(
+    itemIds: string | string[],
+    currentAppearance?: Partial<CharacterAppearance>
+  ): Promise<ShopEquipResponse> {
+    const body: Record<string, unknown> = Array.isArray(itemIds) ? { itemIds } : { itemId: itemIds };
+    if (currentAppearance) {
+      body.currentAppearance = buildBackendAppearancePayload(currentAppearance);
+    }
     const res = await this.request<{
       status: string;
       message?: string;
       data: ShopEquipResponse;
     }>(
       '/shop/equip',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+      true
+    );
+    const data = res.data ?? (res as unknown as ShopEquipResponse);
+    return { ...data, message: res.message || data.message };
+  }
+
+  /**
+   * POST /api/v1/shop/unequip
+   * Removes accessory/slot categories cleanly without affecting the rest of the character.
+   */
+  public async unequipShopItems(params: {
+    categories?: string[];
+    category?: string;
+    itemId?: string;
+    currentAppearance?: Partial<CharacterAppearance>;
+  }): Promise<ShopEquipResponse> {
+    const body: Record<string, unknown> = {};
+    if (params.categories) body.categories = params.categories;
+    if (params.category) body.category = params.category;
+    if (params.itemId) body.itemId = params.itemId;
+    if (params.currentAppearance) {
+      body.currentAppearance = buildBackendAppearancePayload(params.currentAppearance);
+    }
+    const res = await this.request<{
+      status: string;
+      message?: string;
+      data: ShopEquipResponse;
+    }>(
+      '/shop/unequip',
       {
         method: 'POST',
         body: JSON.stringify(body),

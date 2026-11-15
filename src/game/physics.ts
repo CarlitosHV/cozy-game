@@ -25,6 +25,11 @@ export class ParkourPhysics {
   public currentCheckpointIndex: number = 0;
   public collectedCount: number = 0;
   public totalCollectibles: number = 0;
+  public walnutCollectedCount: number = 0;
+  public crystalCollectedCount: number = 0;
+  public totalWalnutCollectibles: number = 0;
+  public totalCrystalCollectibles: number = 0;
+  public lastCollectedKind: 'walnut' | 'crystal' | null = null;
   public hasReachedSummit: boolean = false;
   public knockbackTimer: number = 0;
 
@@ -96,6 +101,8 @@ export class ParkourPhysics {
 
   constructor(public world: WorldBuildResult, public playerModel: PlayerCharacterModel) {
     this.totalCollectibles = world.collectibles.length;
+    this.totalWalnutCollectibles = world.collectibles.filter((c) => c.type !== 'sun_crystal').length;
+    this.totalCrystalCollectibles = world.collectibles.filter((c) => c.type === 'sun_crystal').length;
     // Start at checkpoint 1
     if (world.checkpoints.length > 0) {
       this.respawnAtCheckpoint(0, false);
@@ -137,6 +144,9 @@ export class ParkourPhysics {
   /** Resets collectible count and restores all collectibles to the world for a new run. */
   public resetCollectibles() {
     this.collectedCount = 0;
+    this.walnutCollectedCount = 0;
+    this.crystalCollectedCount = 0;
+    this.lastCollectedKind = null;
     for (const col of this.world.collectibles) {
       col.collected = false;
       col.group.visible = true;
@@ -535,6 +545,13 @@ export class ParkourPhysics {
         if (distXZ < 1.45 && dy >= -0.5 && dy <= 2.2) {
           col.collected = true;
           this.collectedCount++;
+          if (col.type === 'sun_crystal') {
+            this.crystalCollectedCount++;
+            this.lastCollectedKind = 'crystal';
+          } else {
+            this.walnutCollectedCount++;
+            this.lastCollectedKind = 'walnut';
+          }
           soundManager.playCollectible();
         }
       }

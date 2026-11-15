@@ -52,6 +52,11 @@ export interface CharacterAppearance {
   backpackColor?: string;
   hairVariant?: string;
   skinVariant?: string;
+  accessoryVariant?: string;
+  accessoryColor?: string;
+  shoesVariant?: string;
+  auraVariant?: string;
+  auraColor?: string;
   accentGlowColor?: string;
   equippedShopIds?: string[];
 }
@@ -384,6 +389,12 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
   const glowHex = normalizeHexColor(r.accentGlowColor) ?? normalizeHexColor(r.glowColor);
   if (glowHex) out.accentGlowColor = glowHex;
 
+  const accHex = normalizeHexColor(r.accessoryColor);
+  if (accHex) out.accessoryColor = accHex;
+
+  const auraHex = normalizeHexColor(r.auraColor);
+  if (auraHex) out.auraColor = auraHex;
+
   // Outfit & shirt style (allow all valid base outfits so shop outfits never get stripped on reload)
   const rawOutfitToken =
     typeof r.outfitVariant === 'string'
@@ -548,6 +559,20 @@ export function sanitizeAppearance(raw: unknown, forcedBody?: BodyType, isRemote
     out.backpackVariant = undefined;
   }
 
+  // Shoes / Accessory / Aura cosmetic variants
+  const shoesVar = cleanVariant(r.shoesVariant ?? r.shoesStyle ?? r.shoes);
+  if (shoesVar) out.shoesVariant = shoesVar;
+
+  const accVar = cleanVariant(
+    r.accessoryVariant ??
+      r.accessoryItem ??
+      (typeof r.accessory === 'string' && !oneOf(r.accessory, ACCESSORIES) ? r.accessory : undefined)
+  );
+  if (accVar) out.accessoryVariant = accVar;
+
+  const auraVar = cleanVariant(r.auraVariant ?? r.auraStyle ?? r.aura);
+  if (auraVar) out.auraVariant = auraVar;
+
   if (Array.isArray(r.equippedShopIds)) {
     out.equippedShopIds = r.equippedShopIds.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(0, 32);
   } else if (Array.isArray(r.equippedItems)) {
@@ -603,6 +628,10 @@ export function applyBackendAppearancePatch(
   if (backpackHex) merged.backpackColor = backpackHex;
   const glowHex = normalizeHexColor(patch.accentGlowColor) ?? normalizeHexColor(patch.glowColor);
   if (glowHex) merged.accentGlowColor = glowHex;
+  const accHex = normalizeHexColor(patch.accessoryColor);
+  if (accHex) merged.accessoryColor = accHex;
+  const auraHex = normalizeHexColor(patch.auraColor);
+  if (auraHex) merged.auraColor = auraHex;
 
   // Apply category previewColor fallback when patch omits the specific part color
   const previewHex = normalizeHexColor(itemMeta?.previewColor);
@@ -617,6 +646,13 @@ export function applyBackendAppearancePatch(
       merged.skinColor = previewHex;
     } else if (itemMeta?.category === 'hair' && !hairHex) {
       merged.hairColor = previewHex;
+    } else if (itemMeta?.category === 'shoes' && !shoesHex) {
+      merged.bootColor = previewHex;
+    } else if (itemMeta?.category === 'accessory' && !accHex) {
+      merged.accessoryColor = previewHex;
+    } else if (itemMeta?.category === 'aura' && !auraHex) {
+      merged.auraColor = previewHex;
+      if (!glowHex) merged.accentGlowColor = previewHex;
     } else if (itemMeta?.category === 'outfit' && !glowHex) {
       merged.accentGlowColor = previewHex;
     }
@@ -633,10 +669,30 @@ export function applyBackendAppearancePatch(
     const hv = cleanVariant(patch.hat ?? patch.hatStyle);
     merged.hatVariant = hv;
   }
-  if (typeof patch.glasses === 'string' || typeof patch.accessory === 'string') {
+  if (typeof patch.glasses === 'string' || (typeof patch.accessory === 'string' && ['ninguno', 'lentes', 'pecas'].includes(patch.accessory))) {
     if (!('accessory' in patch)) delete merged.accessory;
     const gv = cleanVariant(patch.glasses ?? patch.accessory);
     merged.glassesVariant = gv;
+  }
+  if (itemMeta?.category === 'accessory' && !['ninguno', 'lentes', 'pecas'].includes(String(patch.accessory ?? ''))) {
+    // Keep base facial glasses/freckles intact when applying a chest/charm accessory item
+    merged.accessory = base.accessory;
+    const av = cleanVariant(patch.accessoryVariant ?? patch.accessoryItem ?? patch.accessory ?? itemMeta?.id);
+    merged.accessoryVariant = av;
+  } else if ('accessoryVariant' in patch || 'accessoryItem' in patch) {
+    merged.accessoryVariant = cleanVariant(patch.accessoryVariant ?? patch.accessoryItem);
+  }
+  if ('shoes' in patch || 'shoesStyle' in patch || 'shoesVariant' in patch || itemMeta?.category === 'shoes') {
+    const shv = cleanVariant(patch.shoesVariant ?? patch.shoesStyle ?? patch.shoes ?? (itemMeta?.category === 'shoes' ? itemMeta.id : undefined));
+    if (shv || 'shoesVariant' in patch || 'shoes' in patch || 'shoesStyle' in patch) {
+      merged.shoesVariant = shv;
+    }
+  }
+  if ('aura' in patch || 'auraStyle' in patch || 'auraVariant' in patch || itemMeta?.category === 'aura') {
+    const aurv = cleanVariant(patch.auraVariant ?? patch.auraStyle ?? patch.aura ?? (itemMeta?.category === 'aura' ? itemMeta.id : undefined));
+    if (aurv || 'auraVariant' in patch || 'aura' in patch || 'auraStyle' in patch) {
+      merged.auraVariant = aurv;
+    }
   }
   if ('backpack' in patch || 'backpackVariant' in patch) {
     const bv = cleanVariant(patch.backpackVariant ?? patch.backpack);
@@ -664,6 +720,76 @@ export function applyBackendAppearancePatch(
   }
 
   return sanitizeAppearance(merged, base.bodyType, bypassLocks);
+}
+
+/**
+ * Builds a non-destructive JSON payload mapping frontend fields to backend aliases
+ * while omitting undefined fields so PATCH /player/appearance & /player/character preserve existing customization.
+ */
+export function buildBackendAppearancePayload(
+  appearance: Partial<CharacterAppearance> | Record<string, unknown>
+): Record<string, unknown> {
+  const a = appearance as Partial<CharacterAppearance>;
+  const payload: Record<string, unknown> = {};
+
+  for (const [key, val] of Object.entries(appearance)) {
+    if (val !== undefined) {
+      payload[key] = val;
+    }
+  }
+
+  if (a.name !== undefined) payload.displayName = a.name;
+  if (a.sweaterColor !== undefined) payload.shirtColor = a.sweaterColor;
+  if (a.detailColor !== undefined) payload.pantsColor = a.detailColor;
+  if (a.bootColor !== undefined) payload.shoesColor = a.bootColor;
+  if (a.hatColor !== undefined) payload.hatColor = a.hatColor;
+  if (a.shirtPattern !== undefined) payload.pattern = a.shirtPattern;
+
+  if (a.outfitStyle !== undefined || a.outfitVariant !== undefined) {
+    const mappedShirtStyle =
+      a.outfitVariant ||
+      (a.outfitStyle === 'sudadera' ? 'hoodie' : a.outfitStyle);
+    if (mappedShirtStyle) {
+      payload.shirtStyle = mappedShirtStyle;
+      payload.outfit = mappedShirtStyle;
+    }
+  }
+
+  if (a.hatStyle !== undefined || a.hatVariant !== undefined) {
+    payload.hat =
+      a.hatStyle === 'ninguno'
+        ? 'none'
+        : a.hatVariant ||
+          (a.hatStyle === 'gorro'
+            ? 'beanie_cozy'
+            : a.hatStyle === 'gorra'
+              ? 'cap'
+              : a.hatStyle === 'sombrero'
+                ? 'sunhat'
+                : a.hatStyle === 'flores'
+                  ? 'flower_crown'
+                  : a.hatStyle === 'orejas'
+                    ? 'ears'
+                    : 'none');
+  }
+
+  if (a.accessory !== undefined || a.glassesVariant !== undefined) {
+    payload.glasses =
+      a.accessory === 'lentes'
+        ? a.glassesVariant || 'reading'
+        : a.accessory === 'pecas'
+          ? 'freckles'
+          : 'none';
+  }
+
+  if (a.backpack !== undefined || a.backpackVariant !== undefined) {
+    payload.backpack = a.backpack ? a.backpackVariant || 'explorer_pack' : 'none';
+  }
+
+  if (a.shoesVariant !== undefined) payload.shoes = a.shoesVariant;
+  if (a.auraVariant !== undefined) payload.aura = a.auraVariant;
+
+  return payload;
 }
 
 // In-memory copy so switching characters still works when storage is blocked

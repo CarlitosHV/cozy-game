@@ -300,20 +300,20 @@ export function bossForLevel(level: number): BossKind | null {
   return isBossLevel(level) ? BOSS_FOR_THEME[themeForLevel(level)] : null;
 }
 
-/** Relics (crystals and acorns) in each kind of level — the generators place exactly these. */
-export const RELICS = { handmade: 12, parkour: 12, zone: 25, boss: 8, backrooms: 12 } as const;
+/** Relics per level: 2 Reliquias de Nuez + 1 Reliquia de Cristal every 2 levels (even levels). */
+export const RELICS = { handmade: 2, parkour: 2, zone: 2, boss: 2, backrooms: 2 } as const;
+
+export function levelExpectedCurrencies(level: number): { walnut: number; crystal: number } {
+  const safeLevel = Math.max(1, Math.floor(level));
+  return {
+    walnut: 2,
+    crystal: safeLevel % 2 === 0 ? 1 : 0,
+  };
+}
 
 export function levelTotalCollectibles(level: number): number {
-  const kind = levelKind(level);
-  return kind === 'handmade'
-    ? RELICS.handmade
-    : kind === 'parkour'
-      ? RELICS.parkour
-      : kind === 'boss'
-        ? RELICS.boss
-        : kind === 'backrooms'
-          ? RELICS.backrooms
-          : RELICS.zone;
+  const { walnut, crystal } = levelExpectedCurrencies(level);
+  return walnut + crystal;
 }
 
 export function levelInfo(level: number): LevelInfo {
@@ -451,7 +451,7 @@ export function levelHowTo(level: number, mode?: string): LevelHowTo {
       steps: [
         'La ruta no es recta: gira en curvas, desciende a cañones profundos y vuelve a escalar torres',
         'Usa trampolines, corrientes ascendentes y plataformas móviles para avanzar',
-        'Explora bifurcaciones opcionales para reunir las 12 reliquias y bayas de impulso',
+        'Explora bifurcaciones opcionales para reunir las reliquias del nivel y bayas de impulso',
         'Activa los santuarios intermedios y cruza el portal brillante al final',
       ],
     };

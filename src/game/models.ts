@@ -1448,8 +1448,52 @@ export function createPlayerCharacter(
   lanternPost.add(cage, lanternCore);
   torsoContent.add(lanternPost);
 
+  // 6b. Shop Accessory Charm / Emblem (if accessoryVariant equipped)
+  const accVarLower = (look.accessoryVariant || '').toLowerCase();
+  if (accVarLower) {
+    const accColor = look.accessoryColor || glowHex;
+    const accMat = new THREE.MeshStandardMaterial({
+      color: accColor,
+      emissive: new THREE.Color(accColor),
+      emissiveIntensity: 0.45,
+      roughness: 0.25,
+      metalness: 0.55,
+    });
+    if (accVarLower.includes('watch') || accVarLower.includes('reloj') || accVarLower.includes('bracelet') || accVarLower.includes('pulsera')) {
+      const wristBand = new THREE.Mesh(new THREE.TorusGeometry(0.062, 0.014, 6, 14), accMat);
+      wristBand.rotation.x = Math.PI / 2;
+      wristBand.position.y = -0.19;
+      leftArm.add(wristBand);
+    } else if (accVarLower.includes('belt') || accVarLower.includes('cinturon') || accVarLower.includes('pouch')) {
+      const waistBelt = new THREE.Mesh(new THREE.TorusGeometry(0.228, 0.022, 6, 22), accMat);
+      waistBelt.rotation.x = Math.PI / 2;
+      waistBelt.position.y = 0.42;
+      const buckle = new THREE.Mesh(new THREE.OctahedronGeometry(0.034, 0), brassMat);
+      buckle.position.set(0, 0.42, 0.235);
+      torsoContent.add(waistBelt, buckle);
+    } else {
+      // Star / crystal medallion pinned over the chest/scarf
+      const medallion = new THREE.Mesh(new THREE.OctahedronGeometry(0.042, 0), accMat);
+      medallion.scale.set(1, 1.1, 0.45);
+      medallion.position.set(0.09, 0.64, 0.225);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.048, 0.008, 6, 16), brassMat);
+      ring.position.copy(medallion.position);
+      torsoContent.add(medallion, ring);
+    }
+  }
+
   // 7. Legs, Wool Socks & Hiking Boots (hip pivots allow natural stride arcs + ankle flex)
   const bootGeom = new THREE.CapsuleGeometry(0.07, 0.14, 8, 8);
+
+  const bootTrimMat = look.shoesVariant
+    ? new THREE.MeshStandardMaterial({
+        color: glowHex,
+        emissive: new THREE.Color(glowHex),
+        emissiveIntensity: 0.45,
+        roughness: 0.3,
+        metalness: 0.35,
+      })
+    : null;
 
   const leftHipPivot = new THREE.Group();
   leftHipPivot.position.set(0.12, 0.34, 0);
@@ -1462,6 +1506,12 @@ export function createPlayerCharacter(
   leftSock.position.y = 0.08;
   leftSock.rotation.x = Math.PI / 2;
   leftLeg.add(leftBoot, leftSole, leftSock);
+  if (bootTrimMat) {
+    const trimL = new THREE.Mesh(new THREE.TorusGeometry(0.074, 0.012, 6, 14), bootTrimMat);
+    trimL.position.y = -0.045;
+    trimL.rotation.x = Math.PI / 2;
+    leftLeg.add(trimL);
+  }
   leftLeg.position.set(0, -0.2, 0);
   leftHipPivot.add(leftLeg);
 
@@ -1476,6 +1526,12 @@ export function createPlayerCharacter(
   rightSock.position.y = 0.08;
   rightSock.rotation.x = Math.PI / 2;
   rightLeg.add(rightBoot, rightSole, rightSock);
+  if (bootTrimMat) {
+    const trimR = new THREE.Mesh(new THREE.TorusGeometry(0.074, 0.012, 6, 14), bootTrimMat);
+    trimR.position.y = -0.045;
+    trimR.rotation.x = Math.PI / 2;
+    rightLeg.add(trimR);
+  }
   rightLeg.position.set(0, -0.2, 0);
   rightHipPivot.add(rightLeg);
 
@@ -1923,6 +1979,41 @@ export function createPlayerCharacter(
   shadow.position.y = 0.02;
   group.add(shadow);
 
+  // 10. Shop Cosmetic Aura Ring & Floating Motes (subtle translucent glow around character)
+  let auraGroup: THREE.Group | null = null;
+  let auraRing: THREE.Mesh | null = null;
+  const auraMotes: { mesh: THREE.Mesh; angle: number; height: number }[] = [];
+  if (look.auraVariant) {
+    const auraColor = look.auraColor || glowHex;
+    auraGroup = new THREE.Group();
+    const auraRingMat = new THREE.MeshBasicMaterial({
+      color: auraColor,
+      transparent: true,
+      opacity: 0.48,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    auraRing = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.56, 28), auraRingMat);
+    auraRing.rotation.x = -Math.PI / 2;
+    auraRing.position.y = 0.035;
+    auraGroup.add(auraRing);
+
+    const moteMat = new THREE.MeshBasicMaterial({
+      color: auraColor,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const moteGeom = new THREE.OctahedronGeometry(0.032, 0);
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      const mote = new THREE.Mesh(moteGeom, moteMat);
+      mote.position.set(Math.cos(a) * 0.48, 0.25 + (i % 2) * 0.22, Math.sin(a) * 0.48);
+      auraGroup.add(mote);
+      auraMotes.push({ mesh: mote, angle: a, height: 0.25 + (i % 2) * 0.22 });
+    }
+    group.add(auraGroup);
+  }
+
   // Body proportions (height / build)
   group.scale.set(look.build, look.height, look.build);
 
@@ -2152,6 +2243,19 @@ export function createPlayerCharacter(
       companionWings[i].rotation.x = flap;
     }
     companionAnim?.(windTime, safeDt);
+
+    if (auraGroup) {
+      auraGroup.rotation.y += safeDt * 1.15;
+      if (auraRing) {
+        const pulse = 1 + Math.sin(windTime * 3.4) * 0.07;
+        auraRing.scale.set(pulse, pulse, 1);
+      }
+      for (let i = 0; i < auraMotes.length; i++) {
+        const m = auraMotes[i];
+        m.mesh.position.y = m.height + Math.sin(windTime * 3.0 + i * 1.6) * 0.14;
+        m.mesh.rotation.y += safeDt * 2.5;
+      }
+    }
   };
 
   if (isRemote) {

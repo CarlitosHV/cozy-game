@@ -179,8 +179,8 @@ const COLLECTION_TEMPLATES: MissionTemplate[] = [
     category: 'collection',
     metric: 'collect_relics',
     title: (_, t) => `Cazatesoros Estelar (${t})`,
-    desc: (_, t) => `Recoge ${t} reliquias (bellotas doradas o cristales) en tus recorridos.`,
-    targets: [8, 10, 12],
+    desc: (_, t) => `Recoge ${t} reliquias (nueces doradas o cristales) en tus recorridos.`,
+    targets: [4, 5, 6],
   },
   {
     key: 'items',
@@ -208,7 +208,7 @@ const BIOME_TEMPLATES: MissionTemplate[] = [
     needsBiome: true,
     title: (b, t) => `Tesoros de ${b ? THEME_INFO[b].name : 'Bioma'} (${t})`,
     desc: (b, t) => `Recoge ${t} reliquias u objetos dentro de ${b ? THEME_INFO[b].name : 'este bioma'}.`,
-    targets: [4, 5, 6],
+    targets: [2, 3],
   },
   {
     key: 'biome_complete',

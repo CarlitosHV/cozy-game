@@ -116,6 +116,13 @@ import type { LevelHazardStatus } from '../game/levels';
 import type { ItemType } from '../game/items';
 import { COMPANION_ICONS } from './CharacterCreator';
 import { ApexLobby } from './ApexLobby';
+import {
+  CrystalIcon,
+  CrystalPill,
+  DualCurrencyBalance,
+  WalnutIcon,
+  WalnutPill,
+} from './CurrencyBadge';
 import { ItemThumb } from './ItemThumb';
 import { RatingStars } from './RatingStars';
 import { bestRating } from '../game/rating';
@@ -177,6 +184,11 @@ interface GameHUDProps {
   checkpointTotal?: number;
   collectedCount: number;
   totalCollectibles: number;
+  walnutCount?: number;
+  crystalCount?: number;
+  totalWalnuts?: number;
+  totalCrystals?: number;
+  lastRelicKind?: 'walnut' | 'crystal' | null;
   currentWeather: WeatherType;
   isWeatherTransitioning?: boolean;
   weatherNotice?: {
@@ -522,6 +534,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   checkpointTotal = 3,
   collectedCount,
   totalCollectibles,
+  walnutCount = 0,
+  crystalCount = 0,
+  totalWalnuts = 2,
+  totalCrystals = 0,
+  lastRelicKind = null,
   currentWeather,
   isWeatherTransitioning = false,
   weatherNotice = null,
@@ -556,7 +573,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     return localStorage.getItem('cozy_show_fps') === 'true';
   });
   const [fps, setFps] = useState(60);
-  const [pickupAlert, setPickupAlert] = useState<{ text: string; id: number } | null>(null);
+  const [pickupAlert, setPickupAlert] = useState<{
+    text: string;
+    kind: 'walnut' | 'crystal';
+    id: number;
+  } | null>(null);
+  const [victoryRewards, setVictoryRewards] = useState<{
+    walnutEarned: number;
+    crystalEarned: number;
+    walnutBalance?: number;
+    crystalBalance?: number;
+  } | null>(null);
   const [helpTab, setHelpTab] = useState<'controls' | 'companions' | 'worlds' | 'modes'>('controls');
   const [showTutorialHint, setShowTutorialHint] = useState<boolean>(() => {
     return typeof localStorage !== 'undefined' && localStorage.getItem('cozy_tutorial_seen') !== 'true';
@@ -701,9 +728,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         if (meRes.status === 'fulfilled' && meRes.value) {
           const profile = meRes.value;
           setCurrentUser(apiClient.getCurrentUser());
-          const syncedRelics = profile.relicsBalance ?? profile.progress?.relicsBalance;
-          if (typeof syncedRelics === 'number') {
-            apiClient.setCachedRelicsBalance(syncedRelics);
+          const syncedWalnut =
+            profile.currencies?.walnut ??
+            profile.walnutBalance ??
+            profile.relicsBalance ??
+            profile.progress?.relicsBalance;
+          const syncedCrystal = profile.currencies?.crystal ?? profile.crystalBalance;
+          if (typeof syncedWalnut === 'number' || typeof syncedCrystal === 'number') {
+            apiClient.setCachedCurrencies({
+              ...(typeof syncedWalnut === 'number' ? { walnut: syncedWalnut } : {}),
+              ...(typeof syncedCrystal === 'number' ? { crystal: syncedCrystal } : {}),
+            });
           }
           if (profile.progress?.maxUnlockedLevel) {
             syncProgressFromBackend(
@@ -1214,7 +1249,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     const targetMode = engine.gameMode ?? gameMode;
     const runOrigin = Math.max(runStartTimeRef.current, engine.levelStartTime || 0);
     const preciseTime = Math.max(4.6, (performance.now() - runOrigin) / 1000, elapsedTime);
-    const actualRelicsFound = Math.max(collectedCount, engine.physics?.collectedCount ?? 0);
+    const actualWalnutFound = Math.max(walnutCount, engine.physics?.walnutCollectedCount ?? 0);
+    const actualCrystalFound = Math.max(crystalCount, engine.physics?.crystalCollectedCount ?? 0);
+    const actualRelicsFound = Math.max(collectedCount, actualWalnutFound + actualCrystalFound);
 
     const runKey = `${targetLevel}-${targetMode}-${engine.levelStartTime || runStartTimeRef.current}`;
     if (!force && submittedRunKey === runKey) return;
@@ -1225,16 +1262,26 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         const res = await apiClient.completeLevel({
           levelId: targetLevel,
           timeSeconds: Number(preciseTime.toFixed(2)),
+          walnutRelicsFound: actualWalnutFound,
+          crystalRelicsFound: actualCrystalFound,
           relicsFound: actualRelicsFound,
           score: engine.lastRating?.score ?? 0,
           stars: engine.lastRating?.stars ?? 0,
           deaths: engine.lastRating?.deaths ?? deaths,
           mode: targetMode,
         });
+        setVictoryRewards({
+          walnutEarned:
+            typeof res?.walnutRelicsEarned === 'number' ? res.walnutRelicsEarned : actualWalnutFound,
+          crystalEarned:
+            typeof res?.crystalRelicsEarned === 'number' ? res.crystalRelicsEarned : actualCrystalFound,
+          walnutBalance: res?.currencies?.walnut ?? res?.walnutBalance,
+          crystalBalance: res?.currencies?.crystal ?? res?.crystalBalance,
+        });
         if (res?.progress?.maxUnlockedLevel) {
           syncProgressFromBackend(res.progress.maxUnlockedLevel - 1);
         }
-        void apiClient.refreshRelicsBalance();
+        void apiClient.refreshCurrencies();
         return res;
       },
       {
@@ -1257,15 +1304,24 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       void submitVictoryRun(false);
     } else if (gameState === 'playing' && !isSpectating) {
       setSubmittedRunKey(null);
+      setVictoryRewards(null);
       saveProgressAction.clearFeedback();
     }
   }, [gameState, isSpectating, engine]);
 
   const handleProfileSynced = (profile: PlayerProfileData) => {
     setCurrentUser(apiClient.getCurrentUser());
-    const syncedRelics = profile.relicsBalance ?? profile.progress?.relicsBalance;
-    if (typeof syncedRelics === 'number') {
-      apiClient.setCachedRelicsBalance(syncedRelics);
+    const syncedWalnut =
+      profile.currencies?.walnut ??
+      profile.walnutBalance ??
+      profile.relicsBalance ??
+      profile.progress?.relicsBalance;
+    const syncedCrystal = profile.currencies?.crystal ?? profile.crystalBalance;
+    if (typeof syncedWalnut === 'number' || typeof syncedCrystal === 'number') {
+      apiClient.setCachedCurrencies({
+        ...(typeof syncedWalnut === 'number' ? { walnut: syncedWalnut } : {}),
+        ...(typeof syncedCrystal === 'number' ? { crystal: syncedCrystal } : {}),
+      });
     }
     if (profile.progress?.maxUnlockedLevel) {
       syncProgressFromBackend(
@@ -1429,13 +1485,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const prevCollectedRef = useRef(collectedCount);
   useEffect(() => {
     if (gameState === 'playing' && collectedCount > prevCollectedRef.current) {
-      setPickupAlert({ text: '+1 Reliquia', id: Date.now() });
+      const kind: 'walnut' | 'crystal' = lastRelicKind === 'crystal' ? 'crystal' : 'walnut';
+      setPickupAlert({
+        text: kind === 'crystal' ? '+1 Reliquia Cristal' : '+1 Reliquia Nuez',
+        kind,
+        id: Date.now(),
+      });
       const timer = window.setTimeout(() => setPickupAlert(null), 1400);
       prevCollectedRef.current = collectedCount;
       return () => window.clearTimeout(timer);
     }
     prevCollectedRef.current = collectedCount;
-  }, [collectedCount, gameState]);
+  }, [collectedCount, gameState, lastRelicKind]);
 
   // Realtime FPS measurement from GameEngine's actual render loop
   useEffect(() => {
@@ -2277,17 +2338,24 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             )}
 
-            {/* Sun Crystals / Acorns Collectibles & Timer */}
+            {/* Walnut & Crystal Relics Collectibles & Timer */}
             <div className={`flex items-center rounded-xl cozy-chip text-xs ${isMobileUi ? 'gap-2 px-2 py-1' : 'gap-3 px-3 py-1.5'}`}>
               {!combat && (
                 <>
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                    <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider hidden sm:inline">Reliquias:</span>
-                    <span className="tabular-nums font-semibold text-amber-300">
-                      {collectedCount}/{totalCollectibles}
+                  <div className="flex items-center gap-1" title="Reliquias de Nuez">
+                    <WalnutIcon size={14} />
+                    <span className="tabular-nums font-bold text-amber-200">
+                      {walnutCount}/{totalWalnuts}
                     </span>
                   </div>
+                  {(totalCrystals > 0 || crystalCount > 0) && (
+                    <div className="flex items-center gap-1" title="Reliquias de Cristal">
+                      <CrystalIcon size={14} />
+                      <span className="tabular-nums font-bold text-sky-200">
+                        {crystalCount}/{totalCrystals}
+                      </span>
+                    </div>
+                  )}
                   <div className="w-[1px] h-3 bg-stone-700/60" />
                 </>
               )}
@@ -2397,9 +2465,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             {pickupAlert && (
               <div
                 key={pickupAlert.id}
-                className="self-start px-2.5 py-1 rounded-full bg-gradient-to-r from-amber-400 to-amber-500 text-stone-950 text-xs font-black shadow-lg animate-bounce flex items-center gap-1 pointer-events-none"
+                className={`self-start px-2.5 py-1 rounded-full text-xs font-black shadow-lg animate-bounce flex items-center gap-1.5 pointer-events-none ${
+                  pickupAlert.kind === 'crystal'
+                    ? 'bg-gradient-to-r from-sky-300 to-indigo-300 text-slate-950'
+                    : 'bg-gradient-to-r from-amber-300 to-amber-500 text-stone-950'
+                }`}
               >
-                <Sparkles className="w-3.5 h-3.5 fill-current" />
+                {pickupAlert.kind === 'crystal' ? (
+                  <CrystalIcon size={14} />
+                ) : (
+                  <WalnutIcon size={14} />
+                )}
                 <span>{pickupAlert.text}</span>
               </div>
             )}
@@ -3557,7 +3633,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <p className={`text-xs text-cozy-muted items-center justify-center gap-1 flex-wrap ${engine?.gameOverReason ? 'hidden' : 'inline-flex'}`}>
                 <span>Descanso {checkpointIndex}/{checkpointTotal}</span>
                 <HelpTip label={TIPS.descanso} />
-                <span>· Reliquias {collectedCount}/{totalCollectibles}</span>
+                <span>· Nueces {walnutCount}/{totalWalnuts}</span>
+                {(totalCrystals > 0 || crystalCount > 0) && (
+                  <span>· Cristales {crystalCount}/{totalCrystals}</span>
+                )}
                 <HelpTip label={TIPS.reliquias} />
               </p>
             </div>
@@ -3625,10 +3704,45 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </p>
               <p className="text-xs text-cozy-muted inline-flex items-center justify-center gap-1 flex-wrap">
                 <span>{formatTime(elapsedTime)}</span>
-                <span>· Reliquias {collectedCount}/{totalCollectibles}</span>
+                <span>· Nueces {walnutCount}/{totalWalnuts}</span>
+                {(totalCrystals > 0 || crystalCount > 0) && (
+                  <span>· Cristales {crystalCount}/{totalCrystals}</span>
+                )}
                 <HelpTip label={TIPS.reliquias} />
                 {gameMode === 'time_trial' ? <span>· {timeRemaining.toFixed(1)}s restantes</span> : null}
               </p>
+              {((victoryRewards?.walnutEarned ?? walnutCount) > 0 ||
+                (victoryRewards?.crystalEarned ?? crystalCount) > 0 ||
+                typeof victoryRewards?.walnutBalance === 'number') && (
+                <div className="pt-1 flex flex-col items-center gap-1.5">
+                  <div className="inline-flex flex-wrap items-center justify-center gap-1.5">
+                    {(victoryRewards?.walnutEarned ?? walnutCount) > 0 && (
+                      <WalnutPill
+                        size="xs"
+                        value={`+${victoryRewards?.walnutEarned ?? walnutCount}`}
+                        label="Reliquias de Nuez obtenidas"
+                      />
+                    )}
+                    {(victoryRewards?.crystalEarned ?? crystalCount) > 0 && (
+                      <CrystalPill
+                        size="xs"
+                        value={`+${victoryRewards?.crystalEarned ?? crystalCount}`}
+                        label="Reliquias de Cristal obtenidas"
+                      />
+                    )}
+                  </div>
+                  {typeof victoryRewards?.walnutBalance === 'number' && (
+                    <div className="inline-flex items-center gap-1.5 text-[10px] text-cozy-muted font-semibold">
+                      <span>Saldo total:</span>
+                      <DualCurrencyBalance
+                        walnut={victoryRewards.walnutBalance}
+                        crystal={victoryRewards.crystalBalance ?? 0}
+                        size="xs"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {engine?.lastRating && (
@@ -3996,7 +4110,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     </div>
                     <div className="p-2 rounded-xl bg-white/70 border border-stone-200">
                       <strong className="text-amber-700">⏱️ Modo Contrarreloj:</strong>
-                      <p className="text-stone-600 mt-0.5">Comienzas con 90 segundos. Cada reliquia dorada te otorga <strong>+8s</strong> y cada campana de descanso te da <strong>+15s</strong>. ¡Tus mejores tiempos quedan en el Ranking!</p>
+                      <p className="text-stone-600 mt-0.5">Comienzas con 90 segundos. Cada Reliquia de Nuez otorga <strong>+15s</strong>, cada Cristal otorga <strong>+25s</strong> y cada campana de descanso da <strong>+15s</strong>. ¡Tus mejores tiempos quedan en el Ranking!</p>
                     </div>
                     <div className="p-2 rounded-xl bg-white/70 border border-stone-200">
                       <strong className="text-rose-700">👻 Modo Persecución:</strong>
@@ -4042,7 +4156,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
             <div className="space-y-1.5 text-xs text-stone-700 leading-relaxed">
               <p>🌱 <strong>Muévete:</strong> Teclas WASD / Flechas (o la palanca táctil en móvil).</p>
-              <p>✨ <strong>Objetivo:</strong> Recoge las <strong>12 reliquias doradas</strong> repartidas en las islas.</p>
+              <p>✨ <strong>Objetivo:</strong> Recoge las <strong>reliquias de Nuez y Cristal</strong> repartidas por las islas.</p>
               <p>🚩 <strong>Meta:</strong> Salta sobre hongos y sube a la plataforma final para ganar.</p>
             </div>
             <button

@@ -1667,9 +1667,9 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
   const keyAt = cellCenter(keyCell[0], keyCell[1]);
   const shuffled = (arr: [number, number][]) => arr.sort(() => rng() - 0.5);
   let relicN = 0;
+  const relicSpots: { x: number; y: number; z: number }[] = [];
   const relic = (x: number, y: number, z: number) => {
-    kit.addCollectible(`br${relicN}`, relicN % 3 === 0 ? 'golden_acorn' : 'sun_crystal', x, y + 1.2, z);
-    relicN++;
+    relicSpots.push({ x, y: y + 1.2, z });
   };
   const others = deadEnds.filter((c) => c !== keyCell);
   const pool = shuffled(others.length >= 4 ? others : [...others, ...Array.from({ length: 4 }, () => [Math.floor(rng() * NX), 1 + Math.floor(rng() * (NZ - 1))] as [number, number])]);
@@ -1818,8 +1818,8 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
       root.add(lamp);
     }
   // Relics on a few of the pieces
-  const relicSpots = landings.filter((l) => l !== mid).sort(() => rng() - 0.5);
-  for (const l of relicSpots.slice(0, 3)) relic(l.position.x, l.position.y, l.position.z);
+  const warehouseRelicLandings = landings.filter((l) => l !== mid).sort(() => rng() - 0.5);
+  for (const l of warehouseRelicLandings.slice(0, 3)) relic(l.position.x, l.position.y, l.position.z);
   relic(mid.position.x + 1.2, mid.position.y, mid.position.z + 1.2);
   relic(-doorX * 0.5, MEZ_Y, WZ1 - 3);
   kit.addCheckpoint(2, 'El almacén', new THREE.Vector3(exitX + 3, 0, WZ0 + 2), new THREE.Vector3(exitX, 0.2, WZ0 + 2.2));
@@ -2048,6 +2048,17 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
   relic(doorX, CY, CZ0 + 6);
   relic(doorX, CY, LZ0 + SEG + (layouts[1].hole[0] > 3 ? 1.2 : SEG - 1.2));
   relic(keyAt.x + 1.5, 0, keyAt.z + 1.5);
+  // Spawn 2 Reliquias de Nuez + 1 Reliquia de Cristal on even levels
+  if (relicSpots.length >= 2) {
+    const first = relicSpots[0];
+    const midSpot = relicSpots[Math.floor(relicSpots.length * 0.55)];
+    kit.addCollectible(`br${relicN++}`, 'golden_acorn', first.x, first.y, first.z);
+    kit.addCollectible(`br${relicN++}`, 'golden_acorn', midSpot.x, midSpot.y, midSpot.z);
+    if (level % 2 === 0) {
+      const last = relicSpots[relicSpots.length - 1];
+      kit.addCollectible(`br${relicN++}`, 'sun_crystal', last.x, last.y, last.z);
+    }
+  }
 
   // ======================================================================
   // Monsters
@@ -2611,12 +2622,15 @@ export function buildSkinwalkerArena(level: number, root: THREE.Object3D, textur
   shuffledCells.slice(10, 13).forEach((c) => items.push({ type: 'bate', pos: new THREE.Vector3(c.x - 1, Y + 0.95, c.z - 1) }));
   shuffledCells.slice(4, 10).forEach((c, k) => setup.food.push({ pos: new THREE.Vector3(c.x + 1, Y + 1.0, c.z + 1), kind: k % 2 ? 'burger' : 'fries' }));
 
-  // Relics in dead ends (or anywhere if there aren't enough)
+  // Relics in dead ends: 2 Nueces + 1 Cristal on even levels
   const relicCells = [...deadEnds.sort(() => rng() - 0.5).map(([i, j]) => gCenter(g, i, j)), ...shuffledCells.slice(14)];
-  for (let k = 0; k < 8; k++) {
+  for (let k = 0; k < 2 && k < relicCells.length; k++) {
     const c = relicCells[k];
-    // Only crystals here (no acorns: in this fight they looked like useless nuts)
-    kit.addCollectible(`swc${k}`, 'sun_crystal', c.x - 1.2, Y + 1.2, c.z + 1.2);
+    kit.addCollectible(`swc${k}`, 'golden_acorn', c.x - 1.2, Y + 1.2, c.z + 1.2);
+  }
+  if (level % 2 === 0 && relicCells.length > 2) {
+    const c = relicCells[2];
+    kit.addCollectible('swc_crystal', 'sun_crystal', c.x - 1.2, Y + 1.2, c.z + 1.2);
   }
 
   const world = kit.finish(setup.portalPos.clone(), enemies, items, new THREE.Vector3(spawn.x + 2, Y + 3, spawn.z - 3));
