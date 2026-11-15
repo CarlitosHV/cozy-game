@@ -221,17 +221,20 @@ export class WeatherSystem {
   private sakuraTransforms: { pos: THREE.Vector3; rot: THREE.Euler; speed: THREE.Vector3; rotSpeed: THREE.Vector3 }[] = [];
   private pollenParticles: THREE.Points;
   private fireflyParticles: THREE.Points;
-  private fireflyCount = 120;
+  private fireflyCount = 90;
   private fireflyPositions: Float32Array;
   private snowParticles: THREE.Points;
-  private snowCount = 700;
+  private snowCount = 480;
   private snowPositions: Float32Array;
   private emberParticles: THREE.Points;
-  private emberCount = 220;
+  private emberCount = 150;
   private emberPositions: Float32Array;
 
   // Rain droplet positions
-  private rainCount = 1500;
+  private rainCount = 1000;
+  private sakuraCount = 140;
+  private qualityScale = 1.0;
+  private qualityEnabled = true;
   private rainPositions: Float32Array;
   private readonly _sakuraDummy = new THREE.Object3D();
   private particlesEnabled = true;
@@ -242,6 +245,26 @@ export class WeatherSystem {
     if (this.particlesEnabled === enabled) return;
     this.particlesEnabled = enabled;
     if (!enabled) {
+      this.rainParticles.visible = false;
+      this.sakuraParticles.visible = false;
+      this.pollenParticles.visible = false;
+      this.fireflyParticles.visible = false;
+      this.snowParticles.visible = false;
+      this.emberParticles.visible = false;
+    }
+  }
+
+  public setQuality(quality: 'high' | 'medium' | 'low') {
+    this.qualityEnabled = quality !== 'low';
+    this.qualityScale = quality === 'high' ? 1.0 : quality === 'medium' ? 0.45 : 0;
+    this.rainGeom.setDrawRange(0, Math.round(this.rainCount * this.qualityScale));
+    this.snowParticles.geometry.setDrawRange(0, Math.round(this.snowCount * this.qualityScale));
+    this.emberParticles.geometry.setDrawRange(0, Math.round(this.emberCount * this.qualityScale));
+    this.fireflyParticles.geometry.setDrawRange(0, Math.round(this.fireflyCount * this.qualityScale));
+    const pollenPos = this.pollenParticles.geometry.getAttribute('position');
+    if (pollenPos) this.pollenParticles.geometry.setDrawRange(0, Math.round(pollenPos.count * this.qualityScale));
+    this.sakuraParticles.count = Math.round(this.sakuraCount * this.qualityScale);
+    if (!this.qualityEnabled) {
       this.rainParticles.visible = false;
       this.sakuraParticles.visible = false;
       this.pollenParticles.visible = false;
@@ -295,7 +318,7 @@ export class WeatherSystem {
     this.scene.add(this.rainParticles);
 
     // 2. Sakura Petals (Instanced fluttering planes)
-    const sakuraCount = 200;
+    const sakuraCount = this.sakuraCount;
     const petGeom = new THREE.PlaneGeometry(0.18, 0.12);
     const petMat = new THREE.MeshBasicMaterial({
       color: 0xffb7c5,
@@ -544,7 +567,7 @@ export class WeatherSystem {
       maxCloudDistSq
     );
 
-    if (!this.particlesEnabled) {
+    if (!this.particlesEnabled || !this.qualityEnabled) {
       return;
     }
 
@@ -555,6 +578,7 @@ export class WeatherSystem {
     const nightWeight = Math.max(this.getWeatherWeight('starlit_night'), this.getWeatherWeight('neon_night') * 0.75);
     const snowWeight = this.getWeatherWeight('blizzard');
     const emberWeight = this.getWeatherWeight('lava_ash');
+    const qScale = this.qualityScale;
 
     // 1. Update Rain
     const rainMat = this.rainParticles.material as THREE.PointsMaterial;
@@ -566,7 +590,8 @@ export class WeatherSystem {
       this.rainParticles.position.x = playerCenter.x;
       this.rainParticles.position.z = playerCenter.z;
       const pos = this.rainPositions;
-      for (let i = 0; i < this.rainCount; i++) {
+      const activeRain = Math.round(this.rainCount * qScale);
+      for (let i = 0; i < activeRain; i++) {
         pos[i * 3 + 1] -= dt * 26;
         pos[i * 3] += dt * 3.5;
         if (pos[i * 3 + 1] < -2) {
@@ -588,7 +613,8 @@ export class WeatherSystem {
       this.sakuraParticles.position.x = playerCenter.x;
       this.sakuraParticles.position.z = playerCenter.z;
       const dummy = this._sakuraDummy;
-      for (let i = 0; i < this.sakuraTransforms.length; i++) {
+      const activeSakura = Math.round(this.sakuraTransforms.length * qScale);
+      for (let i = 0; i < activeSakura; i++) {
         const item = this.sakuraTransforms[i];
         item.pos.x += item.speed.x * dt;
         item.pos.y += item.speed.y * dt;
@@ -633,7 +659,8 @@ export class WeatherSystem {
       this.fireflyParticles.position.x = playerCenter.x;
       this.fireflyParticles.position.z = playerCenter.z;
       const pos = this.fireflyPositions;
-      for (let i = 0; i < this.fireflyCount; i++) {
+      const activeFirefly = Math.round(this.fireflyCount * qScale);
+      for (let i = 0; i < activeFirefly; i++) {
         pos[i * 3] += Math.sin(animTime + i) * dt * 0.4;
         pos[i * 3 + 1] += Math.cos(animTime * 0.8 + i) * dt * 0.3;
         pos[i * 3 + 2] += Math.sin(animTime * 0.6 + i * 2) * dt * 0.4;
@@ -651,7 +678,8 @@ export class WeatherSystem {
       this.snowParticles.position.x = playerCenter.x;
       this.snowParticles.position.z = playerCenter.z;
       const pos = this.snowPositions;
-      for (let i = 0; i < this.snowCount; i++) {
+      const activeSnow = Math.round(this.snowCount * qScale);
+      for (let i = 0; i < activeSnow; i++) {
         pos[i * 3 + 1] -= dt * 4.5;
         pos[i * 3] += Math.sin(animTime * 0.8 + i) * dt * 1.4 + dt * 1.2;
         pos[i * 3 + 2] += Math.cos(animTime * 0.6 + i) * dt * 0.8;
@@ -674,7 +702,8 @@ export class WeatherSystem {
       this.emberParticles.position.x = playerCenter.x;
       this.emberParticles.position.z = playerCenter.z;
       const pos = this.emberPositions;
-      for (let i = 0; i < this.emberCount; i++) {
+      const activeEmber = Math.round(this.emberCount * qScale);
+      for (let i = 0; i < activeEmber; i++) {
         pos[i * 3 + 1] += dt * (2.6 + (i % 5) * 0.45);
         pos[i * 3] += Math.sin(animTime * 1.4 + i) * dt * 0.9;
         pos[i * 3 + 2] += Math.cos(animTime * 1.2 + i) * dt * 0.9;

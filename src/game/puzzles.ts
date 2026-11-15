@@ -132,7 +132,7 @@ export function emptyPuzzles(): PuzzleData {
 export function makeBeam(color: number, height = 70, radius = 0.3, startY = 0): THREE.Mesh {
   const beam = new THREE.Mesh(
     new THREE.CylinderGeometry(radius * 1.8, radius, height, 12, 1, true),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.65, depthWrite: false, fog: false, side: THREE.DoubleSide })
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.65, depthWrite: false, fog: false })
   );
   beam.position.y = startY + height / 2;
   return beam;
@@ -568,8 +568,10 @@ export class PuzzleSystem {
           }
           continue;
         }
-        o.group.rotation.y = time * 1.5;
-        o.group.position.y = o.pos.y + Math.sin(time * 2 + o.pos.x) * 0.15;
+        if (o.group.visible) {
+          o.group.rotation.y = time * 1.5;
+          o.group.position.y = o.pos.y + Math.sin(time * 2 + o.pos.x) * 0.15;
+        }
         const dx = P.x - o.pos.x;
         const dz = P.z - o.pos.z;
         const dy = P.y + 0.7 - o.pos.y;
@@ -593,14 +595,14 @@ export class PuzzleSystem {
         (s.shieldMesh.material as THREE.MeshBasicMaterial).opacity = 0.22 * (1 - s.fade);
         s.shieldMesh.scale.setScalar(1 + s.fade * 0.3);
         if (s.fade >= 1) s.shieldMesh.visible = false;
-      } else if (s && !s.active) {
+      } else if (s && !s.active && s.shieldMesh.visible) {
         s.shieldMesh.rotation.y = time * 0.1;
         (s.shieldMesh.material as THREE.MeshBasicMaterial).opacity = 0.18 + Math.sin(time * 1.6) * 0.05;
       }
     }
     this.portalCooldown = Math.max(0, this.portalCooldown - dt);
     for (const pt of this.data.portals) {
-      pt.group.rotation.y = time * 1.2;
+      if (pt.group.visible) pt.group.rotation.y = time * 1.2;
       if (this.portalCooldown > 0) continue;
       if (Math.hypot(P.x - pt.pos.x, P.z - pt.pos.z) < 1.0 && P.y > pt.pos.y - 0.3 && P.y < pt.pos.y + 1.6) {
         this.portalCooldown = 1.5;
@@ -723,9 +725,11 @@ export class PuzzleSystem {
         }
       }
       s.detect = seen ? s.detect + dt : Math.max(0, s.detect - dt * 2);
-      const alarm = s.detect > 0;
-      s.sectorMat.color.set(alarm ? 0xef4444 : 0xfde047);
-      s.sectorMat.opacity = alarm ? 0.4 + Math.sin(time * 30) * 0.1 : 0.28;
+      if (s.sector.visible) {
+        const alarm = s.detect > 0;
+        s.sectorMat.color.set(alarm ? 0xef4444 : 0xfde047);
+        s.sectorMat.opacity = alarm ? 0.4 + Math.sin(time * 30) * 0.1 : 0.28;
+      }
       if (s.detect > 0.55 - 0.3 * h) {
         s.detect = 0;
         s.cooldown = 1.2;
@@ -793,11 +797,12 @@ export class PuzzleSystem {
       const dz = P.z - bp.z;
       const reach = s / 2 + 0.35 + 0.15;
       if (Math.abs(dx) < reach && Math.abs(dz) < reach) {
-        const dir = Math.abs(dx) > Math.abs(dz) ? new THREE.Vector3(-Math.sign(dx), 0, 0) : new THREE.Vector3(0, 0, -Math.sign(dz));
-        if (ctx.moveDir.dot(dir) > 0.55) {
+        if (Math.abs(dx) > Math.abs(dz)) this.tmpBefore.set(-Math.sign(dx), 0, 0);
+        else this.tmpBefore.set(0, 0, -Math.sign(dz));
+        if (ctx.moveDir.dot(this.tmpBefore) > 0.55) {
           const step = 2.6 * dt;
-          const nx = bp.x + dir.x * step;
-          const nz = bp.z + dir.z * step;
+          const nx = bp.x + this.tmpBefore.x * step;
+          const nz = bp.z + this.tmpBefore.z * step;
           if (!this.overlapsSomething(b, nx, nz, ctx)) {
             bp.x = nx;
             bp.z = nz;

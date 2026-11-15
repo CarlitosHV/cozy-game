@@ -1418,7 +1418,7 @@ export function generateLevel(level: number, root: THREE.Object3D, textures: Pro
   const shieldBottom = -14;
   const shieldMesh = new THREE.Mesh(
     new THREE.IcosahedronGeometry(1, 3),
-    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending })
   );
   shieldMesh.add(
     new THREE.Mesh(new THREE.IcosahedronGeometry(1.004, 3), new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.22, depthWrite: false }))

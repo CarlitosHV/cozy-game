@@ -1429,7 +1429,7 @@ function backroomsParts(kit: ReturnType<typeof createLevelKit>, root: THREE.Obje
   const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.9 });
   const carpetMat = new THREE.MeshStandardMaterial({ map: carpetTex(), roughness: 1 });
   const ceilTex = ceilingTex();
-  const ceilMat = new THREE.MeshStandardMaterial({ map: ceilTex, roughness: 0.95, side: THREE.DoubleSide, emissive: 0x2a2614, emissiveIntensity: 0.4 });
+  const ceilMat = new THREE.MeshStandardMaterial({ map: ceilTex, roughness: 0.95, emissive: 0x2a2614, emissiveIntensity: 0.4 });
   const concTex = concreteTex();
   const concMat = new THREE.MeshStandardMaterial({ map: concTex, roughness: 0.95 });
   const crateMat = new THREE.MeshStandardMaterial({ map: textures.wood, color: 0xc2a070, roughness: 0.85 });
@@ -1805,7 +1805,7 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
   wall('br_w_n1', -WX, WZ1, doorX - 1.8, WZ1, WH, -9.5, concWallB);
   wall('br_w_n2', doorX + 1.8, WZ1, WX, WZ1, WH, -9.5, concWallB);
   wall('br_w_nlintel', doorX - 1.8, WZ1, doorX + 1.8, WZ1, WH, MEZ_Y + 3.6, concWallB);
-  ceiling(-WX, WZ0, WX, WZ1, WH, new THREE.MeshStandardMaterial({ color: 0x3b3a36, roughness: 1, side: THREE.DoubleSide }), 4);
+  ceiling(-WX, WZ0, WX, WZ1, WH, new THREE.MeshStandardMaterial({ color: 0x3b3a36, roughness: 1 }), 4);
   voidPlane(-WX, WZ0 + 7, WX, WZ1 - MEZ_D, -8.5);
   // Ceiling lamps: they all go off (and come back) together
   const wareLamp = new THREE.MeshBasicMaterial({ color: 0xfffbe6 });
@@ -1843,7 +1843,7 @@ export function buildBackroomsWorld(level: number, root: THREE.Object3D, texture
   const NSEG = 4; // 0-2 real, 3 = a copy of 0 (what you see ahead before the loop takes you back)
   const CEND = LZ0 + NSEG * SEG;
   const corrLamp = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
-  const corrCeil = new THREE.MeshStandardMaterial({ color: 0x3b2222, roughness: 1, side: THREE.DoubleSide });
+  const corrCeil = new THREE.MeshStandardMaterial({ color: 0x3b2222, roughness: 1 });
   const cw = (id: string, z0: number, z1: number, side: number) => wall(id, doorX + side * 1.8, z0, doorX + side * 1.8, z1, CY + 4.2, CY - 9.5);
   // The corridor floor glows a little red, so the holes (pitch black) stand out while you run
   const redCarpetBase = P.build(new THREE.MeshStandardMaterial({ map: P.carpetMat.map, color: 0xd9c7a6, emissive: 0x3a120a, emissiveIntensity: 1, roughness: 1 }), 2.2, false);

@@ -418,8 +418,8 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
       {activeTab === 'play' && (
         <div className="relative flex-1 flex flex-col justify-between p-3 sm:p-6 pointer-events-none overflow-hidden">
           {/* Center Top Over Hero Character: Rank Badge + Name */}
-          <div className="flex flex-col items-center mt-2 sm:mt-4 pointer-events-auto">
-            <div className="flex items-center gap-2.5 bg-white/78 backdrop-blur-xl border border-white/80 px-3.5 py-1.5 rounded-2xl shadow-lg text-cozy-ink">
+          <div className="flex flex-col items-center mt-2 sm:mt-4 pointer-events-auto lobby-enter-down">
+            <div className="flex items-center gap-2.5 bg-white/78 backdrop-blur-xl border border-white/80 px-3.5 py-1.5 rounded-2xl shadow-lg text-cozy-ink transition-transform duration-300 hover:scale-[1.02]">
               <div className="w-7 h-7 rounded-lg bg-cozy-moss-soft border border-cozy-moss/35 flex items-center justify-center font-black text-xs text-[#26593f] tabular-nums">
                 {playerLevelNum}
               </div>
@@ -458,7 +458,9 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
                   type="button"
                   onClick={onOpenParty}
                   title={memberName ? `En sala: ${memberName}` : 'Invitar amigos / Sala multijugador'}
-                  className="pointer-events-auto group flex flex-col items-center gap-2 cursor-pointer"
+                  className={`pointer-events-auto group flex flex-col items-center gap-2 cursor-pointer ${
+                    slotIdx === 0 ? 'lobby-diamond-bob' : 'lobby-diamond-bob-delayed'
+                  }`}
                 >
                   <div
                     className={`w-12 h-12 rotate-45 flex items-center justify-center rounded-xl border transition-all backdrop-blur-xl shadow-lg ${
@@ -483,7 +485,10 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
 
           {/* Right Side: Compact Daily Missions Card */}
           {!portrait && (
-            <aside className="hidden lg:flex flex-col w-72 absolute right-5 top-6 pointer-events-auto bg-white/78 backdrop-blur-xl border border-white/75 rounded-2xl overflow-hidden shadow-xl text-cozy-ink">
+            <aside
+              className="hidden lg:flex flex-col w-72 absolute right-5 top-6 pointer-events-auto bg-white/78 backdrop-blur-xl border border-white/75 rounded-2xl overflow-hidden shadow-xl text-cozy-ink lobby-enter-up"
+              style={{ animationDelay: '70ms' }}
+            >
               <div className="px-3.5 py-2.5 bg-white/45 border-b border-cozy-line flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Gift className="w-4 h-4 text-cozy-accent-deep" />
@@ -556,7 +561,7 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
           {/* Bottom Row: Bottom-Left Mode/Level Selector + Play CTA | Bottom-Right Utility Dock */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-end justify-between gap-3 w-full">
             {/* Bottom-Left Mode Selector & READY/JUGAR CTA */}
-            <div className="flex flex-col gap-2 w-full sm:w-[300px] pointer-events-auto">
+            <div className="flex flex-col gap-2 w-full sm:w-[300px] pointer-events-auto lobby-enter-up">
               {rejoinSession && (
                 <div className="p-2.5 rounded-2xl bg-white/82 backdrop-blur-xl border border-amber-400/50 text-cozy-ink flex items-center justify-between gap-2 shadow-lg">
                   <div className="flex items-center gap-2 min-w-0">
@@ -619,7 +624,7 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
               <button
                 type="button"
                 onClick={() => onStartGame(pendingMode, pendingLevel)}
-                className="w-full py-3.5 px-6 rounded-2xl cozy-btn-primary active:scale-[0.99] font-display font-bold text-lg tracking-wider uppercase flex items-center justify-center gap-2.5 cursor-pointer"
+                className="relative overflow-hidden lobby-cta-sheen w-full py-3.5 px-6 rounded-2xl cozy-btn-primary active:scale-[0.99] font-display font-bold text-lg tracking-wider uppercase flex items-center justify-center gap-2.5 cursor-pointer transition-transform duration-200 hover:-translate-y-0.5"
               >
                 <Play className="w-5 h-5 fill-current" />
                 <span>{maxPlayableLevel() > 1 ? 'LISTO · JUGAR' : 'JUGAR'}</span>
@@ -632,7 +637,10 @@ export const ApexLobby: React.FC<ApexLobbyProps> = ({
             </div>
 
             {/* Bottom-Right Utility Icon Dock */}
-            <div className="flex items-center justify-end gap-2 pointer-events-auto">
+            <div
+              className="flex items-center justify-end gap-2 pointer-events-auto lobby-enter-up"
+              style={{ animationDelay: '90ms' }}
+            >
               <button
                 type="button"
                 onClick={() => onOpenLeaderboard(pendingLevel)}

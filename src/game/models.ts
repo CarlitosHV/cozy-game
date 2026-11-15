@@ -4,6 +4,7 @@
  * and varied PBR roughness/metalness. Zero external dependencies.
  */
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { ProceduralTextures } from './textures';
 import { CharacterAppearance, DEFAULT_APPEARANCE } from './character';
 import { getClothingPatternTexture } from './patterns';
@@ -12,6 +13,7 @@ export interface PlayerAnimOptions {
   velY?: number;
   isCrouching?: boolean;
   isSprinting?: boolean;
+  lobbyShowcase?: boolean;
 }
 
 export interface PlayerCharacterModel {
@@ -154,7 +156,6 @@ export function createPlayerCharacter(
     color: look.scarfColor,
     roughness: 0.8,
     metalness: 0.05,
-    side: THREE.DoubleSide,
   });
 
   const backpackMat = new THREE.MeshStandardMaterial({
@@ -228,7 +229,6 @@ export function createPlayerCharacter(
     color: look.detailColor,
     roughness: 0.8,
     metalness: 0.05,
-    side: THREE.DoubleSide,
   });
   const goldButtonMat = new THREE.MeshStandardMaterial({ color: 0xe9c46a, roughness: 0.3, metalness: 0.7 });
 
@@ -386,22 +386,33 @@ export function createPlayerCharacter(
       poncho.castShadow = true;
       torsoContent.add(poncho);
 
+      const stripeMat = new THREE.MeshStandardMaterial({
+        color: look.detailColor,
+        roughness: 0.8,
+        metalness: 0.05,
+        side: THREE.DoubleSide,
+      });
       for (const t of [0.45, 0.75]) {
         const band = 0.06;
         const stripe = new THREE.Mesh(
           new THREE.CylinderGeometry(radiusAt(t - band / 2) + 0.004, radiusAt(t + band / 2) + 0.004, H * band, 8, 1, true),
-          detailMat
+          stripeMat
         );
         stripe.position.y = TOP_Y - H * t;
         torsoContent.add(stripe);
       }
 
-      const fringeGeom = new THREE.BoxGeometry(0.018, 0.06, 0.018);
+      const fringeParts: THREE.BufferGeometry[] = [];
       for (let i = 0; i < 24; i++) {
         const a = (i / 24) * Math.PI * 2;
-        const f = new THREE.Mesh(fringeGeom, detailMat);
-        f.position.set(Math.sin(a) * (R_BOT - 0.01), TOP_Y - H - 0.025, Math.cos(a) * (R_BOT - 0.01));
-        torsoContent.add(f);
+        const fg = new THREE.BoxGeometry(0.018, 0.06, 0.018);
+        fg.translate(Math.sin(a) * (R_BOT - 0.01), TOP_Y - H - 0.025, Math.cos(a) * (R_BOT - 0.01));
+        fringeParts.push(fg);
+      }
+      const mergedFringe = mergeGeometries(fringeParts, false);
+      fringeParts.forEach((g) => g.dispose());
+      if (mergedFringe) {
+        torsoContent.add(new THREE.Mesh(mergedFringe, detailMat));
       }
       break;
     }
@@ -718,36 +729,39 @@ export function createPlayerCharacter(
 
   // Eyes
   const hlMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const eyeBlinkGroup = new THREE.Group();
+  eyeBlinkGroup.position.set(0, 0.97, 0);
+  headGroup.add(eyeBlinkGroup);
   if (look.eyeStyle === 'felices') {
     // Closed happy eyes: little ^ ^ arcs
     const arcGeom = new THREE.TorusGeometry(0.03, 0.009, 6, 10, Math.PI);
     const leftArc = new THREE.Mesh(arcGeom, eyeMat);
-    leftArc.position.set(0.08, 0.96, 0.205);
+    leftArc.position.set(0.08, -0.01, 0.205);
     const rightArc = new THREE.Mesh(arcGeom, eyeMat);
-    rightArc.position.set(-0.08, 0.96, 0.205);
-    headGroup.add(leftArc, rightArc);
+    rightArc.position.set(-0.08, -0.01, 0.205);
+    eyeBlinkGroup.add(leftArc, rightArc);
   } else {
     const big = look.eyeStyle === 'grandes';
     const eyeGeom = new THREE.SphereGeometry(big ? 0.045 : 0.035, 10, 10);
     const leftEye = new THREE.Mesh(eyeGeom, eyeMat);
-    leftEye.position.set(0.08, 0.97, big ? 0.185 : 0.19);
+    leftEye.position.set(0.08, 0, big ? 0.185 : 0.19);
     const rightEye = new THREE.Mesh(eyeGeom, eyeMat);
-    rightEye.position.set(-0.08, 0.97, big ? 0.185 : 0.19);
+    rightEye.position.set(-0.08, 0, big ? 0.185 : 0.19);
 
     // Eye highlights
     const hlGeom = new THREE.SphereGeometry(big ? 0.015 : 0.012, 6, 6);
     const leftHl = new THREE.Mesh(hlGeom, hlMat);
-    leftHl.position.set(0.09, 0.985, 0.215);
+    leftHl.position.set(0.09, 0.015, 0.215);
     const rightHl = new THREE.Mesh(hlGeom, hlMat);
-    rightHl.position.set(-0.07, 0.985, 0.215);
-    headGroup.add(leftEye, rightEye, leftHl, rightHl);
+    rightHl.position.set(-0.07, 0.015, 0.215);
+    eyeBlinkGroup.add(leftEye, rightEye, leftHl, rightHl);
     if (big) {
       const smallHlGeom = new THREE.SphereGeometry(0.007, 6, 6);
       const l2 = new THREE.Mesh(smallHlGeom, hlMat);
-      l2.position.set(0.068, 0.958, 0.222);
+      l2.position.set(0.068, -0.012, 0.222);
       const r2 = new THREE.Mesh(smallHlGeom, hlMat);
-      r2.position.set(-0.092, 0.958, 0.222);
-      headGroup.add(l2, r2);
+      r2.position.set(-0.092, -0.012, 0.222);
+      eyeBlinkGroup.add(l2, r2);
     }
   }
 
@@ -2028,6 +2042,8 @@ export function createPlayerCharacter(
   let wasGrounded = true;
   let prevVelY = 0;
   let landSquash = 0;
+  let lobbyBlend = 0;
+  let blinkTimer = 2.4;
 
   const updateAnimation = (
     speed: number,
@@ -2041,6 +2057,7 @@ export function createPlayerCharacter(
     const isCrouching = Boolean(options?.isCrouching);
     const isMoving = speed > 0.15;
     const isSprinting = Boolean(options?.isSprinting ?? speed > 7.4) && isMoving;
+    const isLobbyShowcase = Boolean(options?.lobbyShowcase) && !isMoving && isGrounded;
 
     // Detect touchdown to trigger elastic landing compression
     if (!wasGrounded && isGrounded) {
@@ -2055,8 +2072,20 @@ export function createPlayerCharacter(
     sprintBlend = THREE.MathUtils.damp(sprintBlend, isSprinting ? 1 : 0, 9, safeDt);
     crouchBlend = THREE.MathUtils.damp(crouchBlend, isCrouching ? 1 : 0, 14, safeDt);
     airBlend = THREE.MathUtils.damp(airBlend, isGrounded ? 0 : 1, 16, safeDt);
+    lobbyBlend = THREE.MathUtils.damp(lobbyBlend, isLobbyShowcase ? 1 : 0, 5.5, safeDt);
     landSquash = THREE.MathUtils.damp(landSquash, 0, 11, safeDt);
     velYSmoothed = THREE.MathUtils.damp(velYSmoothed, rawVelY, 14, safeDt);
+
+    // Subtle natural eye blink cycle
+    blinkTimer -= safeDt;
+    if (blinkTimer <= -0.15) {
+      blinkTimer = 3.2 + (Math.sin(idleTime * 1.7) * 0.5 + 0.5) * 2.2;
+    }
+    const blinkScaleY =
+      blinkTimer < 0
+        ? Math.max(0.12, Math.abs(Math.cos(((blinkTimer + 0.15) / 0.15) * Math.PI)))
+        : 1.0;
+    eyeBlinkGroup.scale.y = blinkScaleY;
 
     idleTime += safeDt;
     if (isMoving && isGrounded) {
@@ -2074,37 +2103,92 @@ export function createPlayerCharacter(
     const doubleStep = -Math.cos(walkCycle * 2); // -1 at mid-stance, +1 at float peak
     const breath = Math.sin(idleTime * 2.1);
 
-    // --- 1. Grounded Pose Targets (Idle <-> Walk <-> Sprint + Crouch) ---
+    // Lobby showcase emotes: every 9s play a smooth 2.4s friendly character animation
+    const cyclePeriod = 9.0;
+    const cyclePos = idleTime % cyclePeriod;
+    const cycleIdx = Math.floor(idleTime / cyclePeriod) % 3;
+    let emoteWave = 0;
+    let emoteLookout = 0;
+    let emoteBounce = 0;
+    if (lobbyBlend > 0.01 && cyclePos > 5.8 && cyclePos < 8.4) {
+      const u = (cyclePos - 5.8) / 2.6;
+      const env = Math.sin(u * Math.PI);
+      const smoothEnv = env * env * (3 - 2 * env);
+      if (cycleIdx === 0) emoteWave = smoothEnv * lobbyBlend;
+      else if (cycleIdx === 1) emoteLookout = smoothEnv * lobbyBlend;
+      else emoteBounce = smoothEnv * lobbyBlend;
+    }
+
+    // --- 1. Grounded Pose Targets (Idle <-> Walk <-> Sprint + Crouch + Lobby Hero) ---
     const hipAmp = THREE.MathUtils.lerp(0.58, 0.96, sprintBlend) * strideAmp * (1 - crouchBlend * 0.28);
     const armAmp = THREE.MathUtils.lerp(0.52, 0.98, sprintBlend) * strideAmp * (1 - crouchBlend * 0.25);
 
-    const groundHipLX = -swing * hipAmp * moveBlend - crouchBlend * 0.34;
-    const groundHipRX = swing * hipAmp * moveBlend - crouchBlend * 0.34;
+    const idleShift = Math.sin(idleTime * 0.95) * 0.045 * lobbyBlend * (1 - moveBlend);
+    const groundHipLX =
+      -swing * hipAmp * moveBlend - crouchBlend * 0.34 + idleShift - emoteBounce * 0.14;
+    const groundHipRX =
+      swing * hipAmp * moveBlend - crouchBlend * 0.34 - idleShift - emoteBounce * 0.14;
     const liftAmp = THREE.MathUtils.lerp(0.05, 0.09, sprintBlend) * strideAmp * moveBlend;
-    const groundLegLY = -0.2 + Math.max(0, cosSwing) * liftAmp + crouchBlend * 0.05;
-    const groundLegRY = -0.2 + Math.max(0, -cosSwing) * liftAmp + crouchBlend * 0.05;
+    const groundLegLY =
+      -0.2 + Math.max(0, cosSwing) * liftAmp + crouchBlend * 0.05 + emoteBounce * 0.03;
+    const groundLegRY =
+      -0.2 + Math.max(0, -cosSwing) * liftAmp + crouchBlend * 0.05 + emoteBounce * 0.03;
     const groundAnkleLX = cosSwing * 0.26 * strideAmp * moveBlend + crouchBlend * 0.24;
     const groundAnkleRX = -cosSwing * 0.26 * strideAmp * moveBlend + crouchBlend * 0.24;
 
+    const waveMotion = Math.sin(idleTime * 7.8) * 0.24;
     const armPumpBase = THREE.MathUtils.lerp(-0.04, -0.34, sprintBlend) * moveBlend - crouchBlend * 0.22;
     const groundArmLX =
-      armPumpBase + swing * armAmp * moveBlend + Math.sin(idleTime * 2.1 + 0.4) * 0.035 * (1 - moveBlend);
+      armPumpBase +
+      swing * armAmp * moveBlend +
+      Math.sin(idleTime * 2.1 + 0.4) * 0.04 * (1 - moveBlend) -
+      emoteLookout * 1.48 -
+      emoteBounce * 0.35;
     const groundArmRX =
-      armPumpBase - swing * armAmp * moveBlend - Math.sin(idleTime * 2.1 + 0.4) * 0.035 * (1 - moveBlend);
-    const groundArmSplay = 0.13 + sprintBlend * 0.07 * moveBlend + landSquash * 0.2 + crouchBlend * 0.08;
+      armPumpBase -
+      swing * armAmp * moveBlend -
+      Math.sin(idleTime * 2.1 + 0.4) * 0.04 * (1 - moveBlend) -
+      emoteWave * 1.95 -
+      emoteBounce * 0.35;
+    const groundArmSplayL =
+      0.13 +
+      sprintBlend * 0.07 * moveBlend +
+      landSquash * 0.2 +
+      crouchBlend * 0.08 +
+      lobbyBlend * 0.04 +
+      emoteLookout * 0.16 +
+      emoteBounce * 0.22;
+    const groundArmSplayR =
+      0.13 +
+      sprintBlend * 0.07 * moveBlend +
+      landSquash * 0.2 +
+      crouchBlend * 0.08 +
+      lobbyBlend * 0.04 +
+      emoteWave * (0.42 + waveMotion) +
+      emoteBounce * 0.22;
 
+    const bounceArc = Math.abs(Math.sin(idleTime * 4.2)) * 0.055 * emoteBounce;
     const groundBounce =
       doubleStep * THREE.MathUtils.lerp(0.022, 0.046, sprintBlend) * strideAmp * moveBlend +
-      breath * 0.008 * (1 - moveBlend);
+      breath * 0.009 * (1 - moveBlend) +
+      bounceArc;
     const groundTorsoY = 0.36 + groundBounce - crouchBlend * 0.14 - landSquash * 0.11;
     const groundTorsoRotX =
       THREE.MathUtils.lerp(0.09, 0.27, sprintBlend) * strideAmp * moveBlend +
       0.02 * (1 - moveBlend) +
       crouchBlend * 0.28 +
-      landSquash * 0.18;
-    const groundTorsoRotY = swing * THREE.MathUtils.lerp(0.06, 0.12, sprintBlend) * strideAmp * moveBlend;
+      landSquash * 0.18 -
+      emoteWave * 0.05 -
+      emoteBounce * 0.06;
+    const groundTorsoRotY =
+      swing * THREE.MathUtils.lerp(0.06, 0.12, sprintBlend) * strideAmp * moveBlend +
+      Math.sin(idleTime * 0.65) * 0.07 * lobbyBlend * (1 - moveBlend) +
+      emoteLookout * 0.22 -
+      emoteWave * 0.12;
     const groundTorsoRotZ =
-      -swing * 0.04 * strideAmp * moveBlend + Math.sin(idleTime * 1.05) * 0.022 * (1 - moveBlend);
+      -swing * 0.04 * strideAmp * moveBlend +
+      Math.sin(idleTime * 0.95) * 0.032 * (1 - moveBlend) +
+      emoteWave * 0.08;
 
     // --- 2. Airborne Pose Targets (Takeoff -> Apex -> Falling) ---
     const upFactor = THREE.MathUtils.clamp(velYSmoothed / 8.5, 0, 1);
@@ -2142,9 +2226,8 @@ export function createPlayerCharacter(
 
     leftArm.rotation.x = THREE.MathUtils.lerp(groundArmLX, airArmLX, airBlend);
     rightArm.rotation.x = THREE.MathUtils.lerp(groundArmRX, airArmRX, airBlend);
-    const armSplay = THREE.MathUtils.lerp(groundArmSplay, airArmSplay, airBlend);
-    leftArm.rotation.z = armSplay;
-    rightArm.rotation.z = -armSplay;
+    leftArm.rotation.z = THREE.MathUtils.lerp(groundArmSplayL, airArmSplay, airBlend);
+    rightArm.rotation.z = -THREE.MathUtils.lerp(groundArmSplayR, airArmSplay, airBlend);
 
     torsoPivot.position.y = THREE.MathUtils.lerp(groundTorsoY, airTorsoY, airBlend);
     torsoPivot.rotation.x = THREE.MathUtils.lerp(groundTorsoRotX, airTorsoRotX, airBlend);
@@ -2164,8 +2247,14 @@ export function createPlayerCharacter(
     );
 
     // Head counter-balances torso lean so the character always looks ahead naturally
-    const idleLookY = Math.sin(idleTime * 0.72) * 0.06 * (1 - moveBlend) * (1 - airBlend);
-    const idleLookX = Math.sin(idleTime * 1.35) * 0.025 * (1 - moveBlend) * (1 - airBlend);
+    const idleLookY =
+      (Math.sin(idleTime * 0.72) * 0.08 + emoteLookout * Math.sin(idleTime * 1.9) * 0.25) *
+      (1 - moveBlend) *
+      (1 - airBlend);
+    const idleLookX =
+      (Math.sin(idleTime * 1.35) * 0.025 - emoteLookout * 0.06 - emoteWave * 0.04) *
+      (1 - moveBlend) *
+      (1 - airBlend);
     headPivot.position.y = 0.84 + doubleStep * 0.01 * moveBlend * (1 - airBlend) - landSquash * 0.02;
     headPivot.rotation.x =
       -torsoPivot.rotation.x * 0.62 +
@@ -2173,7 +2262,7 @@ export function createPlayerCharacter(
       (cosSwing * 0.025 * moveBlend * (1 - airBlend)) +
       (0.12 * fallFactor - 0.08 * upFactor) * airBlend;
     headPivot.rotation.y = -torsoPivot.rotation.y * 0.65 + idleLookY;
-    headPivot.rotation.z = -torsoPivot.rotation.z * 0.5;
+    headPivot.rotation.z = -torsoPivot.rotation.z * 0.5 + emoteWave * 0.1;
 
     // Lantern pendulum inertia
     const targetLanternX =
@@ -2399,90 +2488,163 @@ export function createBouncyMushroom(radius: number = 1.2, textures: ProceduralT
 }
 
 // --- Cozy Trees (Cherry Blossom Sakura / Autumn Amber) ---
+type TreeType = 'sakura' | 'autumn' | 'pine';
+interface SharedTreeCache {
+  trunkGeom: THREE.BufferGeometry;
+  foliageGeoms: THREE.BufferGeometry[];
+  cordGeom: THREE.BufferGeometry;
+  lanternGeom: THREE.BufferGeometry;
+  shadowGeom: THREE.BufferGeometry;
+  cordMat: THREE.MeshBasicMaterial;
+  woodMats: WeakMap<THREE.Texture, THREE.MeshStandardMaterial>;
+  shadowMats: WeakMap<THREE.Texture, THREE.MeshBasicMaterial>;
+  leafMats: Record<TreeType, THREE.MeshStandardMaterial[]>;
+  lanternMats: Record<TreeType, THREE.MeshBasicMaterial>;
+}
+let sharedTreeCache: SharedTreeCache | null = null;
+
+function getSharedTreeCache(): SharedTreeCache {
+  if (sharedTreeCache) return sharedTreeCache;
+
+  const trunk1 = new THREE.CylinderGeometry(0.28, 0.42, 2.2, 8);
+  trunk1.translate(0, 1.1, 0);
+  const branch = new THREE.CylinderGeometry(0.18, 0.25, 1.4, 8);
+  branch.translate(0, 0.7, 0);
+  branch.rotateZ(0.45);
+  branch.rotateY(0.5);
+  branch.translate(0, 1.8, 0);
+  const trunkGeom = mergeGeometries([trunk1, branch], false)!;
+  trunk1.dispose();
+  branch.dispose();
+  trunkGeom.userData.shared = true;
+
+  // Group 5 foliage blobs by color index (0, 1, 2) -> 3 merged meshes instead of 5
+  const blobDefs: [number, number, number, number, number][] = [
+    [0, 2.6, 0, 1.2, 0],
+    [0.2, 3.2, -0.2, 0.95, 0],
+    [0.7, 2.7, 0.3, 0.9, 1],
+    [-0.3, 2.8, 0.5, 0.8, 1],
+    [-0.6, 2.5, -0.4, 0.85, 2],
+  ];
+  const byColor: THREE.BufferGeometry[][] = [[], [], []];
+  for (const [x, y, z, rad, cIdx] of blobDefs) {
+    const g = new THREE.DodecahedronGeometry(rad, 1);
+    g.translate(x, y, z);
+    byColor[cIdx].push(g);
+  }
+  const foliageGeoms = byColor.map((parts) => {
+    const merged = mergeGeometries(parts, false)!;
+    parts.forEach((p) => p.dispose());
+    merged.userData.shared = true;
+    return merged;
+  });
+
+  const cordGeom = new THREE.CylinderGeometry(0.01, 0.01, 0.35, 4);
+  cordGeom.userData.shared = true;
+  const lanternGeom = new THREE.SphereGeometry(0.14, 8, 8);
+  lanternGeom.userData.shared = true;
+  const shadowGeom = new THREE.PlaneGeometry(2.8, 2.8);
+  shadowGeom.userData.shared = true;
+
+  const cordMat = new THREE.MeshBasicMaterial({ color: 0x4a3b32 });
+  cordMat.userData.shared = true;
+
+  const leafColors: Record<TreeType, number[]> = {
+    sakura: [0xffb7c5, 0xffc2d1, 0xff9ebb],
+    autumn: [0xee8937, 0xd05322, 0xf6ad3c],
+    pine: [0x4f772d, 0x31572c, 0x90a955],
+  };
+  const leafMats = {} as Record<TreeType, THREE.MeshStandardMaterial[]>;
+  const lanternMats = {} as Record<TreeType, THREE.MeshBasicMaterial>;
+  for (const key of ['sakura', 'autumn', 'pine'] as TreeType[]) {
+    leafMats[key] = leafColors[key].map((col) => {
+      const m = new THREE.MeshStandardMaterial({
+        color: col,
+        roughness: 0.85,
+        metalness: 0.05,
+        flatShading: true,
+      });
+      m.userData.shared = true;
+      return m;
+    });
+    const lm = new THREE.MeshBasicMaterial({
+      color: key === 'sakura' ? 0xffe0e6 : 0xffe6a7,
+    });
+    lm.userData.shared = true;
+    lanternMats[key] = lm;
+  }
+
+  sharedTreeCache = {
+    trunkGeom,
+    foliageGeoms,
+    cordGeom,
+    lanternGeom,
+    shadowGeom,
+    cordMat,
+    woodMats: new WeakMap(),
+    shadowMats: new WeakMap(),
+    leafMats,
+    lanternMats,
+  };
+  return sharedTreeCache;
+}
+
 export function createCozyTree(
   type: 'sakura' | 'autumn' | 'pine',
   scale: number = 1.0,
   textures: ProceduralTextures
 ): THREE.Group {
+  const cache = getSharedTreeCache();
   const group = new THREE.Group();
+  group.scale.setScalar(scale);
 
-  const woodMat = new THREE.MeshStandardMaterial({
-    map: textures.wood,
-    roughness: 0.8,
-    metalness: 0.1,
-  });
-
-  const leafColors = {
-    sakura: [0xffb7c5, 0xffc2d1, 0xff9ebb],
-    autumn: [0xee8937, 0xd05322, 0xf6ad3c],
-    pine: [0x4f772d, 0x31572c, 0x90a955],
-  };
-  const colors = leafColors[type];
-
-  // 1. Trunk (composite 2-part twisted trunk)
-  const trunkGeom1 = new THREE.CylinderGeometry(0.28 * scale, 0.42 * scale, 2.2 * scale, 8);
-  trunkGeom1.translate(0, 1.1 * scale, 0);
-  const trunk1 = new THREE.Mesh(trunkGeom1, woodMat);
-  trunk1.castShadow = true;
-  trunk1.receiveShadow = true;
-  group.add(trunk1);
-
-  // Branch fork
-  const branchGeom = new THREE.CylinderGeometry(0.18 * scale, 0.25 * scale, 1.4 * scale, 8);
-  branchGeom.translate(0, 0.7 * scale, 0);
-  const branch = new THREE.Mesh(branchGeom, woodMat);
-  branch.position.set(0, 1.8 * scale, 0);
-  branch.rotation.z = 0.45;
-  branch.rotation.y = 0.5;
-  branch.castShadow = true;
-  group.add(branch);
-
-  // 2. Foliage blobs (4-5 overlapping soft cloud-like spheres)
-  const blobOffsets = [
-    [0, 2.6 * scale, 0, 1.2 * scale, colors[0]],
-    [0.7 * scale, 2.7 * scale, 0.3 * scale, 0.9 * scale, colors[1]],
-    [-0.6 * scale, 2.5 * scale, -0.4 * scale, 0.85 * scale, colors[2]],
-    [0.2 * scale, 3.2 * scale, -0.2 * scale, 0.95 * scale, colors[0]],
-    [-0.3 * scale, 2.8 * scale, 0.5 * scale, 0.8 * scale, colors[1]],
-  ];
-
-  blobOffsets.forEach(([x, y, z, rad, col]) => {
-    const geom = new THREE.DodecahedronGeometry(rad as number, 1);
-    const mat = new THREE.MeshStandardMaterial({
-      color: col as number,
-      roughness: 0.85,
-      metalness: 0.05,
-      flatShading: true,
+  let woodMat = cache.woodMats.get(textures.wood);
+  if (!woodMat) {
+    woodMat = new THREE.MeshStandardMaterial({
+      map: textures.wood,
+      roughness: 0.8,
+      metalness: 0.1,
     });
-    const foliage = new THREE.Mesh(geom, mat);
-    foliage.position.set(x as number, y as number, z as number);
-    foliage.castShadow = true;
+    woodMat.userData.shared = true;
+    cache.woodMats.set(textures.wood, woodMat);
+  }
+
+  let shadowMat = cache.shadowMats.get(textures.shadow);
+  if (!shadowMat) {
+    shadowMat = new THREE.MeshBasicMaterial({
+      map: textures.shadow,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false,
+    });
+    shadowMat.userData.shared = true;
+    cache.shadowMats.set(textures.shadow, shadowMat);
+  }
+
+  // 1. Merged Trunk + Branch
+  const trunk = new THREE.Mesh(cache.trunkGeom, woodMat);
+  trunk.castShadow = true;
+  trunk.receiveShadow = true;
+  group.add(trunk);
+
+  // 2. Merged Foliage Clusters (cast shadow on main crown only to trim shadow-map vertices)
+  const mats = cache.leafMats[type];
+  for (let i = 0; i < cache.foliageGeoms.length; i++) {
+    const foliage = new THREE.Mesh(cache.foliageGeoms[i], mats[i]);
+    if (i === 0) foliage.castShadow = true;
     group.add(foliage);
-  });
+  }
 
   // 3. Hanging paper lantern on branch
-  const cordGeom = new THREE.CylinderGeometry(0.01, 0.01, 0.35 * scale, 4);
-  const cordMat = new THREE.MeshBasicMaterial({ color: 0x4a3b32 });
-  const cord = new THREE.Mesh(cordGeom, cordMat);
-  cord.position.set(0.6 * scale, 2.1 * scale, 0.25 * scale);
+  const cord = new THREE.Mesh(cache.cordGeom, cache.cordMat);
+  cord.position.set(0.6, 2.1, 0.25);
 
-  const lanternGeom = new THREE.SphereGeometry(0.14 * scale, 8, 8);
-  const lanternMat = new THREE.MeshBasicMaterial({
-    color: type === 'sakura' ? 0xffe0e6 : 0xffe6a7,
-  });
-  const lantern = new THREE.Mesh(lanternGeom, lanternMat);
-  lantern.position.set(0.6 * scale, 1.9 * scale, 0.25 * scale);
+  const lantern = new THREE.Mesh(cache.lanternGeom, cache.lanternMats[type]);
+  lantern.position.set(0.6, 1.9, 0.25);
   group.add(cord, lantern);
 
   // Contact shadow
-  const shadowGeom = new THREE.PlaneGeometry(2.8 * scale, 2.8 * scale);
-  const shadowMat = new THREE.MeshBasicMaterial({
-    map: textures.shadow,
-    transparent: true,
-    opacity: 0.45,
-    depthWrite: false,
-  });
-  const shadow = new THREE.Mesh(shadowGeom, shadowMat);
+  const shadow = new THREE.Mesh(cache.shadowGeom, shadowMat);
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.y = 0.02;
   group.add(shadow);
@@ -2614,11 +2776,10 @@ export function createCheckpointShrine(textures: ProceduralTextures): Checkpoint
   );
   clapperBall.position.set(0, -0.35, 0);
 
-  // Dangling talisman / ribbon beneath the bell
+  // Dangling talisman / ribbon beneath the bell (closed thin box: FrontSide renders both sides)
   const ribbonMat = new THREE.MeshStandardMaterial({
     color: 0xd97706,
     roughness: 0.6,
-    side: THREE.DoubleSide,
   });
   const ribbon = new THREE.Mesh(
     new THREE.BoxGeometry(0.05, 0.22, 0.004),
@@ -2647,7 +2808,6 @@ export function createCheckpointShrine(textures: ProceduralTextures): Checkpoint
     color: 0xfbbf24,
     transparent: true,
     opacity: 0,
-    side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
@@ -2656,13 +2816,12 @@ export function createCheckpointShrine(textures: ProceduralTextures): Checkpoint
   shockwave.position.y = 0.48;
   group.add(shockwave);
 
-  // Celestial upward beacon column that appears on activation
+  // Celestial upward beacon column that appears on activation (FrontSide avoids double-additive fill)
   const beaconGeom = new THREE.CylinderGeometry(0.35, 0.6, 7.0, 16, 1, true);
   const beaconMat = new THREE.MeshBasicMaterial({
     color: 0xfef08a,
     transparent: true,
     opacity: 0,
-    side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
@@ -2986,7 +3145,7 @@ export function createVictoryPortal(
   });
   const vortexRing1 = new THREE.Mesh(vortexGeom, vortexMat);
   vortexRing1.position.set(0, 1.8 + 0.28, 0);
-  const vortexRing2 = new THREE.Mesh(vortexGeom, vortexMat.clone());
+  const vortexRing2 = new THREE.Mesh(vortexGeom, vortexMat);
   vortexRing2.scale.setScalar(0.65);
   vortexRing2.position.set(0, 1.8 + 0.28, 0);
   group.add(vortexRing1, vortexRing2);
@@ -3036,7 +3195,6 @@ export function createVictoryPortal(
     map: beamGradientTex,
     transparent: true,
     opacity: 0.35,
-    side: THREE.DoubleSide,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
@@ -3170,7 +3328,12 @@ export function createCollectible(
 
   const update = (dt: number) => {
     if (isCollected) {
-      group.scale.multiplyScalar(Math.max(0, 1 - dt * 8));
+      if (!group.visible) return;
+      group.scale.multiplyScalar(Math.max(0, 1 - dt * 10));
+      if (group.scale.x <= 0.03) {
+        group.scale.set(0, 0, 0);
+        group.visible = false;
+      }
       return;
     }
     time += dt;

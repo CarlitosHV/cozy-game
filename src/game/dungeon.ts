@@ -79,6 +79,7 @@ export class MiniBoss {
   private dropped = false;
   private animT = 0;
   private glitchTick: ((time: number) => void) | null = null;
+  private readonly tmpV = new THREE.Vector3();
   /** Gate bars (solid while you're locked in) */
   public gate: { bars: THREE.Group; colliders: SolidObstacleCollider[]; locked: boolean; y: number };
 
@@ -195,6 +196,23 @@ export class MiniBoss {
   private place() {
     this.group.position.set(this.pos.x, this.pos.y + this.hover, this.pos.z);
     this.group.rotation.y = this.yaw;
+  }
+
+  public setVisible(v: boolean) {
+    if (this.defeated && this.t >= 0.8) {
+      this.group.visible = false;
+      this.tele.visible = false;
+      this.wave.visible = false;
+      return;
+    }
+    this.group.visible = v;
+    if (!v) {
+      this.tele.visible = false;
+      this.wave.visible = false;
+    } else {
+      this.tele.visible = this.state === 'windup';
+      this.wave.visible = this.waveT >= 0;
+    }
   }
 
   setGate(locked: boolean) {
@@ -314,10 +332,11 @@ export class MiniBoss {
     this.body.rotation.z = 0;
 
     this.t += dt;
-    const toP = new THREE.Vector3(P.x - this.pos.x, 0, P.z - this.pos.z);
-    const distP = toP.length();
+    const toPX = P.x - this.pos.x;
+    const toPZ = P.z - this.pos.z;
+    const distP = Math.hypot(toPX, toPZ);
     const faceP = () => {
-      const want = Math.atan2(toP.x, toP.z);
+      const want = Math.atan2(toPX, toPZ);
       let d = want - this.yaw;
       d = Math.atan2(Math.sin(d), Math.cos(d));
       this.yaw += d * Math.min(1, dt * 6);
@@ -328,11 +347,19 @@ export class MiniBoss {
       case 'idle': {
         if (inside) {
           faceP();
-          if (distP > 2.2) this.moveBy(toP.normalize().multiplyScalar(1.3 * dt));
+          if (distP > 2.2) {
+            const inv = (1.3 * dt) / (distP || 1);
+            this.moveBy(this.tmpV.set(toPX * inv, 0, toPZ * inv));
+          }
         } else {
           // Nobody in the ring: wander back to the middle
-          const home = new THREE.Vector3(this.center.x - this.pos.x, 0, this.center.z - this.pos.z);
-          if (home.length() > 0.3) this.moveBy(home.normalize().multiplyScalar(1.2 * dt));
+          const hx = this.center.x - this.pos.x;
+          const hz = this.center.z - this.pos.z;
+          const hLen = Math.hypot(hx, hz);
+          if (hLen > 0.3) {
+            const inv = (1.2 * dt) / hLen;
+            this.moveBy(this.tmpV.set(hx * inv, 0, hz * inv));
+          }
         }
         if (inside && this.t > 1.5 * fast) {
           this.t = 0;
@@ -365,7 +392,7 @@ export class MiniBoss {
         break;
       }
       case 'charge': {
-        this.moveBy(this.dir.clone().multiplyScalar(8.5 * dt), false);
+        this.moveBy(this.tmpV.copy(this.dir).multiplyScalar(8.5 * dt), false);
         if (distP < this.bodyR + 0.45 && Math.abs(P.y - this.floorY) < this.height && this.hitCooldown <= 0) {
           this.hitCooldown = 0.8;
           ctx.knock(this.dir.x * 13, 6, this.dir.z * 13);
@@ -510,9 +537,29 @@ export class DungeonSystem {
   private downCooldown = 0;
   /** Last checkpoint stone reached in each basement */
   private cellarCp = new Map<number, number>();
+  private readonly _cullSphere = new THREE.Sphere();
 
   load(data: DungeonData | undefined) {
     this.data = data ?? emptyDungeon();
+  }
+
+  updateCulling(frustum: THREE.Frustum, camPos: THREE.Vector3, maxDist: number) {
+    const bosses = this.data.miniBosses;
+    if (!bosses.length) return;
+    const limSq = (maxDist + 8) * (maxDist + 8);
+    for (let i = 0; i < bosses.length; i++) {
+      const b = bosses[i];
+      const dx = b.pos.x - camPos.x;
+      const dy = b.pos.y - camPos.y;
+      const dz = b.pos.z - camPos.z;
+      let vis = dx * dx + dy * dy + dz * dz <= limSq;
+      if (vis) {
+        this._cullSphere.center.set(b.pos.x, b.pos.y + 1.5, b.pos.z);
+        this._cullSphere.radius = 6.0;
+        vis = frustum.intersectsSphere(this._cullSphere);
+      }
+      b.setVisible(vis);
+    }
   }
 
   get miniBosses(): MiniBoss[] {

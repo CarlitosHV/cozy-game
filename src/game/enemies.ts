@@ -1028,6 +1028,9 @@ export class EnemyManager {
 
       // 1. Zephyr Puff Wind Gust Blast Check (strictly bounded to visible windCone funnel)
       if (!distracted && enemy.type === 'zephyr_puff' && enemy.isBlowing) {
+        const roughDx = playerPosition.x - enemy.position.x;
+        const roughDz = playerPosition.z - enemy.position.z;
+        if (roughDx * roughDx + roughDz * roughDz > 36) continue;
         const cone = enemy.animParts.windCone;
         if (cone) {
           enemy.group.updateMatrixWorld(true);
@@ -1264,7 +1267,6 @@ export class AetherStalker {
       color: 0x1f1238,
       roughness: 0.5,
       metalness: 0.5,
-      side: THREE.DoubleSide,
     });
 
     this.leftWing = new THREE.Group();
@@ -1342,18 +1344,21 @@ export class AetherStalker {
 
       // Keep distance to player updated during stun so HUD is never frozen
       const stunTargetY = playerPos.y + 0.9 + Math.sin(time * 3) * 0.25;
-      const stunTarget = new THREE.Vector3(playerPos.x, stunTargetY, playerPos.z);
-      const stunDist = this.position.distanceTo(stunTarget);
+      const dxS = playerPos.x - this.position.x;
+      const dyS = stunTargetY - this.position.y;
+      const dzS = playerPos.z - this.position.z;
+      const stunDist = Math.hypot(dxS, dyS, dzS);
       this.distanceToPlayer = stunDist;
       this.warningLevel = stunDist < 8.0 ? 'danger' : stunDist < 18.0 ? 'caution' : 'none';
       return;
     }
 
-    // 2. Vector pursuit toward player
+    // 2. Vector pursuit toward player (zero heap allocations)
     const targetY = playerPos.y + 0.9 + Math.sin(time * 3) * 0.25;
-    const target = new THREE.Vector3(playerPos.x, targetY, playerPos.z);
-    const toPlayer = new THREE.Vector3().subVectors(target, this.position);
-    const dist = toPlayer.length();
+    const dx = playerPos.x - this.position.x;
+    const dy = targetY - this.position.y;
+    const dz = playerPos.z - this.position.z;
+    const dist = Math.hypot(dx, dy, dz) || 1e-6;
     this.distanceToPlayer = dist;
 
     // Update Proximity Warning Level
@@ -1378,9 +1383,14 @@ export class AetherStalker {
     }
 
     // Steering velocity
-    const dir = toPlayer.clone().normalize();
-    const desiredVel = dir.multiplyScalar(desiredSpeed);
-    this.velocity.lerp(desiredVel, Math.min(1.0, dt * 3.2));
+    const invDist = 1 / dist;
+    const dirX = dx * invDist;
+    const dirY = dy * invDist;
+    const dirZ = dz * invDist;
+    const alpha = Math.min(1.0, dt * 3.2);
+    this.velocity.x += (dirX * desiredSpeed - this.velocity.x) * alpha;
+    this.velocity.y += (dirY * desiredSpeed - this.velocity.y) * alpha;
+    this.velocity.z += (dirZ * desiredSpeed - this.velocity.z) * alpha;
     this.position.addScaledVector(this.velocity, dt);
     this.group.position.copy(this.position);
 
@@ -1409,7 +1419,9 @@ export class AetherStalker {
       this.stunTimer = 2.5;
 
       // Recoil stalker backward
-      this.position.sub(dir.multiplyScalar(7.5));
+      this.position.x -= dirX * 7.5;
+      this.position.y -= dirY * 7.5;
+      this.position.z -= dirZ * 7.5;
       this.group.position.copy(this.position);
 
       soundManager.playEnemyBonk();

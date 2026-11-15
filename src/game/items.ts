@@ -219,7 +219,7 @@ function createBerryModel(): { group: THREE.Group; halo: THREE.Mesh } {
     shine.position.set(x + 0.05, y + 0.06, z + 0.07);
     group.add(b, shine);
   }
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x4f9d4a, roughness: 0.7, side: THREE.DoubleSide });
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x4f9d4a, roughness: 0.7 });
   for (const side of [1, -1]) {
     const leafGeom = new THREE.SphereGeometry(0.1, 8, 6);
     leafGeom.scale(1.4, 0.25, 0.7);
@@ -392,6 +392,7 @@ export class ItemSystem {
   private root: THREE.Object3D;
   private eventId = 0;
   private eventText = '';
+  private readonly _cullSphere = new THREE.Sphere();
 
   constructor(root: THREE.Object3D) {
     this.root = root;
@@ -459,6 +460,26 @@ export class ItemSystem {
   public setVisible(visible: boolean) {
     for (const p of this.pickups) {
       p.group.visible = visible && p.available;
+    }
+  }
+
+  /** Frustum + distance culling for world item pickups. */
+  public updateCulling(frustum: THREE.Frustum, camPos: THREE.Vector3, maxDist: number) {
+    const limSq = (maxDist + 2) * (maxDist + 2);
+    for (let i = 0; i < this.pickups.length; i++) {
+      const p = this.pickups[i];
+      if (!p.available) continue;
+      const pos = p.group.position;
+      const dx = pos.x - camPos.x;
+      const dy = pos.y - camPos.y;
+      const dz = pos.z - camPos.z;
+      if (dx * dx + dy * dy + dz * dz > limSq) {
+        p.group.visible = false;
+        continue;
+      }
+      this._cullSphere.center.copy(pos);
+      this._cullSphere.radius = 1.4;
+      p.group.visible = frustum.intersectsSphere(this._cullSphere);
     }
   }
 
@@ -774,11 +795,13 @@ export class ItemSystem {
         }
         continue;
       }
-      p.phase += dt;
       p.fullWarnCooldown = Math.max(0, p.fullWarnCooldown - dt);
-      p.group.position.y = p.baseY + Math.sin(p.phase * 2.6) * 0.12;
-      p.group.rotation.y += dt * 1.4;
-      (p.halo.material as THREE.MeshBasicMaterial).opacity = 0.45 + Math.sin(p.phase * 5) * 0.2;
+      if (p.group.visible) {
+        p.phase += dt;
+        p.group.position.y = p.baseY + Math.sin(p.phase * 2.6) * 0.12;
+        p.group.rotation.y += dt * 1.4;
+        (p.halo.material as THREE.MeshBasicMaterial).opacity = 0.45 + Math.sin(p.phase * 5) * 0.2;
+      }
 
       const dx = p.group.position.x - playerPos.x;
       const dz = p.group.position.z - playerPos.z;

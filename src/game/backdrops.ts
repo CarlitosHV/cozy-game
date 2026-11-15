@@ -603,16 +603,16 @@ function castle(g: THREE.Group, rng: Rng): Backdrop['update'] {
   const c = new THREE.Group();
   c.position.copy(at(1.2, R - 8, -40));
   c.add(mesh(new THREE.ConeGeometry(38, 55, 6), darker, new THREE.Vector3(0, 27, 0)));
-  const winMat = basic(0xffc861);
-  const windows: THREE.Mesh[] = [];
+  const winMatA = basic(0xffc861);
+  const winMatB = basic(0xffc861);
+  let winIdx = 0;
   const towerAt = (x: number, z: number, h: number, r: number) => {
     c.add(mesh(new THREE.CylinderGeometry(r, r * 1.1, h, 10), dark, new THREE.Vector3(x, 50 + h / 2, z)));
     c.add(mesh(new THREE.ConeGeometry(r * 1.35, r * 3.2, 10), darker, new THREE.Vector3(x, 50 + h + r * 1.6, z)));
     for (let k = 0; k < 3; k++) {
       if (rng() < 0.3) continue;
-      const w = mesh(new THREE.PlaneGeometry(1.2, 2), winMat.clone(), new THREE.Vector3(x, 52 + (k + 0.5) * (h / 3.2), z + r + 0.05));
+      const w = mesh(new THREE.PlaneGeometry(1.2, 2), winIdx++ % 2 === 0 ? winMatA : winMatB, new THREE.Vector3(x, 52 + (k + 0.5) * (h / 3.2), z + r + 0.05));
       c.add(w);
-      windows.push(w);
     }
   };
   c.add(mesh(new THREE.BoxGeometry(40, 18, 14), dark, new THREE.Vector3(0, 58, 0)));
@@ -623,9 +623,8 @@ function castle(g: THREE.Group, rng: Rng): Backdrop['update'] {
   towerAt(-9, 5, 22, 3);
   towerAt(11, 5, 18, 3);
   for (let k = 0; k < 6; k++) {
-    const w = mesh(new THREE.PlaneGeometry(1.6, 2.4), winMat.clone(), new THREE.Vector3(-15 + k * 6, 58, 7.05));
+    const w = mesh(new THREE.PlaneGeometry(1.6, 2.4), winIdx++ % 2 === 0 ? winMatA : winMatB, new THREE.Vector3(-15 + k * 6, 58, 7.05));
     c.add(w);
-    windows.push(w);
   }
   c.lookAt(0, -40, 0);
   g.add(c);
@@ -648,7 +647,8 @@ function castle(g: THREE.Group, rng: Rng): Backdrop['update'] {
     g.add(t);
   }
   return (_dt, time) => {
-    windows.forEach((w, i) => (w.material as THREE.MeshBasicMaterial).color.setHex(Math.sin(time * 0.7 + i * 1.7) > 0.96 ? 0x5a3a10 : 0xffc861));
+    winMatA.color.setHex(Math.sin(time * 0.7) > 0.96 ? 0x5a3a10 : 0xffc861);
+    winMatB.color.setHex(Math.sin(time * 0.7 + 1.7) > 0.96 ? 0x5a3a10 : 0xffc861);
   };
 }
 
@@ -750,7 +750,7 @@ function cyberpunk(g: THREE.Group, rng: Rng): Backdrop['update'] {
     if (i % 4 === 0) {
       const beam = mesh(
         new THREE.ConeGeometry(14, 120, 12, 1, true),
-        basic(i % 8 === 0 ? 0x22d3ee : 0xf43f5e, { transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }),
+        basic(i % 8 === 0 ? 0x22d3ee : 0xf43f5e, { transparent: true, opacity: 0.14, depthWrite: false, blending: THREE.AdditiveBlending }),
         new THREE.Vector3(pos.x, pos.y + h / 2 + 56, pos.z)
       );
       beam.rotation.z = 0.22 * (i % 2 ? 1 : -1);
@@ -968,7 +968,8 @@ export function buildBackdrop(theme: ThemeId, rng: Rng): Backdrop | null {
       return null;
   }
   group.traverse((o) => {
-    o.frustumCulled = false;
+    const isLargeCloudOrStars = o instanceof THREE.InstancedMesh || o instanceof THREE.Points;
+    if (!isLargeCloudOrStars) o.frustumCulled = true;
     const m = o as THREE.Mesh;
     if (m.isMesh) {
       m.castShadow = false;

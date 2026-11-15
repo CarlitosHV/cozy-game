@@ -138,6 +138,14 @@ export const PARTY_FINISH_SECONDS = 90;
 export type FpsLimit = '30' | '60' | '120' | 'unlimited';
 export type RenderDistancePercent = 50 | 70 | 100;
 
+export interface LobbyMotionState {
+  feetX: number;
+  feetY: number;
+  yawOffset: number;
+  pitchOffset: number;
+  mode: 'lobby_center' | 'lobby_shop' | 'creator' | 'orbit';
+}
+
 export class GameEngine {
   private container: HTMLElement;
   private callbacks: GameEngineCallbacks;
@@ -267,7 +275,10 @@ export class GameEngine {
     }
   })();
   private levelRoot!: THREE.Group;
-  private lobbyShadowDisc!: THREE.Mesh;
+  private lobbyShadowDisc!: THREE.Group;
+  private lobbyBounceMat: THREE.MeshBasicMaterial | null = null;
+  private lobbyCastMesh: THREE.Mesh | null = null;
+  private appliedLobbyTheme: ThemeId | null = null;
   /** Companion unlocked by the last victory (shown on the victory screen) */
   public lastUnlocked: CompanionStyle | null = null;
   private easterEggFound = false;
@@ -381,6 +392,14 @@ export class GameEngine {
   private _orbitLook = new THREE.Vector3();
   private _previewPos = new THREE.Vector3();
   private _previewLook = new THREE.Vector3();
+  private _feetProjVec = new THREE.Vector3();
+  private _lobbyMotion: LobbyMotionState = {
+    feetX: 0.5,
+    feetY: 0.72,
+    yawOffset: 0,
+    pitchOffset: 0,
+    mode: 'lobby_center',
+  };
 
   // Photo Mode State
   public photoModePaused: boolean = false;
@@ -500,18 +519,22 @@ export class GameEngine {
     this.scene.add(this.levelRoot);
     this.world = this.buildLevel(this.currentLevel);
     this.buildWorldBoundsCache();
-    this.ambience = new AmbientDecor(this.scene);
-    {
-      let saved: string | null = null;
-      try {
-        saved = localStorage.getItem('cozy_graphics_quality');
-      } catch {
-        /* storage unavailable */
-      }
-      const q: Quality = saved === 'high' || saved === 'medium' || saved === 'low' ? saved : this.isSoftwareGl ? 'low' : 'high';
-      this.ambience.setQuality(q);
-      this.ambience.build(this.world, this.currentLevel, themeForLevel(this.currentLevel));
+    let savedQuality: string | null = null;
+    try {
+      savedQuality = localStorage.getItem('cozy_graphics_quality');
+    } catch {
+      /* storage unavailable */
     }
+    const initialQuality: Quality =
+      savedQuality === 'high' || savedQuality === 'medium' || savedQuality === 'low'
+        ? savedQuality
+        : this.isSoftwareGl
+          ? 'low'
+          : 'high';
+
+    this.ambience = new AmbientDecor(this.scene);
+    this.ambience.setQuality(initialQuality);
+    this.ambience.build(this.world, this.currentLevel, themeForLevel(this.currentLevel));
     this.addCompanionShowcase();
     this.playerModel = createPlayerCharacter(this.textures, this.playerAppearance);
     this.scene.add(this.playerModel.group);
@@ -570,6 +593,7 @@ export class GameEngine {
 
     // 8. Weather System
     this.weatherSystem = new WeatherSystem(this.scene, this.dirLight, this.hemiLight, this.textures);
+    this.weatherSystem.setQuality(initialQuality);
     this.weatherSystem.onTransitionChange = (target, progress, finished) => {
       this.callbacks.onWeatherChange(target, !finished);
     };
@@ -767,29 +791,126 @@ export class GameEngine {
     return getDevLevelPick()?.theme ?? themeForLevel(this.currentLevel);
   }
 
-  private createLobbyShadowDisc(): THREE.Mesh {
-    const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
-      grad.addColorStop(0, 'rgba(15, 23, 42, 0.45)');
-      grad.addColorStop(0.55, 'rgba(15, 23, 42, 0.18)');
-      grad.addColorStop(1, 'rgba(15, 23, 42, 0)');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 128, 128);
+  public getLobbyMotion(): LobbyMotionState {
+    return this._lobbyMotion;
+  }
+
+  private createLobbyShadowDisc(): THREE.Group {
+    const rig = new THREE.Group();
+
+    // 1. Tight dark contact AO directly under boot soles (prevents "floating" look)
+    const aoCanvas = document.createElement('canvas');
+    aoCanvas.width = 128;
+    aoCanvas.height = 128;
+    const aoCtx = aoCanvas.getContext('2d');
+    if (aoCtx) {
+      const grad = aoCtx.createRadialGradient(64, 64, 4, 64, 64, 60);
+      grad.addColorStop(0, 'rgba(8, 12, 24, 0.76)');
+      grad.addColorStop(0.45, 'rgba(8, 12, 24, 0.44)');
+      grad.addColorStop(1, 'rgba(8, 12, 24, 0)');
+      aoCtx.fillStyle = grad;
+      aoCtx.fillRect(0, 0, 128, 128);
     }
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const geom = new THREE.PlaneGeometry(2.6, 2.6);
-    geom.rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex,
+    const aoTex = new THREE.CanvasTexture(aoCanvas);
+    aoTex.colorSpace = THREE.SRGBColorSpace;
+    const aoGeom = new THREE.PlaneGeometry(1.18, 0.92);
+    aoGeom.rotateX(-Math.PI / 2);
+    const aoMesh = new THREE.Mesh(
+      aoGeom,
+      new THREE.MeshBasicMaterial({ map: aoTex, transparent: true, depthWrite: false })
+    );
+    aoMesh.position.y = 0.008;
+    aoMesh.renderOrder = 3;
+
+    // 2. Angled directional cast shadow across the terrace paving
+    const castCanvas = document.createElement('canvas');
+    castCanvas.width = 128;
+    castCanvas.height = 128;
+    const castCtx = castCanvas.getContext('2d');
+    if (castCtx) {
+      const grad = castCtx.createRadialGradient(64, 64, 2, 64, 64, 60);
+      grad.addColorStop(0, 'rgba(10, 15, 28, 0.48)');
+      grad.addColorStop(0.55, 'rgba(10, 15, 28, 0.2)');
+      grad.addColorStop(1, 'rgba(10, 15, 28, 0)');
+      castCtx.fillStyle = grad;
+      castCtx.fillRect(0, 0, 128, 128);
+    }
+    const castTex = new THREE.CanvasTexture(castCanvas);
+    castTex.colorSpace = THREE.SRGBColorSpace;
+    const castGeom = new THREE.PlaneGeometry(1.65, 2.75);
+    castGeom.rotateX(-Math.PI / 2);
+    const castMesh = new THREE.Mesh(
+      castGeom,
+      new THREE.MeshBasicMaterial({ map: castTex, transparent: true, depthWrite: false })
+    );
+    castMesh.position.set(0.28, 0.005, -0.46);
+    castMesh.rotation.y = -0.35;
+    castMesh.renderOrder = 2;
+    this.lobbyCastMesh = castMesh;
+
+    // 3. Soft biome floor bounce tint (tinted dynamically per theme)
+    const bounceCanvas = document.createElement('canvas');
+    bounceCanvas.width = 128;
+    bounceCanvas.height = 128;
+    const bCtx = bounceCanvas.getContext('2d');
+    if (bCtx) {
+      const grad = bCtx.createRadialGradient(64, 64, 6, 64, 64, 62);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 0.34)');
+      grad.addColorStop(0.55, 'rgba(255, 255, 255, 0.12)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      bCtx.fillStyle = grad;
+      bCtx.fillRect(0, 0, 128, 128);
+    }
+    const bTex = new THREE.CanvasTexture(bounceCanvas);
+    bTex.colorSpace = THREE.SRGBColorSpace;
+    const bGeom = new THREE.PlaneGeometry(2.5, 2.5);
+    bGeom.rotateX(-Math.PI / 2);
+    const bMat = new THREE.MeshBasicMaterial({
+      color: 0xffedd5,
+      map: bTex,
       transparent: true,
+      opacity: 0.45,
       depthWrite: false,
     });
-    return new THREE.Mesh(geom, mat);
+    const bounceMesh = new THREE.Mesh(bGeom, bMat);
+    bounceMesh.position.y = 0.002;
+    bounceMesh.renderOrder = 1;
+    this.lobbyBounceMat = bMat;
+
+    rig.add(bounceMesh, castMesh, aoMesh);
+    return rig;
+  }
+
+  private applyLobbyBiomeLighting(theme: ThemeId) {
+    if (this.appliedLobbyTheme === theme) return;
+    this.appliedLobbyTheme = theme;
+    const presets: Record<
+      ThemeId,
+      { dir: number; dirInt: number; sky: number; ground: number; hemiInt: number; bounce: number }
+    > = {
+      cozy: { dir: 0xffb36b, dirInt: 2.25, sky: 0xffe4b8, ground: 0x8b6f56, hemiInt: 1.15, bounce: 0xfde68a },
+      aero: { dir: 0xe0f7ff, dirInt: 2.15, sky: 0xffffff, ground: 0x38bdf8, hemiInt: 1.28, bounce: 0x7dd3fc },
+      cosmic: { dir: 0xd8b4fe, dirInt: 1.9, sky: 0x818cf8, ground: 0x2e1065, hemiInt: 1.15, bounce: 0x67e8f9 },
+      swamp: { dir: 0xd9f99d, dirInt: 1.65, sky: 0xa3e635, ground: 0x263423, hemiInt: 1.0, bounce: 0xa3e635 },
+      garden: { dir: 0xfff3c4, dirInt: 2.2, sky: 0xfffbeb, ground: 0x65a30d, hemiInt: 1.25, bounce: 0xfef08a },
+      castle: { dir: 0xfdba74, dirInt: 1.85, sky: 0xc084fc, ground: 0x311847, hemiInt: 1.05, bounce: 0xfb923c },
+      neon: { dir: 0xf472b6, dirInt: 2.1, sky: 0x22d3ee, ground: 0x4c1d95, hemiInt: 1.22, bounce: 0x22d3ee },
+      cyberpunk: { dir: 0x38bdf8, dirInt: 1.95, sky: 0x67e8f9, ground: 0x1e293b, hemiInt: 1.1, bounce: 0xfacc15 },
+      lava: { dir: 0xfb923c, dirInt: 2.3, sky: 0xfdca8a, ground: 0x7c2d12, hemiInt: 1.2, bounce: 0xf97316 },
+      ice: { dir: 0xe0f2fe, dirInt: 2.1, sky: 0xffffff, ground: 0x0284c7, hemiInt: 1.32, bounce: 0xbae6fd },
+      desert: { dir: 0xfcd34d, dirInt: 2.3, sky: 0xfef3c7, ground: 0x92400e, hemiInt: 1.15, bounce: 0xfde68a },
+      candy: { dir: 0xfbcfe8, dirInt: 2.05, sky: 0xffffff, ground: 0xf472b6, hemiInt: 1.3, bounce: 0xf9a8d4 },
+      backrooms: { dir: 0xfef08a, dirInt: 1.75, sky: 0xfef9c3, ground: 0x5c4e24, hemiInt: 1.18, bounce: 0xfef08a },
+    };
+    const p = presets[theme] ?? presets.cozy;
+    this.dirLight.color.setHex(p.dir);
+    this.dirLight.intensity = p.dirInt;
+    this.hemiLight.color.setHex(p.sky);
+    this.hemiLight.groundColor.setHex(p.ground);
+    this.hemiLight.intensity = p.hemiInt;
+    if (this.lobbyBounceMat) {
+      this.lobbyBounceMat.color.setHex(p.bounce);
+    }
   }
 
   /** Time trial budget: open-world & 2x longer Only-Up parkour courses get proportionally more time. */
@@ -1099,16 +1220,44 @@ export class GameEngine {
     }
     this.world.enemyManager?.dispose();
     this.scene.remove(this.levelRoot);
-    const shared = new Set<THREE.Texture>(Object.values(this.textures).filter((t): t is THREE.Texture => t instanceof THREE.Texture));
+    this.decorBounds = [];
+    this.occludedMeshes.clear();
+    const sharedTex = new Set<THREE.Texture>(Object.values(this.textures).filter((t): t is THREE.Texture => t instanceof THREE.Texture));
+    const disposeMaterial = (m: THREE.Material | undefined) => {
+      if (!m || m.userData?.shared) return;
+      const std = m as THREE.MeshStandardMaterial;
+      if (std.map && !sharedTex.has(std.map) && !std.map.userData?.shared) std.map.dispose();
+      if (std.emissiveMap && !sharedTex.has(std.emissiveMap) && !std.emissiveMap.userData?.shared) std.emissiveMap.dispose();
+      if (std.alphaMap && !sharedTex.has(std.alphaMap) && !std.alphaMap.userData?.shared) std.alphaMap.dispose();
+      if (std.roughnessMap && !sharedTex.has(std.roughnessMap) && !std.roughnessMap.userData?.shared) std.roughnessMap.dispose();
+      m.dispose();
+    };
     this.levelRoot.traverse((obj) => {
-      const mesh = obj as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      mesh.geometry?.dispose();
-      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      for (const m of mats) {
-        const map = (m as THREE.MeshStandardMaterial).map;
-        if (map && !shared.has(map)) map.dispose();
-        m.dispose();
+      const asAny = obj as unknown as {
+        isMesh?: boolean;
+        isPoints?: boolean;
+        isLine?: boolean;
+        isSprite?: boolean;
+        geometry?: THREE.BufferGeometry;
+        material?: THREE.Material | THREE.Material[];
+        userData: Record<string, unknown>;
+      };
+      if (asAny.isMesh || asAny.isPoints || asAny.isLine) {
+        if (asAny.geometry && !asAny.geometry.userData?.shared) asAny.geometry.dispose();
+        const mats = Array.isArray(asAny.material) ? asAny.material : [asAny.material];
+        for (const m of mats) disposeMaterial(m);
+        if (asAny.userData?.occlusionClone) {
+          const clones = Array.isArray(asAny.userData.occlusionClone)
+            ? (asAny.userData.occlusionClone as THREE.Material[])
+            : [asAny.userData.occlusionClone as THREE.Material];
+          for (const cm of clones) disposeMaterial(cm);
+        }
+      } else if (asAny.isSprite) {
+        const sm = asAny.material as THREE.SpriteMaterial | undefined;
+        if (sm && !sm.userData?.shared) {
+          if (sm.map && !sharedTex.has(sm.map) && !sm.map.userData?.shared) sm.map.dispose();
+          sm.dispose();
+        }
       }
     });
 
@@ -2780,8 +2929,19 @@ export class GameEngine {
         if (this.renderer.shadowMap.enabled) {
           this.renderer.shadowMap.autoUpdate = false;
         }
+        this.applyLobbyBiomeLighting(this.getActiveTheme());
         const sp = this.physics.position;
-        this.lobbyShadowDisc.position.set(sp.x, sp.y + 0.015, sp.z);
+        this.dirLight.position.set(sp.x + 8, sp.y + 18, sp.z + 10);
+        this.dirLight.target.position.set(sp.x, sp.y, sp.z);
+        this.dirLight.target.updateMatrixWorld();
+
+        this.playerModel.shadow.visible = false;
+        this.lobbyShadowDisc.position.set(sp.x, sp.y, sp.z);
+        const hScale = (this.tempPreviewAppearance ?? this.playerAppearance).build || 1;
+        this.lobbyShadowDisc.scale.setScalar(hScale);
+        if (this.lobbyCastMesh) {
+          this.lobbyCastMesh.rotation.y = this.playerModel.group.rotation.y * 0.15 - 0.35;
+        }
         this.lobbyShadowDisc.visible = true;
 
         const prevBg = this.scene.background;
@@ -2794,13 +2954,23 @@ export class GameEngine {
         this.scene.background = prevBg;
         this.scene.fog = prevFog;
       } else {
+        if (this.appliedLobbyTheme !== null) {
+          this.appliedLobbyTheme = null;
+          this.weatherSystem.setWeather(this.levelWeather(), 0.25);
+        }
         this.levelRoot.visible = true;
         this.ambience.setVisible(true);
         this.weatherSystem.cloudsSystem.setVisible(true);
         this.weatherSystem.setParticlesVisible(true);
         this.itemSystem.setVisible(true);
+        this.playerModel.shadow.visible = true;
         if (this.renderer.shadowMap.enabled) {
-          this.renderer.shadowMap.autoUpdate = true;
+          const isStaticOverlay =
+            this.gameState === 'paused' ||
+            this.gameState === 'victory' ||
+            this.gameState === 'game_over' ||
+            this.isUIModalOpen;
+          this.renderer.shadowMap.autoUpdate = !isStaticOverlay;
         }
         this.lobbyShadowDisc.visible = false;
         this.renderer.setClearColor(0x000000, 1);
@@ -2919,7 +3089,17 @@ export class GameEngine {
         }
       }
 
-      this.playerModel.updateAnimation(0, true, dt, time);
+      this.camera.updateMatrixWorld();
+      this._feetProjVec.copy(sp).project(this.camera);
+      this._lobbyMotion.feetX = THREE.MathUtils.clamp((this._feetProjVec.x + 1) * 0.5, 0.1, 0.9);
+      this._lobbyMotion.feetY = THREE.MathUtils.clamp((1 - this._feetProjVec.y) * 0.5, 0.2, 0.92);
+      this._lobbyMotion.yawOffset = this.previewYaw;
+      this._lobbyMotion.pitchOffset = this.previewPitchUser;
+      this._lobbyMotion.mode = this.lobbyCameraMode;
+
+      this.playerModel.updateAnimation(0, true, dt, time, {
+        lobbyShowcase: this.lobbyCameraMode !== 'creator',
+      });
       if (this.weatherSystem.isTransitioning) {
         this.weatherSystem.update(dt, this.physics.position, time);
       }
@@ -2977,7 +3157,7 @@ export class GameEngine {
         }
         this.playerModel.updateAnimation(0, true, dt, time);
         this.world.levelUpdate?.(dt, time);
-        this.updateShowcase(time);
+        if (this.showcase?.visible) this.updateShowcase(time);
       }
 
       // Smooth Orbit & Framing Camera
@@ -3004,8 +3184,12 @@ export class GameEngine {
         this.camera.rotateZ(this.photoRoll);
       }
 
-      this.dirLight.position.set(this.photoTarget.x + 25, this.photoTarget.y + 45, this.photoTarget.z + 20);
-      this.dirLight.target.position.copy(this.photoTarget);
+      const texel = 50 / 1024;
+      const sx = Math.round(this.photoTarget.x / texel) * texel;
+      const sy = Math.round(this.photoTarget.y / texel) * texel;
+      const sz = Math.round(this.photoTarget.z / texel) * texel;
+      this.dirLight.position.set(sx + 25, sy + 45, sz + 20);
+      this.dirLight.target.position.set(sx, sy, sz);
       this.dirLight.target.updateMatrixWorld();
       this.updateSceneCulling();
       return;
@@ -3051,7 +3235,7 @@ export class GameEngine {
       if (cp.shrine.group.visible) cp.shrine.update(dt);
     }
     for (const col of this.world.collectibles) {
-      if (!col.collected && col.group.visible) col.update(dt);
+      if (col.group.visible) col.update(dt);
     }
 
     if (!this.easterEggFound && this.world.easterEgg) {
@@ -3116,7 +3300,7 @@ export class GameEngine {
     this.companionPowers.update(dt, time, this.physics, this.playerModel.companionSprite, { enemies: this.world.enemyManager, stalker: this.stalker });
     this.itemSystem.update(dt, this.physics.position, this.itemCtx);
     this.world.levelUpdate?.(dt, time);
-    this.updateShowcase(time);
+    if (this.showcase?.visible) this.updateShowcase(time);
     if (this.world.enemyManager) {
       this.world.enemyManager.distractTarget = this.companionPowers.lureTarget;
     }
@@ -3464,9 +3648,13 @@ export class GameEngine {
     this.weatherSystem.update(dt, this.physics.position, time, this._frustum, this.camera.position, maxCloudDist * maxCloudDist);
     this.ambience.update(dt, time, followPos, this.camera.position, this.levelDarkness);
 
-    // Follow light with player or spectated friend
-    this.dirLight.position.set(followPos.x + 25, followPos.y + 45, followPos.z + 20);
-    this.dirLight.target.position.copy(followPos);
+    // Follow light with player or spectated friend (snapped to shadow texel grid to prevent edge shimmer)
+    const texel = 50 / 1024;
+    const sx = Math.round(followPos.x / texel) * texel;
+    const sy = Math.round(followPos.y / texel) * texel;
+    const sz = Math.round(followPos.z / texel) * texel;
+    this.dirLight.position.set(sx + 25, sy + 45, sz + 20);
+    this.dirLight.target.position.set(sx, sy, sz);
     this.dirLight.target.updateMatrixWorld();
 
     // 8. Online Multiplayer Sync & Remote Players update
@@ -3503,11 +3691,15 @@ export class GameEngine {
   private readonly _cullBox = new THREE.Box3();
   private readonly _cullMin = new THREE.Vector3();
   private readonly _cullMax = new THREE.Vector3();
-  private readonly _occVec = new THREE.Vector3();
   private readonly _nowOccluded = new Set<THREE.Mesh>();
-  private decorBounds: { obj: THREE.Object3D; center: THREE.Vector3; radius: number }[] = [];
+  private decorBounds: {
+    obj: THREE.Object3D;
+    center: THREE.Vector3;
+    radius: number;
+    meshes: { mesh: THREE.Mesh; worldPos: THREE.Vector3 }[];
+  }[] = [];
 
-  /** Precomputes tight world-space bounding spheres for static decorative groups once per level load. */
+  /** Precomputes tight world-space bounding spheres and cached child mesh coordinates once per level load. */
   private buildWorldBoundsCache() {
     this.decorBounds = [];
     this.occludedMeshes.clear();
@@ -3516,20 +3708,47 @@ export class GameEngine {
     const sph = new THREE.Sphere();
     this.levelRoot.updateMatrixWorld(true);
     for (const obj of this.world.decorativeMeshes) {
+      const meshes: { mesh: THREE.Mesh; worldPos: THREE.Vector3 }[] = [];
+      obj.traverse((child) => {
+        const m = child as THREE.Mesh;
+        if (m.isMesh && m.geometry) {
+          const wp = new THREE.Vector3();
+          m.getWorldPosition(wp);
+          meshes.push({ mesh: m, worldPos: wp });
+        }
+      });
       box.setFromObject(obj);
       if (box.isEmpty()) {
-        this.decorBounds.push({ obj, center: obj.position.clone(), radius: 4 });
+        this.decorBounds.push({ obj, center: obj.position.clone(), radius: 4, meshes });
       } else {
         box.getBoundingSphere(sph);
-        this.decorBounds.push({ obj, center: sph.center.clone(), radius: Math.max(1.5, sph.radius) });
+        this.decorBounds.push({ obj, center: sph.center.clone(), radius: Math.max(1.5, sph.radius), meshes });
       }
     }
+  }
+
+  private isSphereVisible(
+    x: number,
+    y: number,
+    z: number,
+    radius: number,
+    camPos: THREE.Vector3,
+    maxDist: number
+  ): boolean {
+    const dx = x - camPos.x;
+    const dy = y - camPos.y;
+    const dz = z - camPos.z;
+    const lim = maxDist + radius;
+    if (dx * dx + dy * dy + dz * dz > lim * lim) return false;
+    this._cullSphere.center.set(x, y, z);
+    this._cullSphere.radius = radius;
+    return this._frustum.intersectsSphere(this._cullSphere);
   }
 
   /**
    * Real 6-plane Frustum + Distance Culling:
    * Never renders polygons outside camera FOV or beyond renderDistance for platforms,
-   * decorative props, collectibles, checkpoints, hazards, enemies, ambient decor chunks, and clouds.
+   * decorative props, collectibles, checkpoints, hazards, enemies, puzzles, pickups, remote players, and ambient chunks.
    */
   public updateSceneCulling(_force = false) {
     if (!this.world || !this.camera) return;
@@ -3539,7 +3758,11 @@ export class GameEngine {
     this._frustum.setFromProjectionMatrix(this._projScreenMatrix);
 
     const pct = this.renderDistance;
-    const maxDist = pct === 50 ? 48 : pct === 70 ? 80 : 155;
+    let maxDist = pct === 50 ? 48 : pct === 70 ? 80 : 155;
+    if (this.levelDarkness > 0.35) {
+      const darkT = Math.min(1, (this.levelDarkness - 0.35) / 0.65);
+      maxDist = Math.min(maxDist, THREE.MathUtils.lerp(maxDist, 44, darkT));
+    }
     const maxDistSq = maxDist * maxDist;
 
     const camPos = this.camera.position;
@@ -3576,7 +3799,6 @@ export class GameEngine {
       const cy = Math.max(0, Math.abs(p.position.y - camPos.y) - hy);
       const cz = Math.max(0, Math.abs(p.position.z - camPos.z) - hz);
       if (cx * cx + cy * cy + cz * cz > 49) {
-        // Generous AABB around platform body + attached railings/trampolines/trees
         this._cullMin.set(p.position.x - hx - 1.5, p.position.y - hy - 2.5, p.position.z - hz - 1.5);
         this._cullMax.set(p.position.x + hx + 1.5, p.position.y + 4.2, p.position.z + hz + 1.5);
         this._cullBox.set(this._cullMin, this._cullMax);
@@ -3589,31 +3811,24 @@ export class GameEngine {
       if (!p.mesh.visible) p.mesh.visible = true;
     }
 
-    // Helper for sphere-based frustum + distance culling
-    const testSphere = (x: number, y: number, z: number, radius: number): boolean => {
-      const dx = x - camPos.x;
-      const dy = y - camPos.y;
-      const dz = z - camPos.z;
-      const lim = maxDist + radius;
-      if (dx * dx + dy * dy + dz * dz > lim * lim) return false;
-      this._cullSphere.center.set(x, y, z);
-      this._cullSphere.radius = radius;
-      return this._frustum.intersectsSphere(this._cullSphere);
-    };
-
     // 2. Decorative meshes (trees, gallows, arches, pillars, ruins)
     for (let i = 0; i < this.decorBounds.length; i++) {
       const d = this.decorBounds[i];
-      d.obj.visible = testSphere(d.center.x, d.center.y, d.center.z, d.radius);
+      d.obj.visible = this.isSphereVisible(d.center.x, d.center.y, d.center.z, d.radius, camPos, maxDist);
     }
 
     // 3. Collectibles
     const collectibles = this.world.collectibles;
     for (let i = 0; i < collectibles.length; i++) {
       const c = collectibles[i];
-      if (c.collected) continue;
+      if (c.collected) {
+        if (c.group.visible && c.group.scale.x <= 0.03) {
+          c.group.visible = false;
+        }
+        continue;
+      }
       const p = c.group.position;
-      c.group.visible = testSphere(p.x, p.y, p.z, 1.8);
+      c.group.visible = this.isSphereVisible(p.x, p.y, p.z, 1.8, camPos, maxDist);
     }
 
     // 4. Checkpoint shrines
@@ -3621,22 +3836,22 @@ export class GameEngine {
     for (let i = 0; i < checkpoints.length; i++) {
       const g = checkpoints[i].shrine.group;
       const p = g.position;
-      g.visible = testSphere(p.x, p.y + 1.2, p.z, 3.5);
+      g.visible = this.isSphereVisible(p.x, p.y + 1.2, p.z, 3.5, camPos, maxDist);
     }
 
-    // 5. Parkour hazards (pendulums, pinwheels, balance logs, steam vents)
+    // 5. Parkour hazards (pendulums, pinwheels, balance logs, steam vents, rolling balls)
     const obstacles = this.world.obstacles;
     for (let i = 0; i < obstacles.length; i++) {
       const g = obstacles[i].group;
       const p = g.position;
-      g.visible = testSphere(p.x, p.y - 1.5, p.z, 5.0);
+      g.visible = this.isSphereVisible(p.x, p.y - 1.5, p.z, 5.0, camPos, maxDist);
     }
     if (this.world.pinwheels) {
       const pins = this.world.pinwheels;
       for (let i = 0; i < pins.length; i++) {
         const g = pins[i].group;
         const p = g.position;
-        g.visible = testSphere(p.x, p.y, p.z, 4.5);
+        g.visible = this.isSphereVisible(p.x, p.y, p.z, 4.5, camPos, maxDist);
       }
     }
     if (this.world.balanceLogs) {
@@ -3644,7 +3859,7 @@ export class GameEngine {
       for (let i = 0; i < logs.length; i++) {
         const g = logs[i].group;
         const p = g.position;
-        g.visible = testSphere(p.x, p.y, p.z, 4.0);
+        g.visible = this.isSphereVisible(p.x, p.y, p.z, 4.0, camPos, maxDist);
       }
     }
     if (this.world.steamVents) {
@@ -3652,19 +3867,80 @@ export class GameEngine {
       for (let i = 0; i < vents.length; i++) {
         const g = vents[i].group;
         const p = g.position;
-        g.visible = testSphere(p.x, p.y + 1.0, p.z, 3.5);
+        g.visible = this.isSphereVisible(p.x, p.y + 1.0, p.z, 3.5, camPos, maxDist);
+      }
+    }
+    if (this.world.rollingBalls) {
+      const balls = this.world.rollingBalls;
+      for (let i = 0; i < balls.length; i++) {
+        const b = balls[i];
+        b.group.visible = this.isSphereVisible(
+          b.position.x,
+          b.position.y + b.radius,
+          b.position.z,
+          b.radius + 0.5,
+          camPos,
+          maxDist
+        );
       }
     }
 
-    // 6. Enemies
+    // 5b. Victory portal & summit companion showcase
+    if (this.world.victoryPortal) {
+      const vp = this.world.victoryPortal;
+      vp.group.visible = this.isSphereVisible(vp.position.x, vp.position.y + 1.5, vp.position.z, 4.5, camPos, maxDist);
+    }
+    if (this.showcase) {
+      this.showcase.visible = this.isSphereVisible(
+        this.showcaseBase.x,
+        this.showcaseBase.y,
+        this.showcaseBase.z,
+        3.2,
+        camPos,
+        maxDist
+      );
+    }
+
+    // 5c. Puzzles (orbs, return portals, sentinels, summit shield/beam)
+    if (this.world.puzzles) {
+      const pz = this.world.puzzles;
+      for (let i = 0; i < pz.orbs.length; i++) {
+        const orb = pz.orbs[i];
+        if (orb.collected) continue;
+        const vis = this.isSphereVisible(orb.pos.x, orb.pos.y + 2.0, orb.pos.z, 5.5, camPos, maxDist);
+        orb.group.visible = vis;
+        orb.beam.visible = vis;
+      }
+      for (let i = 0; i < pz.portals.length; i++) {
+        const pt = pz.portals[i];
+        pt.group.visible = this.isSphereVisible(pt.pos.x, pt.pos.y + 1.2, pt.pos.z, 3.0, camPos, maxDist);
+      }
+      for (let i = 0; i < pz.sentinels.length; i++) {
+        const s = pz.sentinels[i];
+        const vis = this.isSphereVisible(s.pos.x, s.pos.y, s.pos.z, s.range + 2.0, camPos, maxDist);
+        s.head.visible = vis;
+        s.sector.visible = vis;
+      }
+      if (pz.summit && pz.summit.active) {
+        const sp = pz.summit.shield.position;
+        const vis = this.isSphereVisible(sp.x, sp.y + 2.0, sp.z, 12.0, camPos, maxDist);
+        pz.summit.shieldMesh.visible = vis;
+        pz.summit.beam.visible = vis;
+      }
+    }
+
+    // 6. Enemies, dungeon guardians, item pickups, remote players
     if (this.world.enemyManager) {
       const enemies = this.world.enemyManager.enemies;
       for (let i = 0; i < enemies.length; i++) {
         const e = enemies[i];
         const rad = e.type === 'zephyr_puff' ? 6.5 : 3.2;
-        e.group.visible = testSphere(e.position.x, e.position.y + 0.6, e.position.z, rad);
+        e.group.visible = this.isSphereVisible(e.position.x, e.position.y + 0.6, e.position.z, rad, camPos, maxDist);
       }
     }
+    this.dungeonSystem.updateCulling(this._frustum, camPos, maxDist);
+    this.itemSystem?.updateCulling(this._frustum, camPos, maxDist);
+    this.remotePlayers?.updateCulling(this._frustum, camPos, maxDist);
 
     // 7. Spatial-chunked ambient decor, islands, puffs & flocks
     this.ambience?.updateCulling(this._frustum, camPos, maxDist);
@@ -3675,6 +3951,58 @@ export class GameEngine {
   }
 
   private occludedMeshes = new Set<THREE.Mesh>();
+
+  private applyMeshOcclusionOpacity(mesh: THREE.Mesh, opacity: number, fading: boolean) {
+    if (fading) {
+      if (!mesh.userData.occlusionPrepared) {
+        mesh.userData.occlusionPrepared = true;
+        if (Array.isArray(mesh.material)) {
+          const origMats = mesh.material;
+          const anyShared = origMats.some((m) => m?.userData?.shared);
+          if (anyShared) {
+            const clones = origMats.map((m) => (m ? m.clone() : m));
+            mesh.userData.occlusionOrigMat = origMats;
+            mesh.userData.occlusionClone = clones;
+            mesh.material = clones;
+          }
+        } else if (mesh.material?.userData?.shared) {
+          const clone = mesh.material.clone();
+          mesh.userData.occlusionOrigMat = mesh.material;
+          mesh.userData.occlusionClone = clone;
+          mesh.material = clone;
+        }
+      }
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        if (!m) continue;
+        if (m.userData.origTransparent === undefined) {
+          m.userData.origTransparent = m.transparent;
+          m.userData.origDepthWrite = m.depthWrite;
+        }
+        m.transparent = true;
+        m.depthWrite = false;
+        m.opacity = opacity;
+      }
+      return;
+    }
+
+    // Restore opaque / original state when fade completes
+    if (mesh.userData.occlusionOrigMat) {
+      mesh.material = mesh.userData.occlusionOrigMat as THREE.Material | THREE.Material[];
+      mesh.userData.occlusionPrepared = false;
+    } else {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        if (!m) continue;
+        m.opacity = 1.0;
+        if (m.userData.origTransparent !== undefined) {
+          m.transparent = Boolean(m.userData.origTransparent);
+          m.depthWrite = Boolean(m.userData.origDepthWrite);
+        }
+      }
+      mesh.userData.occlusionPrepared = false;
+    }
+  }
 
   /** Fades out decorative tree foliage/trunks when they block the camera's view of the player. */
   private updateTreeOcclusion(dt: number) {
@@ -3696,24 +4024,21 @@ export class GameEngine {
 
     const nowOccluded = this._nowOccluded;
     nowOccluded.clear();
-    const meshPos = this._occVec;
 
     for (let i = 0; i < this.decorBounds.length; i++) {
       const d = this.decorBounds[i];
       if (!d.obj.visible) continue;
 
-      // Fast broadphase: skip decorative groups far from the camera-to-player capsule
       const maxCheckR = halfSeg + d.radius + 2.5;
       const bx = d.center.x - midX;
       const by = d.center.y - midY;
       const bz = d.center.z - midZ;
       if (bx * bx + by * by + bz * bz > maxCheckR * maxCheckR) continue;
 
-      d.obj.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        if (!mesh.isMesh || !mesh.geometry) return;
-
-        mesh.getWorldPosition(meshPos);
+      const children = d.meshes;
+      for (let j = 0; j < children.length; j++) {
+        const entry = children[j];
+        const meshPos = entry.worldPos;
         const toMesh_x = meshPos.x - camPos.x;
         const toMesh_y = meshPos.y - camPos.y;
         const toMesh_z = meshPos.z - camPos.z;
@@ -3726,38 +4051,30 @@ export class GameEngine {
           const distSq = (meshPos.x - closeX) ** 2 + (meshPos.y - closeY) ** 2 + (meshPos.z - closeZ) ** 2;
 
           if (distSq < 3.8) {
-            nowOccluded.add(mesh);
+            nowOccluded.add(entry.mesh);
           }
         }
-      });
+      }
     }
 
     if (nowOccluded.size === 0 && this.occludedMeshes.size === 0) return;
 
     for (const mesh of nowOccluded) {
       this.occludedMeshes.add(mesh);
-      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      for (const m of mats) {
-        if (m) {
-          m.transparent = true;
-          m.opacity = THREE.MathUtils.damp(m.opacity, 0.28, 8.0, dt);
-        }
-      }
+      const cur = Array.isArray(mesh.material) ? mesh.material[0]?.opacity ?? 1 : mesh.material?.opacity ?? 1;
+      const next = THREE.MathUtils.damp(cur, 0.28, 8.0, dt);
+      this.applyMeshOcclusionOpacity(mesh, next, true);
     }
 
     for (const mesh of this.occludedMeshes) {
       if (!nowOccluded.has(mesh)) {
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        let restored = true;
-        for (const m of mats) {
-          if (m) {
-            m.opacity = THREE.MathUtils.damp(m.opacity, 1.0, 6.0, dt);
-            if (m.opacity < 0.98) restored = false;
-            else m.opacity = 1.0;
-          }
-        }
-        if (restored) {
+        const cur = Array.isArray(mesh.material) ? mesh.material[0]?.opacity ?? 1 : mesh.material?.opacity ?? 1;
+        const next = THREE.MathUtils.damp(cur, 1.0, 6.0, dt);
+        if (next >= 0.985) {
+          this.applyMeshOcclusionOpacity(mesh, 1.0, false);
           this.occludedMeshes.delete(mesh);
+        } else {
+          this.applyMeshOcclusionOpacity(mesh, next, true);
         }
       }
     }
@@ -3770,6 +4087,7 @@ export class GameEngine {
   public setGraphicsQuality(quality: 'high' | 'medium' | 'low') {
     // More decor, background life and animations the higher it goes
     this.ambience?.setQuality(quality);
+    this.weatherSystem?.setQuality(quality);
     if (this.isSoftwareGl || !this.renderer) return;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;

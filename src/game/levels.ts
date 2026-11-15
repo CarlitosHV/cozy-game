@@ -7,6 +7,7 @@
 import type { DungeonData } from './dungeon';
 import type { BossSetup } from './bossArena';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { EnemyManager } from './enemies';
 import {
   BouncyMushroomModel,
@@ -244,10 +245,11 @@ export function buildCozyParkourWorld(
     if (surface === 'cloud') mat = cloudMat;
 
     if (surface === 'cloud') {
-      // Billowing 3D Cloud Cluster (organic pillowy clouds)
+      // Billowing 3D Cloud Cluster (merged into a single geometry per island to cut ~35 draw calls to 1)
       const puffRadius = Math.min(w, d) * 0.36;
       const cols = Math.max(3, Math.ceil(w / 1.6));
       const rows = Math.max(3, Math.ceil(d / 1.6));
+      const puffParts: THREE.BufferGeometry[] = [];
 
       // 1. Deck Puffs: Flattened soft spheres creating a pillowy walking mattress flush at Y = 0
       for (let ix = 0; ix < cols; ix++) {
@@ -258,12 +260,8 @@ export function buildCozyParkourWorld(
           const r = puffRadius * pScale;
           const deckPuffGeom = new THREE.SphereGeometry(r, 10, 8);
           deckPuffGeom.scale(1.15, 0.55, 1.15);
-
-          const deckPuff = new THREE.Mesh(deckPuffGeom, cloudMat);
-          deckPuff.position.set(u, -r * 0.55, v);
-          deckPuff.castShadow = true;
-          deckPuff.receiveShadow = true;
-          group.add(deckPuff);
+          deckPuffGeom.translate(u, -r * 0.55, v);
+          puffParts.push(deckPuffGeom);
         }
       }
 
@@ -279,11 +277,8 @@ export function buildCozyParkourWorld(
 
         const edgePuffGeom = new THREE.SphereGeometry(pRadius, 8, 6);
         edgePuffGeom.scale(1.0, 0.65, 1.0);
-        const edgePuff = new THREE.Mesh(edgePuffGeom, cloudMat);
-        edgePuff.position.set(px, -pRadius * 0.4, pz);
-        edgePuff.castShadow = true;
-        edgePuff.receiveShadow = true;
-        group.add(edgePuff);
+        edgePuffGeom.translate(px, -pRadius * 0.4, pz);
+        puffParts.push(edgePuffGeom);
       }
 
       // 3. Fluffy bottom underbelly
@@ -296,11 +291,17 @@ export function buildCozyParkourWorld(
         const uRadius = puffRadius * (1.1 + Math.cos(j * 2.2) * 0.35);
 
         const underGeom = new THREE.SphereGeometry(uRadius, 8, 6);
-        const underPuff = new THREE.Mesh(underGeom, cloudMat);
-        underPuff.position.set(ux, -h * 0.65 - uRadius * 0.4, uz);
-        underPuff.castShadow = true;
-        underPuff.receiveShadow = true;
-        group.add(underPuff);
+        underGeom.translate(ux, -h * 0.65 - uRadius * 0.4, uz);
+        puffParts.push(underGeom);
+      }
+
+      const mergedCloud = mergeGeometries(puffParts, false);
+      puffParts.forEach((g) => g.dispose());
+      if (mergedCloud) {
+        const cloudMesh = new THREE.Mesh(mergedCloud, cloudMat);
+        cloudMesh.castShadow = true;
+        cloudMesh.receiveShadow = true;
+        group.add(cloudMesh);
       }
     } else {
       // Solid grassy or stone island box

@@ -265,7 +265,9 @@ export default function App() {
       className="relative w-screen h-screen overflow-hidden bg-[#8eb8cb] select-none font-ui"
       style={{ width: '100vw', height: '100dvh' }}
     >
-      {gameState === 'title' && <BiomeBackdrop theme={lobbyTheme} />}
+      {gameState === 'title' && (
+        <BiomeBackdrop theme={lobbyTheme} getEngine={() => engineRef.current} />
+      )}
 
       <div
         ref={mountRef}

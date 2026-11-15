@@ -27,6 +27,9 @@ import * as THREE from 'three';
 import { soundManager } from '../audio/SoundtrackSynthesizer';
 import { CozyEnemy, EnemyManager, KnockFn } from './enemies';
 
+const _exTmp1 = new THREE.Vector3();
+const _exTmp2 = new THREE.Vector3();
+
 export type ExtraKind = 'chaser' | 'hopper' | 'shooter' | 'diver';
 type SkinKind = ExtraKind | 'walker' | 'flyer';
 export type EnemyTheme =
@@ -780,7 +783,7 @@ export function spawnExtraEnemy(
       const dz = pp.z - this.position.z;
       const d = Math.hypot(dx, dz);
       if (d < 1.8 + 1.3 * h && Math.abs(pp.y - this.position.y) < 1.0) {
-        const dir = new THREE.Vector3(dx, 0, dz);
+        const dir = _exTmp1.set(dx, 0, dz);
         if (dir.lengthSq() < 1e-4) dir.set(0, 0, 1);
         knock(dir.normalize(), 9 + 6 * h, 6.5);
         return true;
@@ -791,7 +794,6 @@ export function spawnExtraEnemy(
     enemy = baseEnemy('shooter', id, group, spawnPos, axis, 0, 0.5, theme === 'aero' ? 1.6 : 1.0);
     let cool = 1.5 + Math.random();
     let charge = 0;
-    const tmp = new THREE.Vector3();
     enemy.update = function (this: CozyEnemy, dt, t, playerPos) {
       time = t;
       if (handleSquash(this, dt)) return;
@@ -806,14 +808,14 @@ export function spawnExtraEnemy(
         charge += dt;
         if (charge > 0.7 - 0.35 * h) {
           // Fire!
-          const from = new THREE.Vector3();
+          const from = _exTmp2;
           (skin.muzzle ?? skin.root).getWorldPosition(from);
           const root = this.group.parent;
           if (root) root.worldToLocal(from);
-          tmp.set(playerPos.x, playerPos.y + 0.7, playerPos.z).sub(from).normalize().multiplyScalar(6 + 5 * h);
+          _exTmp1.set(playerPos.x, playerPos.y + 0.7, playerPos.z).sub(from).normalize().multiplyScalar(6 + 5 * h);
           const proj = skin.projectile ? skin.projectile() : glowBall(0xffffff, 0.15);
-          proj.lookAt(tmp);
-          mgr.spawnProjectile(proj, from, tmp, 10 + 5 * h, 0.28, 4);
+          proj.lookAt(_exTmp1);
+          mgr.spawnProjectile(proj, from, _exTmp1, 10 + 5 * h, 0.28, 4);
           soundManager.playSteamPuff();
           cool = 3.4 - 1.9 * h;
           charge = 0;
@@ -823,14 +825,17 @@ export function spawnExtraEnemy(
         state = 'idle';
       }
       this.group.position.copy(this.position);
-      applyAlert(skin, state !== 'idle');
-      skin.anim?.(t, state, dt);
+      if (this.group.visible) {
+        applyAlert(skin, state !== 'idle');
+        skin.anim?.(t, state, dt);
+      }
     };
   } else {
     // diver
     enemy = baseEnemy('diver', id, group, spawnPos, axis, range, 0.5, 0.6);
     enemy.bodyContact = false;
-    const home = spawnPos.clone().add(new THREE.Vector3(0, 3.2, 0));
+    const home = spawnPos.clone();
+    home.y += 3.2;
     enemy.position.copy(home);
     let mode: 'hover' | 'warn' | 'dive' | 'back' = 'hover';
     let timer = 2 + Math.random() * 2;
@@ -875,21 +880,23 @@ export function spawnExtraEnemy(
         }
       } else {
         state = 'idle';
-        const toHome = home.clone().sub(this.position);
+        const toHome = _exTmp1.subVectors(home, this.position);
         const dist = toHome.length();
         if (dist < 0.2) {
           mode = 'hover';
           timer = 3.6 - 1.9 * h;
         } else {
-          this.position.addScaledVector(toHome.normalize(), Math.min(dist, 5 * dt));
+          this.position.addScaledVector(toHome.divideScalar(dist), Math.min(dist, 5 * dt));
         }
       }
-      const look = mode === 'dive' ? vel : new THREE.Vector3(playerPos.x - this.position.x, 0, playerPos.z - this.position.z);
+      const look = mode === 'dive' ? vel : _exTmp2.set(playerPos.x - this.position.x, 0, playerPos.z - this.position.z);
       faceYaw(this, Math.atan2(look.x, look.z), dt, 8);
       if (mode !== 'warn') this.group.position.copy(this.position);
       else this.group.position.y = this.position.y;
-      applyAlert(skin, state !== 'idle');
-      skin.anim?.(t, state, dt);
+      if (this.group.visible) {
+        applyAlert(skin, state !== 'idle');
+        skin.anim?.(t, state, dt);
+      }
     };
     enemy.onCheck = function (this: CozyEnemy, pp, _pv, _pr, knock: KnockFn) {
       if (mode !== 'dive') return false;
@@ -897,7 +904,7 @@ export function spawnExtraEnemy(
       const dy = pp.y + 0.6 - this.position.y;
       const dz = pp.z - this.position.z;
       if (dx * dx + dy * dy + dz * dz < 0.95 * 0.95) {
-        const dir = new THREE.Vector3(vel.x, 0, vel.z);
+        const dir = _exTmp1.set(vel.x, 0, vel.z);
         if (dir.lengthSq() < 1e-4) dir.set(dx, 0, dz);
         knock(dir.normalize(), 11 + 5 * H(), 6);
         mode = 'back';
@@ -1224,7 +1231,7 @@ function makeWorldSkin(theme: 'garden' | 'castle', kind: SkinKind, skin: Skin, a
       });
     } else {
       // diver: Gnomo Planeador riding a leaf
-      const leaf = mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 20), std(0x65a30d, 0.5, { side: THREE.DoubleSide }), 0, -0.1, 0);
+      const leaf = mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 20), std(0x65a30d, 0.5), 0, -0.1, 0);
       leaf.scale.set(0.7, 1, 1.3);
       root.add(leaf);
       root.add(mesh(new THREE.BoxGeometry(0.03, 0.05, 1.3), std(0xbef264), 0, -0.07, 0));

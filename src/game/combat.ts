@@ -243,6 +243,7 @@ export class CombatSystem {
   private cpr: { userId: string; username: string; k: number; puff: number; active: boolean } | null = null;
   private _v = new THREE.Vector3();
   private _w = new THREE.Vector3();
+  private readonly remoteTargetPool: THREE.Vector3[] = [];
 
   constructor(setup: BossSetup, deps: CombatDeps) {
     this.setup = setup;
@@ -769,10 +770,15 @@ export class CombatSystem {
     // Targets offered this frame: the boss' plus grabbed friends to rescue
     this.targets.length = 0;
     this.boss.targets(this.targets);
-    for (const r of this.deps.remotes()) {
+    const remotes = this.deps.remotes();
+    let poolIdx = 0;
+    for (let i = 0; i < remotes.length; i++) {
+      const r = remotes[i];
       if (!r.grabbed) continue;
+      const pos = (this.remoteTargetPool[poolIdx++] ??= new THREE.Vector3()).copy(r.pos);
+      pos.y += 1;
       this.targets.push({
-        pos: r.pos.clone().add(new THREE.Vector3(0, 1, 0)),
+        pos,
         radius: 0.9,
         accepts: ['bate', 'piedra'],
         priority: 0.4,
@@ -785,10 +791,13 @@ export class CombatSystem {
     }
 
     // Friendly fire: friends who are up can be hit too
-    for (const r of this.deps.remotes()) {
+    for (let i = 0; i < remotes.length; i++) {
+      const r = remotes[i];
       if (r.grabbed || r.down) continue;
+      const pos = (this.remoteTargetPool[poolIdx++] ??= new THREE.Vector3()).copy(r.pos);
+      pos.y += 0.9;
       this.targets.push({
-        pos: r.pos.clone().add(this._w.set(0, 0.9, 0)),
+        pos,
         radius: 0.6,
         accepts: ['bate', 'piedra', 'bomba', 'red', 'stomp'],
         top: r.pos.y + 1.7,
@@ -797,7 +806,7 @@ export class CombatSystem {
         hit: (kind) => this.hitFriend(r, kind),
       });
     }
-    if (!this.ffWarned && this.elapsed > 5 && this.deps.remotes().length > 0) {
+    if (!this.ffWarned && this.elapsed > 5 && remotes.length > 0) {
       this.ffWarned = true;
       this.deps.notify('¡Ojo! Hay fuego amigo: tus golpes también lastiman a tus amigos');
     }

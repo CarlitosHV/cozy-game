@@ -91,6 +91,8 @@ export class ParkourPhysics {
   private _moveDir = new THREE.Vector3();
   private _horizontalVel = new THREE.Vector3();
   private _obsPos = new THREE.Vector3();
+  private _tmpV1 = new THREE.Vector3();
+  private _tmpV2 = new THREE.Vector3();
   private _pinwheelPaddles: THREE.Vector3[] = [
     new THREE.Vector3(),
     new THREE.Vector3(),
@@ -440,7 +442,7 @@ export class ParkourPhysics {
       const dist = this.position.distanceTo(this._obsPos);
       if (dist < this.playerRadius + obs.bobRadius) {
         // Forceful physical bonk pushing player away from bob
-        const pushDir = this.position.clone().sub(this._obsPos).normalize();
+        const pushDir = this._tmpV1.subVectors(this.position, this._obsPos).normalize();
         pushDir.y = 0.35;
         pushDir.normalize();
         this.velocity.set(pushDir.x * 12.5, 4.5, pushDir.z * 12.5);
@@ -458,7 +460,7 @@ export class ParkourPhysics {
         for (const paddlePos of this._pinwheelPaddles) {
           const dist = this.position.distanceTo(paddlePos);
           if (dist < this.playerRadius + 0.65) {
-            const pushDir = this.position.clone().sub(paddlePos).normalize();
+            const pushDir = this._tmpV1.subVectors(this.position, paddlePos).normalize();
             pushDir.y = 0.32;
             pushDir.normalize();
             this.velocity.set(pushDir.x * 11.8, 4.2, pushDir.z * 11.8);
@@ -915,11 +917,11 @@ export class ParkourPhysics {
         if (playerBottom >= ballTop - 0.4 && this.velocity.y <= 0) {
           this.velocity.y = 12.0;
           this.isGrounded = false;
-          ball.applyImpulse(new THREE.Vector3(dx * 1.5, 0, dz * 1.5));
+          ball.applyImpulse(this._tmpV1.set(dx * 1.5, 0, dz * 1.5));
           soundManager.playMushroomBounce();
         } else {
           // Ball bumps into player horizontally -> Newton impulse transfer
-          const normal = new THREE.Vector3(dx, 0, dz).normalize();
+          const normal = this._tmpV1.set(dx, 0, dz).normalize();
           this.velocity.addScaledVector(normal, 8.5);
           ball.velocity.addScaledVector(normal, -1.5);
           soundManager.playFootstep();

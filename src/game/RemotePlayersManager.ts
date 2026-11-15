@@ -160,6 +160,7 @@ export class RemotePlayersManager {
   private players: Map<string, RemotePlayerEntity> = new Map();
   private windTime: number = 0;
   private unsubs: Array<() => void> = [];
+  private readonly _cullSphere = new THREE.Sphere();
 
   /** Level the local player is on (players of the room who are elsewhere are hidden) */
   private levelGetter: (() => number) | null = null;
@@ -523,6 +524,24 @@ export class RemotePlayersManager {
     this.unsubs = [];
   }
 
+  public updateCulling(frustum: THREE.Frustum, camPos: THREE.Vector3, maxDist: number) {
+    const limSq = (maxDist + 3) * (maxDist + 3);
+    for (const [, entity] of this.players) {
+      const p = entity.currentPos;
+      const dx = p.x - camPos.x;
+      const dy = p.y - camPos.y;
+      const dz = p.z - camPos.z;
+      let visible = dx * dx + dy * dy + dz * dz <= limSq;
+      if (visible) {
+        this._cullSphere.center.set(p.x, p.y + 1.0, p.z);
+        this._cullSphere.radius = 2.0;
+        visible = frustum.intersectsSphere(this._cullSphere);
+      }
+      entity.model.group.visible = visible;
+      if (entity.downLabel) entity.downLabel.visible = visible && entity.down;
+    }
+  }
+
   public update(dt: number) {
     this.windTime += dt;
     const lerpFactor = Math.min(1.0, dt * 14);
@@ -557,7 +576,7 @@ export class RemotePlayersManager {
         entity.model.group.rotation.order = 'YXZ';
         entity.model.group.rotation.x = -Math.PI / 2;
         entity.model.group.position.y += 0.3;
-        if (entity.downLabel) {
+        if (entity.downLabel && entity.downLabel.visible) {
           entity.downLabel.position.set(
             entity.currentPos.x,
             entity.currentPos.y + 1.6 + Math.sin(this.windTime * 4) * 0.08,
@@ -566,7 +585,9 @@ export class RemotePlayersManager {
         }
       }
 
-      // Animate limbs & companion
+      if (!entity.model.group.visible) continue;
+
+      // Animate limbs & companion only when visible in frustum
       let speed = 0;
       let isGrounded = true;
 
